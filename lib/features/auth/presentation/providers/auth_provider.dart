@@ -109,6 +109,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = const AuthState();
   }
 
+  /// 🎮 Demo mode - bypass auth for UI exploration
+  void enterDemoMode() {
+    state = AuthState(
+      isAuthenticated: true,
+      isLoading: false,
+      user: const UserProfile(
+        id: 'demo-user',
+        username: 'demo',
+        email: 'demo@hydrawav3.com',
+        firstName: 'Demo',
+        lastName: 'User',
+        roles: ['PRACTITIONER'],
+      ),
+    );
+  }
+
   Future<void> refreshProfile() async {
     try {
       final profile = await _repository.getProfile();
