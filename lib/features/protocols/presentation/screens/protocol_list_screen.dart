@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/widgets/glass_container.dart';
 import '../../../../core/theme/widgets/hw_loading.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../domain/protocol_model.dart';
@@ -17,45 +18,160 @@ class ProtocolListScreen extends ConsumerWidget {
     final protocolsAsync = ref.watch(protocolListProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Protocols'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.chat_outlined),
-            onPressed: () => context.push(RoutePaths.chat),
-            tooltip: 'AI Assistant',
+      backgroundColor: ThemeConstants.cream,
+      body: CustomScrollView(
+        slivers: [
+          // 🌊 Premium header
+          SliverAppBar(
+            expandedHeight: 140,
+            floating: true,
+            snap: true,
+            backgroundColor: Colors.transparent,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [ThemeConstants.darkTeal, ThemeConstants.teal],
+                  ),
+                ),
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              '⚗️ Protocols',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            Row(
+                              children: [
+                                _HeaderIconButton(
+                                  icon: Icons.bookmark_outline_rounded,
+                                  emoji: '📌',
+                                  onTap: () => context.push(RoutePaths.presets),
+                                ),
+                                const SizedBox(width: 8),
+                                _HeaderIconButton(
+                                  icon: Icons.smart_toy_outlined,
+                                  emoji: '🤖',
+                                  onTap: () => context.push(RoutePaths.chat),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '🎯 Select a protocol to begin your session',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
+
+          // 📋 Protocol list
+          protocolsAsync.when(
+            loading: () => const SliverFillRemaining(
+              child: HwLoading(message: '🔄 Loading protocols...'),
+            ),
+            error: (error, _) => SliverFillRemaining(
+              child: HwErrorWidget(
+                message: error.toString(),
+                onRetry: () => ref.invalidate(protocolListProvider),
+              ),
+            ),
+            data: (protocols) {
+              if (protocols.isEmpty) {
+                return const SliverFillRemaining(
+                  child: HwEmptyState(
+                    icon: Icons.science_outlined,
+                    title: '🔬 No Protocols Yet',
+                    subtitle:
+                        'Protocols will appear here once configured on the web platform.',
+                  ),
+                );
+              }
+              return SliverPadding(
+                padding: const EdgeInsets.all(ThemeConstants.spacingMd),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      return TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: 1),
+                        duration: Duration(milliseconds: 400 + index * 80),
+                        curve: Curves.easeOutCubic,
+                        builder: (context, value, child) => Opacity(
+                          opacity: value,
+                          child: Transform.translate(
+                            offset: Offset(0, 20 * (1 - value)),
+                            child: child,
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                              bottom: ThemeConstants.spacingSm),
+                          child: _ProtocolCard(protocol: protocols[index]),
+                        ),
+                      );
+                    },
+                    childCount: protocols.length,
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // Bottom padding for nav bar
+          const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
         ],
       ),
-      body: protocolsAsync.when(
-        loading: () => const HwLoading(message: 'Loading protocols...'),
-        error: (error, _) => HwErrorWidget(
-          message: error.toString(),
-          onRetry: () => ref.invalidate(protocolListProvider),
+    );
+  }
+}
+
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final String emoji;
+  final VoidCallback onTap;
+
+  const _HeaderIconButton({
+    required this.icon,
+    required this.emoji,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.1),
+          ),
         ),
-        data: (protocols) {
-          if (protocols.isEmpty) {
-            return const HwEmptyState(
-              icon: Icons.science_outlined,
-              title: 'No Protocols Available',
-              subtitle: 'Protocols will appear here once configured.',
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: () async => ref.invalidate(protocolListProvider),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(ThemeConstants.spacingMd),
-              itemCount: protocols.length,
-              itemBuilder: (context, index) =>
-                  _ProtocolCard(protocol: protocols[index]),
-            ),
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push(RoutePaths.presets),
-        icon: const Icon(Icons.bookmark_outlined),
-        label: const Text('Presets'),
+        child: Icon(icon, color: ThemeConstants.tanLight, size: 22),
       ),
     );
   }
@@ -68,72 +184,70 @@ class _ProtocolCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: ThemeConstants.spacingSm),
-      child: InkWell(
-        onTap: () => context.push('/protocols/${protocol.id}'),
-        borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-        child: Padding(
-          padding: const EdgeInsets.all(ThemeConstants.spacingMd),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return GlassCard(
+      onTap: () => context.push('/protocols/${protocol.id}'),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      protocol.templateName,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: ThemeConstants.spacingSm,
-                      vertical: ThemeConstants.spacingXs,
-                    ),
-                    decoration: BoxDecoration(
-                      color: ThemeConstants.primaryColor.withOpacity(0.1),
-                      borderRadius:
-                          BorderRadius.circular(ThemeConstants.radiusSm),
-                    ),
-                    child: Text(
-                      protocol.totalDuration.formatted,
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                  ),
-                ],
-              ),
-              if (protocol.description.isNotEmpty) ...[
-                const SizedBox(height: ThemeConstants.spacingSm),
-                Text(
-                  protocol.description,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: ThemeConstants.darkTeal.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
-              const SizedBox(height: ThemeConstants.spacingSm),
-              Row(
-                children: [
-                  Icon(Icons.repeat, size: 16, color: ThemeConstants.textTertiary),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${protocol.cycles.length} cycles',
-                    style: Theme.of(context).textTheme.bodySmall,
+                child: const Icon(Icons.science_rounded,
+                    color: ThemeConstants.darkTeal, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      protocol.templateName,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '⏱️ ${protocol.totalDuration.formatted}  ·  🔄 ${protocol.cycles.length} cycles',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: ThemeConstants.copper.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '▶️ Start',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: ThemeConstants.copper,
                   ),
-                  const SizedBox(width: ThemeConstants.spacingMd),
-                  Icon(Icons.play_circle_outline, size: 16,
-                      color: ThemeConstants.textTertiary),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${protocol.sessions} sessions',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
+                ),
               ),
             ],
           ),
-        ),
+          if (protocol.description.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              protocol.description,
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
       ),
     );
   }

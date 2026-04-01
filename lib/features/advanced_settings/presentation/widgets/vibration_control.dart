@@ -35,7 +35,7 @@ class VibrationControl extends StatelessWidget {
                     min: 0,
                     max: 100,
                     divisions: 100,
-                    activeColor: ThemeConstants.secondaryColor,
+                    activeColor: ThemeConstants.copper,
                     onChanged: (v) {
                       if (v <= maxValue) onMinChanged(v);
                     },
@@ -53,7 +53,7 @@ class VibrationControl extends StatelessWidget {
                     min: 0,
                     max: 100,
                     divisions: 100,
-                    activeColor: ThemeConstants.secondaryColor,
+                    activeColor: ThemeConstants.copper,
                     onChanged: (v) {
                       if (v >= minValue) onMaxChanged(v);
                     },

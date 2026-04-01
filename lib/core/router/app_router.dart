@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -20,6 +22,7 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/screens/subscription_screen.dart';
 import '../../features/presets/presentation/screens/preset_management_screen.dart';
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
+import '../constants/theme_constants.dart';
 import 'route_names.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -37,16 +40,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           state.matchedLocation == RoutePaths.signup ||
           state.matchedLocation == RoutePaths.forgotPassword;
 
-      if (!isAuthenticated && !isAuthRoute) {
-        return RoutePaths.login;
-      }
-      if (isAuthenticated && isAuthRoute) {
-        return RoutePaths.protocols;
-      }
+      if (!isAuthenticated && !isAuthRoute) return RoutePaths.login;
+      if (isAuthenticated && isAuthRoute) return RoutePaths.protocols;
       return null;
     },
     routes: [
-      // Auth routes (no bottom nav)
       GoRoute(
         path: RoutePaths.login,
         name: RouteNames.login,
@@ -62,12 +60,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: RouteNames.forgotPassword,
         builder: (context, state) => const ForgotPasswordScreen(),
       ),
-
-      // Main app with bottom navigation
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
         builder: (context, state, child) =>
-            _ScaffoldWithNavBar(child: child),
+            _PremiumNavBar(child: child),
         routes: [
           GoRoute(
             path: RoutePaths.protocols,
@@ -91,8 +87,6 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
         ],
       ),
-
-      // Full-screen routes (no bottom nav)
       GoRoute(
         path: RoutePaths.protocolDetail,
         name: RouteNames.protocolDetail,
@@ -159,63 +153,138 @@ final routerProvider = Provider<GoRouter>((ref) {
   );
 });
 
-class _ScaffoldWithNavBar extends StatelessWidget {
+/// ✨ Premium frosted-glass bottom navigation bar
+class _PremiumNavBar extends StatelessWidget {
   final Widget child;
 
-  const _ScaffoldWithNavBar({required this.child});
+  const _PremiumNavBar({required this.child});
 
   @override
   Widget build(BuildContext context) {
+    final location = GoRouterState.of(context).matchedLocation;
+    int selectedIndex = 0;
+    if (location.startsWith(RoutePaths.protocols)) selectedIndex = 0;
+    if (location.startsWith(RoutePaths.devices)) selectedIndex = 1;
+    if (location.startsWith(RoutePaths.history)) selectedIndex = 2;
+    if (location.startsWith(RoutePaths.settings)) selectedIndex = 3;
+
     return Scaffold(
       body: child,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _calculateSelectedIndex(context),
-        onDestinationSelected: (index) => _onItemTapped(index, context),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.science_outlined),
-            selectedIcon: Icon(Icons.science),
-            label: 'Protocols',
+      extendBody: true,
+      bottomNavigationBar: ClipRRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.85),
+              border: Border(
+                top: BorderSide(
+                  color: ThemeConstants.divider.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _NavItem(
+                      icon: Icons.science_outlined,
+                      activeIcon: Icons.science_rounded,
+                      label: '⚗️ Protocols',
+                      isActive: selectedIndex == 0,
+                      onTap: () => context.go(RoutePaths.protocols),
+                    ),
+                    _NavItem(
+                      icon: Icons.bluetooth_outlined,
+                      activeIcon: Icons.bluetooth_connected_rounded,
+                      label: '📡 Devices',
+                      isActive: selectedIndex == 1,
+                      onTap: () => context.go(RoutePaths.devices),
+                    ),
+                    _NavItem(
+                      icon: Icons.history_outlined,
+                      activeIcon: Icons.history_rounded,
+                      label: '📊 History',
+                      isActive: selectedIndex == 2,
+                      onTap: () => context.go(RoutePaths.history),
+                    ),
+                    _NavItem(
+                      icon: Icons.settings_outlined,
+                      activeIcon: Icons.settings_rounded,
+                      label: '⚙️ Settings',
+                      isActive: selectedIndex == 3,
+                      onTap: () => context.go(RoutePaths.settings),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.bluetooth_outlined),
-            selectedIcon: Icon(Icons.bluetooth_connected),
-            label: 'Devices',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+        ),
       ),
     );
   }
+}
 
-  int _calculateSelectedIndex(BuildContext context) {
-    final location = GoRouterState.of(context).matchedLocation;
-    if (location.startsWith(RoutePaths.protocols)) return 0;
-    if (location.startsWith(RoutePaths.devices)) return 1;
-    if (location.startsWith(RoutePaths.history)) return 2;
-    if (location.startsWith(RoutePaths.settings)) return 3;
-    return 0;
-  }
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
 
-  void _onItemTapped(int index, BuildContext context) {
-    switch (index) {
-      case 0:
-        context.go(RoutePaths.protocols);
-      case 1:
-        context.go(RoutePaths.devices);
-      case 2:
-        context.go(RoutePaths.history);
-      case 3:
-        context.go(RoutePaths.settings);
-    }
+  const _NavItem({
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive
+              ? ThemeConstants.darkTeal.withValues(alpha: 0.08)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(ThemeConstants.radiusFull),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: Icon(
+                isActive ? activeIcon : icon,
+                key: ValueKey(isActive),
+                color: isActive
+                    ? ThemeConstants.darkTeal
+                    : ThemeConstants.textTertiary,
+                size: 24,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                color: isActive
+                    ? ThemeConstants.darkTeal
+                    : ThemeConstants.textTertiary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

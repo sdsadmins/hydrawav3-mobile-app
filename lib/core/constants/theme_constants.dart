@@ -3,33 +3,50 @@ import 'package:flutter/material.dart';
 class ThemeConstants {
   ThemeConstants._();
 
-  // Brand Colors
-  static const Color primaryColor = Color(0xFF0066FF);
-  static const Color primaryLight = Color(0xFF4D94FF);
-  static const Color primaryDark = Color(0xFF004ACC);
-  static const Color secondaryColor = Color(0xFF00D4AA);
-  static const Color accentColor = Color(0xFF6C63FF);
+  // ─── Hydrawav3 Brand Colors ───
+  static const Color darkTeal = Color(0xFF132A35);
+  static const Color teal = Color(0xFF233D47);
+  static const Color tanDark = Color(0xFFC59D84);
+  static const Color tanLight = Color(0xFFDDBEA8);
+  static const Color cream = Color(0xFFF9F5F1);
+  static const Color copper = Color(0xFFD17D5D);
+  static const Color practitionerPrimary = Color(0xFFB56545);
+
+  // Primary = Dark Teal (main brand)
+  static const Color primaryColor = darkTeal;
+  static const Color primaryLight = teal;
+  static const Color primaryDark = Color(0xFF0A1E27);
+  // Accent = Copper/Tan
+  static const Color accentColor = copper;
+  static const Color accentLight = tanLight;
+  static const Color accentDark = practitionerPrimary;
 
   // Status Colors
-  static const Color success = Color(0xFF4CAF50);
+  static const Color success = Color(0xFF10B981);
   static const Color warning = Color(0xFFFF9800);
-  static const Color error = Color(0xFFE53935);
-  static const Color info = Color(0xFF2196F3);
+  static const Color error = Color(0xFFEF4444);
+  static const Color info = Color(0xFF135BEC);
 
-  // BLE Status Colors
-  static const Color bleConnected = Color(0xFF4CAF50);
-  static const Color bleDiscovered = Color(0xFFFF9800);
+  // BLE Status
+  static const Color bleConnected = success;
+  static const Color bleDiscovered = warning;
   static const Color bleDisconnected = Color(0xFF9E9E9E);
 
-  // Neutral Colors
-  static const Color backgroundLight = Color(0xFFF8F9FA);
-  static const Color backgroundDark = Color(0xFF121212);
+  // Neutral
+  static const Color backgroundLight = cream;
+  static const Color backgroundDark = Color(0xFF0F1115);
   static const Color surfaceLight = Color(0xFFFFFFFF);
-  static const Color surfaceDark = Color(0xFF1E1E1E);
-  static const Color textPrimary = Color(0xFF1A1A2E);
-  static const Color textSecondary = Color(0xFF6B7280);
-  static const Color textTertiary = Color(0xFF9CA3AF);
-  static const Color divider = Color(0xFFE5E7EB);
+  static const Color surfaceDark = Color(0xFF1A2E35);
+  static const Color textPrimary = Color(0xFF1A1A1A);
+  static const Color textSecondary = Color(0xFF575757);
+  static const Color textTertiary = Color(0xFF64748B);
+  static const Color divider = Color(0xFFE2E8F0);
+
+  // Glassmorphism
+  static const Color glassLight = Color(0x33FFFFFF);
+  static const Color glassDark = Color(0x1AFFFFFF);
+  static const Color glassBorder = Color(0x33FFFFFF);
+  static const double glassBlur = 20.0;
 
   // Spacing
   static const double spacingXs = 4.0;
@@ -51,7 +68,7 @@ class ThemeConstants {
   static const double elevationMd = 4.0;
   static const double elevationLg = 8.0;
 
-  // Tablet breakpoint
+  // Breakpoints
   static const double tabletBreakpoint = 600.0;
   static const double desktopBreakpoint = 1024.0;
 }
