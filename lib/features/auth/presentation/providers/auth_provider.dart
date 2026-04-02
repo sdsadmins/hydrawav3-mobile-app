@@ -45,17 +45,21 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       final isLoggedIn = await _repository.isLoggedIn();
       if (isLoggedIn) {
-        // Try biometric auth first if enabled
-        final biometricEnabled = await _biometricService.isEnabled();
-        if (biometricEnabled) {
-          final authenticated = await _biometricService.authenticate();
-          if (!authenticated) {
-            state = state.copyWith(
-              isAuthenticated: false,
-              isLoading: false,
-            );
-            return;
+        try {
+          // Try biometric auth if enabled (skip on web)
+          final biometricEnabled = await _biometricService.isEnabled();
+          if (biometricEnabled) {
+            final authenticated = await _biometricService.authenticate();
+            if (!authenticated) {
+              state = state.copyWith(
+                isAuthenticated: false,
+                isLoading: false,
+              );
+              return;
+            }
           }
+        } catch (_) {
+          // Biometric not available (e.g. web) — skip
         }
 
         try {
@@ -79,10 +83,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         );
       }
     } catch (e) {
+      // Any crash (web platform, etc.) — just show login
       state = state.copyWith(
         isAuthenticated: false,
         isLoading: false,
-        error: e.toString(),
       );
     }
   }

@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -35,191 +33,74 @@ final routerProvider = Provider<GoRouter>((ref) {
     navigatorKey: _rootNavigatorKey,
     initialLocation: RoutePaths.protocols,
     redirect: (context, state) {
-      final isAuthenticated = authState.isAuthenticated;
+      final isAuth = authState.isAuthenticated;
       final isAuthRoute = state.matchedLocation == RoutePaths.login ||
           state.matchedLocation == RoutePaths.signup ||
           state.matchedLocation == RoutePaths.forgotPassword;
-
-      if (!isAuthenticated && !isAuthRoute) return RoutePaths.login;
-      if (isAuthenticated && isAuthRoute) return RoutePaths.protocols;
+      if (!isAuth && !isAuthRoute) return RoutePaths.login;
+      if (isAuth && isAuthRoute) return RoutePaths.protocols;
       return null;
     },
     routes: [
-      GoRoute(
-        path: RoutePaths.login,
-        name: RouteNames.login,
-        builder: (context, state) => const LoginScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.signup,
-        name: RouteNames.signup,
-        builder: (context, state) => const SignupScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.forgotPassword,
-        name: RouteNames.forgotPassword,
-        builder: (context, state) => const ForgotPasswordScreen(),
-      ),
+      GoRoute(path: RoutePaths.login, name: RouteNames.login, builder: (c, s) => const LoginScreen()),
+      GoRoute(path: RoutePaths.signup, name: RouteNames.signup, builder: (c, s) => const SignupScreen()),
+      GoRoute(path: RoutePaths.forgotPassword, name: RouteNames.forgotPassword, builder: (c, s) => const ForgotPasswordScreen()),
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
-        builder: (context, state, child) =>
-            _PremiumNavBar(child: child),
+        builder: (c, s, child) => _AppShell(child: child),
         routes: [
-          GoRoute(
-            path: RoutePaths.protocols,
-            name: RouteNames.protocols,
-            builder: (context, state) => const ProtocolListScreen(),
-          ),
-          GoRoute(
-            path: RoutePaths.devices,
-            name: RouteNames.devices,
-            builder: (context, state) => const DeviceListScreen(),
-          ),
-          GoRoute(
-            path: RoutePaths.history,
-            name: RouteNames.history,
-            builder: (context, state) => const HistoryListScreen(),
-          ),
-          GoRoute(
-            path: RoutePaths.settings,
-            name: RouteNames.settings,
-            builder: (context, state) => const SettingsScreen(),
-          ),
+          GoRoute(path: RoutePaths.protocols, name: RouteNames.protocols, builder: (c, s) => const ProtocolListScreen()),
+          GoRoute(path: RoutePaths.devices, name: RouteNames.devices, builder: (c, s) => const DeviceListScreen()),
+          GoRoute(path: RoutePaths.history, name: RouteNames.history, builder: (c, s) => const HistoryListScreen()),
+          GoRoute(path: RoutePaths.settings, name: RouteNames.settings, builder: (c, s) => const SettingsScreen()),
         ],
       ),
-      GoRoute(
-        path: RoutePaths.protocolDetail,
-        name: RouteNames.protocolDetail,
-        builder: (context, state) => ProtocolDetailScreen(
-          protocolId: state.pathParameters['id']!,
-        ),
-      ),
-      GoRoute(
-        path: RoutePaths.session,
-        name: RouteNames.session,
-        builder: (context, state) {
-          final extra = state.extra as Map<String, dynamic>?;
-          return SessionScreen(
-            protocolId: extra?['protocolId'] as String? ?? '',
-            deviceIds: extra?['deviceIds'] as List<String>? ?? [],
-          );
-        },
-      ),
-      GoRoute(
-        path: RoutePaths.deviceRegister,
-        name: RouteNames.deviceRegister,
-        builder: (context, state) => const DeviceRegisterScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.deviceDetail,
-        name: RouteNames.deviceDetail,
-        builder: (context, state) => DeviceDetailScreen(
-          deviceId: state.pathParameters['id']!,
-        ),
-      ),
-      GoRoute(
-        path: RoutePaths.sessionDetail,
-        name: RouteNames.sessionDetail,
-        builder: (context, state) => SessionDetailScreen(
-          sessionId: state.pathParameters['id']!,
-        ),
-      ),
-      GoRoute(
-        path: RoutePaths.profileEdit,
-        name: RouteNames.profileEdit,
-        builder: (context, state) => const ProfileEditScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.changePassword,
-        name: RouteNames.changePassword,
-        builder: (context, state) => const ChangePasswordScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.subscription,
-        name: RouteNames.subscription,
-        builder: (context, state) => const SubscriptionScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.presets,
-        name: RouteNames.presets,
-        builder: (context, state) => const PresetManagementScreen(),
-      ),
-      GoRoute(
-        path: RoutePaths.chat,
-        name: RouteNames.chat,
-        builder: (context, state) => const ChatScreen(),
-      ),
+      GoRoute(path: RoutePaths.protocolDetail, name: RouteNames.protocolDetail, builder: (c, s) => ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
+      GoRoute(path: RoutePaths.session, name: RouteNames.session, builder: (c, s) {
+        final extra = s.extra as Map<String, dynamic>?;
+        return SessionScreen(protocolId: extra?['protocolId'] as String? ?? '', deviceIds: extra?['deviceIds'] as List<String>? ?? []);
+      }),
+      GoRoute(path: RoutePaths.deviceRegister, name: RouteNames.deviceRegister, builder: (c, s) => const DeviceRegisterScreen()),
+      GoRoute(path: RoutePaths.deviceDetail, name: RouteNames.deviceDetail, builder: (c, s) => DeviceDetailScreen(deviceId: s.pathParameters['id']!)),
+      GoRoute(path: RoutePaths.sessionDetail, name: RouteNames.sessionDetail, builder: (c, s) => SessionDetailScreen(sessionId: s.pathParameters['id']!)),
+      GoRoute(path: RoutePaths.profileEdit, name: RouteNames.profileEdit, builder: (c, s) => const ProfileEditScreen()),
+      GoRoute(path: RoutePaths.changePassword, name: RouteNames.changePassword, builder: (c, s) => const ChangePasswordScreen()),
+      GoRoute(path: RoutePaths.subscription, name: RouteNames.subscription, builder: (c, s) => const SubscriptionScreen()),
+      GoRoute(path: RoutePaths.presets, name: RouteNames.presets, builder: (c, s) => const PresetManagementScreen()),
+      GoRoute(path: RoutePaths.chat, name: RouteNames.chat, builder: (c, s) => const ChatScreen()),
     ],
   );
 });
 
-/// ✨ Premium frosted-glass bottom navigation bar
-class _PremiumNavBar extends StatelessWidget {
+class _AppShell extends StatelessWidget {
   final Widget child;
-
-  const _PremiumNavBar({required this.child});
+  const _AppShell({required this.child});
 
   @override
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
-    int selectedIndex = 0;
-    if (location.startsWith(RoutePaths.protocols)) selectedIndex = 0;
-    if (location.startsWith(RoutePaths.devices)) selectedIndex = 1;
-    if (location.startsWith(RoutePaths.history)) selectedIndex = 2;
-    if (location.startsWith(RoutePaths.settings)) selectedIndex = 3;
+    int idx = 0;
+    if (location.startsWith(RoutePaths.devices)) idx = 1;
+    if (location.startsWith(RoutePaths.history)) idx = 2;
+    if (location.startsWith(RoutePaths.settings)) idx = 3;
 
     return Scaffold(
       body: child,
-      extendBody: true,
-      bottomNavigationBar: ClipRRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.85),
-              border: Border(
-                top: BorderSide(
-                  color: ThemeConstants.divider.withValues(alpha: 0.3),
-                ),
-              ),
-            ),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _NavItem(
-                      icon: Icons.science_outlined,
-                      activeIcon: Icons.science_rounded,
-                      label: '⚗️ Protocols',
-                      isActive: selectedIndex == 0,
-                      onTap: () => context.go(RoutePaths.protocols),
-                    ),
-                    _NavItem(
-                      icon: Icons.bluetooth_outlined,
-                      activeIcon: Icons.bluetooth_connected_rounded,
-                      label: '📡 Devices',
-                      isActive: selectedIndex == 1,
-                      onTap: () => context.go(RoutePaths.devices),
-                    ),
-                    _NavItem(
-                      icon: Icons.history_outlined,
-                      activeIcon: Icons.history_rounded,
-                      label: '📊 History',
-                      isActive: selectedIndex == 2,
-                      onTap: () => context.go(RoutePaths.history),
-                    ),
-                    _NavItem(
-                      icon: Icons.settings_outlined,
-                      activeIcon: Icons.settings_rounded,
-                      label: '⚙️ Settings',
-                      isActive: selectedIndex == 3,
-                      onTap: () => context.go(RoutePaths.settings),
-                    ),
-                  ],
-                ),
-              ),
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          color: ThemeConstants.surface,
+          border: Border(top: BorderSide(color: ThemeConstants.border, width: 1)),
+        ),
+        child: SafeArea(
+          child: SizedBox(
+            height: 60,
+            child: Row(
+              children: [
+                _NavTab(icon: Icons.science_outlined, activeIcon: Icons.science_rounded, label: 'Protocols', active: idx == 0, onTap: () => context.go(RoutePaths.protocols)),
+                _NavTab(icon: Icons.bluetooth_outlined, activeIcon: Icons.bluetooth_connected_rounded, label: 'Devices', active: idx == 1, onTap: () => context.go(RoutePaths.devices)),
+                _NavTab(icon: Icons.history_outlined, activeIcon: Icons.history_rounded, label: 'History', active: idx == 2, onTap: () => context.go(RoutePaths.history)),
+                _NavTab(icon: Icons.settings_outlined, activeIcon: Icons.settings_rounded, label: 'Settings', active: idx == 3, onTap: () => context.go(RoutePaths.settings)),
+              ],
             ),
           ),
         ),
@@ -228,60 +109,27 @@ class _PremiumNavBar extends StatelessWidget {
   }
 }
 
-class _NavItem extends StatelessWidget {
+class _NavTab extends StatelessWidget {
   final IconData icon;
   final IconData activeIcon;
   final String label;
-  final bool isActive;
+  final bool active;
   final VoidCallback onTap;
 
-  const _NavItem({
-    required this.icon,
-    required this.activeIcon,
-    required this.label,
-    required this.isActive,
-    required this.onTap,
-  });
+  const _NavTab({required this.icon, required this.activeIcon, required this.label, required this.active, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isActive
-              ? ThemeConstants.darkTeal.withValues(alpha: 0.08)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(ThemeConstants.radiusFull),
-        ),
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: Icon(
-                isActive ? activeIcon : icon,
-                key: ValueKey(isActive),
-                color: isActive
-                    ? ThemeConstants.darkTeal
-                    : ThemeConstants.textTertiary,
-                size: 24,
-              ),
-            ),
+            Icon(active ? activeIcon : icon, size: 22, color: active ? ThemeConstants.accent : ThemeConstants.textTertiary),
             const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                color: isActive
-                    ? ThemeConstants.darkTeal
-                    : ThemeConstants.textTertiary,
-              ),
-            ),
+            Text(label, style: TextStyle(fontSize: 11, fontWeight: active ? FontWeight.w600 : FontWeight.w400, color: active ? ThemeConstants.accent : ThemeConstants.textTertiary)),
           ],
         ),
       ),

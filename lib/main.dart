@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,11 +11,13 @@ import 'features/auth/presentation/providers/auth_provider.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock orientation to portrait on phones (tablets can rotate)
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  // Lock orientation on mobile only (not web)
+  if (!kIsWeb) {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
 
   // Initialize SharedPreferences
   final sharedPrefs = await SharedPreferences.getInstance();
@@ -40,7 +43,6 @@ class _AppBootstrapState extends ConsumerState<_AppBootstrap> {
   @override
   void initState() {
     super.initState();
-    // Check auth status on startup
     Future.microtask(() {
       ref.read(authStateProvider.notifier).checkAuthStatus();
     });

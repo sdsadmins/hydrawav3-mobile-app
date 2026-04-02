@@ -15,7 +15,7 @@ class TemperatureSlider extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
-    this.activeColor = ThemeConstants.primaryColor,
+    this.activeColor = ThemeConstants.accent,
     this.min = 0,
     this.max = 100,
   });

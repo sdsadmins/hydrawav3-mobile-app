@@ -2,34 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../constants/theme_constants.dart';
 
-class HwLoading extends StatefulWidget {
+class HwLoading extends StatelessWidget {
   final String? message;
   final double size;
 
-  const HwLoading({super.key, this.message, this.size = 40});
-
-  @override
-  State<HwLoading> createState() => _HwLoadingState();
-}
-
-class _HwLoadingState extends State<HwLoading>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  const HwLoading({super.key, this.message, this.size = 32});
 
   @override
   Widget build(BuildContext context) {
@@ -37,21 +14,15 @@ class _HwLoadingState extends State<HwLoading>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          RotationTransition(
-            turns: _controller,
-            child: Icon(
-              Icons.waves_rounded,
-              size: widget.size,
-              color: ThemeConstants.darkTeal,
+          SizedBox(
+            width: size, height: size,
+            child: const CircularProgressIndicator(
+              strokeWidth: 2.5, color: ThemeConstants.accent,
             ),
           ),
-          if (widget.message != null) ...[
+          if (message != null) ...[
             const SizedBox(height: ThemeConstants.spacingMd),
-            Text(
-              widget.message!,
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
+            Text(message!, style: Theme.of(context).textTheme.bodyMedium),
           ],
         ],
       ),
@@ -66,11 +37,7 @@ class HwEmptyState extends StatelessWidget {
   final Widget? action;
 
   const HwEmptyState({
-    super.key,
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.action,
+    super.key, required this.icon, required this.title, this.subtitle, this.action,
   });
 
   @override
@@ -81,27 +48,12 @@ class HwEmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: ThemeConstants.darkTeal.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, size: 48, color: ThemeConstants.darkTeal),
-            ),
-            const SizedBox(height: ThemeConstants.spacingLg),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge,
-              textAlign: TextAlign.center,
-            ),
+            Icon(icon, size: 48, color: ThemeConstants.textTertiary),
+            const SizedBox(height: ThemeConstants.spacingMd),
+            Text(title, style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
             if (subtitle != null) ...[
               const SizedBox(height: ThemeConstants.spacingSm),
-              Text(
-                subtitle!,
-                style: Theme.of(context).textTheme.bodyMedium,
-                textAlign: TextAlign.center,
-              ),
+              Text(subtitle!, style: Theme.of(context).textTheme.bodyMedium, textAlign: TextAlign.center),
             ],
             if (action != null) ...[
               const SizedBox(height: ThemeConstants.spacingLg),
@@ -128,19 +80,9 @@ class HwErrorWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: ThemeConstants.error.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.error_outline, size: 48,
-                  color: ThemeConstants.error),
-            ),
+            const Icon(Icons.error_outline_rounded, size: 48, color: ThemeConstants.error),
             const SizedBox(height: ThemeConstants.spacingMd),
-            Text(message,
-                style: Theme.of(context).textTheme.bodyLarge,
-                textAlign: TextAlign.center),
+            Text(message, style: Theme.of(context).textTheme.bodyLarge, textAlign: TextAlign.center),
             if (onRetry != null) ...[
               const SizedBox(height: ThemeConstants.spacingMd),
               TextButton.icon(

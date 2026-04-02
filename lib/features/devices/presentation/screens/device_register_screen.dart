@@ -3,90 +3,57 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/theme/widgets/hw_button.dart';
-import '../../../../core/theme/widgets/hw_text_field.dart';
 
 class DeviceRegisterScreen extends ConsumerStatefulWidget {
   const DeviceRegisterScreen({super.key});
-
   @override
-  ConsumerState<DeviceRegisterScreen> createState() =>
-      _DeviceRegisterScreenState();
+  ConsumerState<DeviceRegisterScreen> createState() => _State();
 }
 
-class _DeviceRegisterScreenState extends ConsumerState<DeviceRegisterScreen> {
+class _State extends ConsumerState<DeviceRegisterScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _serialController = TextEditingController();
-  final _nameController = TextEditingController();
-  bool _isSubmitting = false;
+  final _serialCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  bool _submitting = false;
 
   @override
-  void dispose() {
-    _serialController.dispose();
-    _nameController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _handleRegister() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isSubmitting = true);
-    // TODO: POST to /admin/sensors + add to paired devices DB
-    await Future.delayed(const Duration(seconds: 1));
-    setState(() => _isSubmitting = false);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Device registered successfully')),
-      );
-      context.pop();
-    }
-  }
+  void dispose() { _serialCtrl.dispose(); _nameCtrl.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: ThemeConstants.background,
       appBar: AppBar(title: const Text('Register Device')),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(ThemeConstants.spacingLg),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.bluetooth_connected,
-                  size: 64, color: ThemeConstants.primaryColor),
-              const SizedBox(height: ThemeConstants.spacingMd),
-              Text(
-                'Register a new device',
-                style: Theme.of(context).textTheme.headlineMedium,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: ThemeConstants.spacingXl),
-              HwTextField(
-                controller: _serialController,
-                label: 'Serial Number / MAC Address',
-                hint: 'e.g., AA:BB:CC:DD:EE:FF',
-                prefixIcon: const Icon(Icons.qr_code),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: ThemeConstants.spacingMd),
-              HwTextField(
-                controller: _nameController,
-                label: 'Device Name',
-                hint: 'e.g., My Hydrawav3',
-                prefixIcon: const Icon(Icons.label_outline),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: ThemeConstants.spacingLg),
-              HwButton(
-                label: 'Register Device',
-                onPressed: _handleRegister,
-                isLoading: _isSubmitting,
-              ),
-            ],
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(color: ThemeConstants.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: ThemeConstants.border)),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.bluetooth_connected_rounded, size: 40, color: ThemeConstants.accent),
+                const SizedBox(height: 16),
+                const Text('Register a new device', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white), textAlign: TextAlign.center),
+                const SizedBox(height: 24),
+                TextFormField(controller: _serialCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Serial Number / MAC Address', prefixIcon: Icon(Icons.qr_code_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+                const SizedBox(height: 12),
+                TextFormField(controller: _nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Device Name', prefixIcon: Icon(Icons.label_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+                const SizedBox(height: 24),
+                SizedBox(height: 48, child: ElevatedButton(
+                  onPressed: _submitting ? null : () async {
+                    if (!_formKey.currentState!.validate()) return;
+                    setState(() => _submitting = true);
+                    await Future.delayed(const Duration(seconds: 1));
+                    setState(() => _submitting = false);
+                    if (context.mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device registered'))); context.pop(); }
+                  },
+                  child: _submitting ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Register Device'),
+                )),
+              ],
+            ),
           ),
         ),
       ),
