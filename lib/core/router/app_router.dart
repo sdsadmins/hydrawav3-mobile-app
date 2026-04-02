@@ -81,25 +81,61 @@ class _AppShell extends StatelessWidget {
     final location = GoRouterState.of(context).matchedLocation;
     int idx = 0;
     if (location.startsWith(RoutePaths.devices)) idx = 1;
-    if (location.startsWith(RoutePaths.history)) idx = 2;
-    if (location.startsWith(RoutePaths.settings)) idx = 3;
+    // 2 = session (center button)
+    if (location.startsWith(RoutePaths.history)) idx = 3;
+    if (location.startsWith(RoutePaths.settings)) idx = 4;
 
     return Scaffold(
       body: child,
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: ThemeConstants.surface,
-          border: Border(top: BorderSide(color: ThemeConstants.border, width: 1)),
+          border: const Border(top: BorderSide(color: ThemeConstants.border, width: 1)),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, -2))],
         ),
         child: SafeArea(
           child: SizedBox(
-            height: 60,
-            child: Row(
+            height: 64,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
               children: [
-                _NavTab(icon: Icons.science_outlined, activeIcon: Icons.science_rounded, label: 'Protocols', active: idx == 0, onTap: () => context.go(RoutePaths.protocols)),
-                _NavTab(icon: Icons.bluetooth_outlined, activeIcon: Icons.bluetooth_connected_rounded, label: 'Devices', active: idx == 1, onTap: () => context.go(RoutePaths.devices)),
-                _NavTab(icon: Icons.history_outlined, activeIcon: Icons.history_rounded, label: 'History', active: idx == 2, onTap: () => context.go(RoutePaths.history)),
-                _NavTab(icon: Icons.settings_outlined, activeIcon: Icons.settings_rounded, label: 'Settings', active: idx == 3, onTap: () => context.go(RoutePaths.settings)),
+                Row(
+                  children: [
+                    _NavTab(icon: Icons.home_outlined, activeIcon: Icons.home_rounded, label: 'Home', active: idx == 0, onTap: () => context.go(RoutePaths.protocols)),
+                    _NavTab(icon: Icons.bluetooth_outlined, activeIcon: Icons.bluetooth_connected_rounded, label: 'Devices', active: idx == 1, onTap: () => context.go(RoutePaths.devices)),
+                    const Expanded(child: SizedBox()), // space for center button
+                    _NavTab(icon: Icons.history_outlined, activeIcon: Icons.history_rounded, label: 'History', active: idx == 3, onTap: () => context.go(RoutePaths.history)),
+                    _NavTab(icon: Icons.settings_outlined, activeIcon: Icons.settings_rounded, label: 'Settings', active: idx == 4, onTap: () => context.go(RoutePaths.settings)),
+                  ],
+                ),
+                // Raised center session button
+                Positioned(
+                  top: -16,
+                  child: GestureDetector(
+                    onTap: () => context.go(RoutePaths.history),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(colors: [ThemeConstants.accentLight, ThemeConstants.accent]),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: ThemeConstants.background, width: 4),
+                            boxShadow: [
+                              BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.35), blurRadius: 12, spreadRadius: 1),
+                            ],
+                          ),
+                          child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
+                        ),
+                        const SizedBox(height: 2),
+                        Text('Session', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: ThemeConstants.textSecondary)),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -127,9 +163,9 @@ class _NavTab extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(active ? activeIcon : icon, size: 22, color: active ? ThemeConstants.accent : ThemeConstants.textTertiary),
+            Icon(active ? activeIcon : icon, size: 24, color: active ? ThemeConstants.accentLight : ThemeConstants.textSecondary),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 11, fontWeight: active ? FontWeight.w600 : FontWeight.w400, color: active ? ThemeConstants.accent : ThemeConstants.textTertiary)),
+            Text(label, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w600 : FontWeight.w500, color: active ? ThemeConstants.accentLight : ThemeConstants.textSecondary)),
           ],
         ),
       ),
