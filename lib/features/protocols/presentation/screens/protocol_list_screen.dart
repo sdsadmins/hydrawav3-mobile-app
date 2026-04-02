@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/hw_loading.dart';
+import '../../../../core/theme/widgets/premium.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../domain/protocol_model.dart';
 import '../providers/protocol_provider.dart';
@@ -18,80 +19,156 @@ class ProtocolListScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      appBar: AppBar(
-        title: const Text('Protocols'),
-        actions: [
-          IconButton(icon: const Icon(Icons.bookmark_outline_rounded, color: ThemeConstants.accent), onPressed: () => context.push(RoutePaths.presets), tooltip: 'Presets'),
-          IconButton(icon: const Icon(Icons.smart_toy_outlined, color: ThemeConstants.accent), onPressed: () => context.push(RoutePaths.chat), tooltip: 'AI Assistant'),
-        ],
-      ),
-      body: protocolsAsync.when(
-        loading: () => const HwLoading(message: 'Loading protocols...'),
-        error: (e, _) => HwErrorWidget(message: e.toString(), onRetry: () => ref.invalidate(protocolListProvider)),
-        data: (protocols) {
-          if (protocols.isEmpty) {
-            return const HwEmptyState(icon: Icons.science_outlined, title: 'No Protocols Yet', subtitle: 'Protocols will appear here once configured.');
-          }
-          return RefreshIndicator(
-            onRefresh: () async => ref.invalidate(protocolListProvider),
-            color: ThemeConstants.accent,
-            child: ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: protocols.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, index) => _ProtocolTile(protocol: protocols[index]),
+      body: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          // Premium gradient header
+          SliverToBoxAdapter(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF1E3040), ThemeConstants.background],
+                ),
+              ),
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: AnimatedEntrance(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Protocols', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: -0.5)),
+                                SizedBox(height: 4),
+                                Text('Select a protocol to begin', style: TextStyle(fontSize: 14, color: ThemeConstants.textSecondary)),
+                              ],
+                            ),
+                            Row(children: [
+                              _HeaderButton(icon: Icons.bookmark_outline_rounded, onTap: () => context.push(RoutePaths.presets)),
+                              const SizedBox(width: 8),
+                              _HeaderButton(icon: Icons.smart_toy_outlined, onTap: () => context.push(RoutePaths.chat)),
+                            ]),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-          );
-        },
+          ),
+
+          // Protocol list
+          protocolsAsync.when(
+            loading: () => const SliverFillRemaining(child: HwLoading(message: 'Loading protocols...')),
+            error: (e, _) => SliverFillRemaining(child: HwErrorWidget(message: e.toString(), onRetry: () => ref.invalidate(protocolListProvider))),
+            data: (protocols) {
+              if (protocols.isEmpty) {
+                return const SliverFillRemaining(child: HwEmptyState(icon: Icons.science_outlined, title: 'No Protocols Yet'));
+              }
+              return SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      return AnimatedEntrance(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _ProtocolCard(protocol: protocols[index]),
+                        ),
+                      );
+                    },
+                    childCount: protocols.length,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
 }
 
-class _ProtocolTile extends StatelessWidget {
-  final Protocol protocol;
-  const _ProtocolTile({required this.protocol});
+class _HeaderButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderButton({required this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: ThemeConstants.surface,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: () => context.push('/protocols/${protocol.id}'),
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: ThemeConstants.border),
-          ),
-          child: Row(
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: ThemeConstants.accent.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ThemeConstants.accent.withValues(alpha: 0.15)),
+        ),
+        child: Icon(icon, color: ThemeConstants.accent, size: 20),
+      ),
+    );
+  }
+}
+
+class _ProtocolCard extends StatelessWidget {
+  final Protocol protocol;
+  const _ProtocolCard({required this.protocol});
+
+  @override
+  Widget build(BuildContext context) {
+    return GradientCard(
+      onTap: () => context.push('/protocols/${protocol.id}'),
+      showGlow: true,
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(
-                  color: ThemeConstants.accent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.science_rounded, color: ThemeConstants.accent, size: 20),
-              ),
+              const GlowIconBox(icon: Icons.science_rounded),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(protocol.templateName, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+                    Text(protocol.templateName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
                     const SizedBox(height: 4),
-                    Text('${protocol.totalDuration.formatted}  ·  ${protocol.cycles.length} cycles  ·  ${protocol.sessions} sessions',
-                        style: const TextStyle(fontSize: 12, color: ThemeConstants.textTertiary)),
+                    if (protocol.description.isNotEmpty)
+                      Text(
+                        protocol.description,
+                        style: const TextStyle(fontSize: 13, color: ThemeConstants.textSecondary, height: 1.3),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                   ],
                 ),
               ),
               const Icon(Icons.chevron_right_rounded, color: ThemeConstants.textTertiary, size: 20),
             ],
           ),
-        ),
+          const SizedBox(height: 14),
+          // Metric chips
+          Row(
+            children: [
+              StatChip(icon: Icons.timer_outlined, value: protocol.totalDuration.formatted),
+              const SizedBox(width: 8),
+              StatChip(icon: Icons.repeat_rounded, value: '${protocol.cycles.length}', label: 'cycles'),
+              const SizedBox(width: 8),
+              StatChip(icon: Icons.play_circle_outline_rounded, value: '${protocol.sessions}', label: 'sess'),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -73,8 +73,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
               const Spacer(),
 
-              // Timer ring
-              SizedBox(
+              // Timer ring with glow
+              Container(
+                decoration: status == SessionStatus.running
+                    ? BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.12), blurRadius: 40, spreadRadius: 5),
+                        ],
+                      )
+                    : null,
+                child: SizedBox(
                 width: 240, height: 240,
                 child: CustomPaint(
                   painter: _TimerRing(progress: timer.progress, active: status == SessionStatus.running),
@@ -88,6 +97,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     ),
                   ),
                 ),
+              ),
               ),
               const SizedBox(height: 16),
 
