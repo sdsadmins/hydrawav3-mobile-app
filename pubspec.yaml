@@ -54,6 +54,9 @@ dependencies:
   # Connectivity
   connectivity_plus: ^6.1.1
 
+  # Animated Icons
+  lottie: ^3.3.1
+
   # Images
   flutter_svg: ^2.0.17
   cached_network_image: ^3.4.1
@@ -86,5 +89,6 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
+    - assets/icons/svg/
     - assets/fonts/
     - assets/animations/
