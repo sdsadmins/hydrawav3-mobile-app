@@ -32,7 +32,13 @@ class ProtocolRepository {
 
   Future<List<Protocol>> getProtocols({int page = 1, int perPage = 50}) async {
     // Try cache first
-    final cached = await _db.getAllCachedProtocols();
+    List<CachedProtocol> cached = [];
+    try {
+      cached = await _db.getAllCachedProtocols();
+    } catch (_) {
+      // DB may fail on web — continue without cache
+    }
+
     final isCacheStale = cached.isEmpty ||
         cached.first.cachedAt
             .isBefore(DateTime.now().subtract(AppConstants.protocolCacheStaleness));
@@ -43,29 +49,31 @@ class ProtocolRepository {
           page: page,
           perPage: perPage,
         );
-        // Update cache
+        // Update cache (ignore errors)
         for (final protocol in protocols) {
-          await _db.upsertProtocol(CachedProtocolsCompanion(
-            id: Value(protocol.id),
-            templateName: Value(protocol.templateName),
-            sessions: Value(protocol.sessions),
-            cyclesJson: Value(jsonEncode(
-                protocol.cycles.map((c) => c.toJson()).toList())),
-            hotdrop: Value(protocol.hotdrop),
-            colddrop: Value(protocol.colddrop),
-            vibmin: Value(protocol.vibmin),
-            vibmax: Value(protocol.vibmax),
-            cycle1: Value(protocol.cycle1),
-            cycle5: Value(protocol.cycle5),
-            edgecycleduration: Value(protocol.edgecycleduration),
-            sessionPause: Value(protocol.sessionPause),
-            description: Value(protocol.description),
-            cachedAt: Value(DateTime.now()),
-          ));
+          try {
+            await _db.upsertProtocol(CachedProtocolsCompanion(
+              id: Value(protocol.id),
+              templateName: Value(protocol.templateName),
+              sessions: Value(protocol.sessions),
+              cyclesJson: Value(jsonEncode(
+                  protocol.cycles.map((c) => c.toJson()).toList())),
+              hotdrop: Value(protocol.hotdrop),
+              colddrop: Value(protocol.colddrop),
+              vibmin: Value(protocol.vibmin),
+              vibmax: Value(protocol.vibmax),
+              cycle1: Value(protocol.cycle1),
+              cycle5: Value(protocol.cycle5),
+              edgecycleduration: Value(protocol.edgecycleduration),
+              sessionPause: Value(protocol.sessionPause),
+              description: Value(protocol.description),
+              cachedAt: Value(DateTime.now()),
+            ));
+          } catch (_) {}
         }
         return protocols;
       } catch (_) {
-        // Fall through to cache
+        // Network failed — fall through to cache
       }
     }
 
@@ -77,15 +85,13 @@ class ProtocolRepository {
     if (_isOnline) {
       try {
         return await _remoteSource.getProtocol(id);
-      } catch (_) {
-        // Fall through to cache
-      }
+      } catch (_) {}
     }
 
-    final cached = await _db.getCachedProtocol(id);
-    if (cached != null) {
-      return _cachedToProtocol(cached);
-    }
+    try {
+      final cached = await _db.getCachedProtocol(id);
+      if (cached != null) return _cachedToProtocol(cached);
+    } catch (_) {}
 
     throw Exception('Protocol not found');
   }
