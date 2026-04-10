@@ -58,7 +58,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: RoutePaths.protocolDetail, name: RouteNames.protocolDetail, builder: (c, s) => ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
       GoRoute(path: RoutePaths.session, name: RouteNames.session, builder: (c, s) {
         final extra = s.extra as Map<String, dynamic>?;
-        return SessionScreen(protocolId: extra?['protocolId'] as String? ?? '', deviceIds: extra?['deviceIds'] as List<String>? ?? []);
+        return SessionScreen(
+          protocolId: extra?['protocolId'] as String? ?? '',
+          deviceIds: extra?['deviceIds'] as List<String>? ?? [],
+          transport: extra?['transport'] as String? ?? 'ble',
+        );
       }),
       GoRoute(path: RoutePaths.deviceRegister, name: RouteNames.deviceRegister, builder: (c, s) => const DeviceRegisterScreen()),
       GoRoute(path: RoutePaths.deviceDetail, name: RouteNames.deviceDetail, builder: (c, s) => DeviceDetailScreen(deviceId: s.pathParameters['id']!)),

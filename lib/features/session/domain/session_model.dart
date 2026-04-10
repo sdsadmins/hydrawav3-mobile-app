@@ -1,5 +1,8 @@
 enum SessionStatus { idle, running, paused, stopped, completed }
 
+/// How this session was started (BLE vs WiFi/MQTT).
+enum SessionTransport { ble, wifi }
+
 class SessionRecord {
   final String id;
   final String protocolId;

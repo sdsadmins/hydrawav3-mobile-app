@@ -1,12 +1,27 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/constants/api_endpoints.dart';
+import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/hw_loading.dart';
 import '../../../../core/theme/widgets/premium.dart';
+import '../../../../core/utils/logger.dart';
+import '../../../../core/network/dio_client.dart';
 import '../../../../core/utils/extensions.dart';
+import '../../../ble/data/ble_repository.dart';
+import '../../../ble/domain/ble_device_model.dart';
+import '../../../ble/presentation/providers/ble_connection_provider.dart';
+import '../../../devices/domain/device_model.dart';
+import '../../../devices/presentation/providers/wifi_devices_provider.dart';
+import '../../../session/domain/session_model.dart';
+import '../../../session/presentation/providers/session_target_provider.dart';
+import '../../domain/protocol_model.dart';
 import '../providers/protocol_provider.dart';
 
 class ProtocolDetailScreen extends ConsumerWidget {
@@ -16,6 +31,14 @@ class ProtocolDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(protocolDetailProvider(protocolId));
+    final connectionStates = ref.watch(bleConnectionStatesProvider);
+    final connectedIds = connectionStates.maybeWhen(
+      data: (map) => map.entries
+          .where((e) => e.value == BleConnectionStatus.connected)
+          .map((e) => e.key)
+          .toList(),
+      orElse: () => const <String>[],
+    );
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -70,7 +93,221 @@ class ProtocolDetailScreen extends ConsumerWidget {
             }),
             const SizedBox(height: 20),
             AnimatedEntrance(index: p.cycles.length + 3, child: GestureDetector(
-              onTap: () => context.push(RoutePaths.session, extra: {'protocolId': p.id, 'deviceIds': <String>[]}),
+              onTap: () async {
+                // Prefer the user-selected transport + devices from Devices tab.
+                final target = ref.read(sessionTargetProvider);
+                if (target.deviceIds.isNotEmpty) {
+                  if (target.transport == SessionTransport.wifi) {
+                    // Navigate immediately to timer, publish MQTT in background.
+                    context.push(
+                      RoutePaths.session,
+                      extra: {
+                        'protocolId': p.id,
+                        'deviceIds': target.deviceIds,
+                        'transport': 'wifi',
+                      },
+                    );
+                    try {
+                      final dio = ref.read(djangoDioProvider);
+                      for (final mac in target.deviceIds) {
+                        final payloadObj =
+                            _protocolToWifiPayload(p, mac: mac);
+                        final payloadStr = jsonEncode(payloadObj);
+                        appLogger.i(
+                          'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
+                        );
+                        await dio.post(
+                          ApiEndpoints.mqttPublish,
+                          data: {
+                            'topic': 'HydraWav3Pro/config',
+                            'payload': payloadStr,
+                          },
+                        );
+                      }
+                    } catch (e) {
+                      appLogger.e('WiFi: publish failed: $e');
+                    }
+                    return;
+                  }
+
+                  // BLE selected
+                  context.push(
+                    RoutePaths.session,
+                    extra: {
+                      'protocolId': p.id,
+                      'deviceIds': target.deviceIds,
+                      'transport': 'ble',
+                    },
+                  );
+                  return;
+                }
+
+                final hasBle = connectedIds.isNotEmpty;
+
+                // WiFi devices available from backend (MQTT/API path)
+                List<DeviceInfo> wifiDevices = const <DeviceInfo>[];
+                try {
+                  wifiDevices = await ref.read(wifiDevicesByOrgProvider.future);
+                } catch (_) {
+                  wifiDevices = const <DeviceInfo>[];
+                }
+                final hasWifi = wifiDevices.isNotEmpty;
+
+                if (!hasBle && !hasWifi) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'No BLE connected and no WiFi devices found.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                Future<void> startBle() async {
+                  final selected = await _pickConnectedDevices(
+                    context,
+                    connectedIds,
+                    p,
+                  );
+                  if (!context.mounted || selected == null || selected.isEmpty) {
+                    return;
+                  }
+                  context.push(
+                    RoutePaths.session,
+                    extra: {'protocolId': p.id, 'deviceIds': selected, 'transport': 'ble'},
+                  );
+                }
+
+                Future<void> startWifi() async {
+                  final selectedWifi = await _pickWifiDevices(context, ref);
+                  if (!context.mounted ||
+                      selectedWifi == null ||
+                      selectedWifi.isEmpty) {
+                    return;
+                  }
+
+                  // Immediately go to the Session timer UI (WiFi transport)
+                  // as soon as devices are selected.
+                  context.push(
+                    RoutePaths.session,
+                    extra: {
+                      'protocolId': p.id,
+                      'deviceIds':
+                          selectedWifi.map((d) => d.macAddress).toList(),
+                      'transport': 'wifi',
+                    },
+                  );
+
+                  try {
+                    final dio = ref.read(djangoDioProvider);
+
+                    // Backend expects payload as a STRINGIFIED OBJECT (not a list).
+                    // So we publish one request per device:
+                    // { topic: "...", payload: "{\"mac\":\"...\", ...}" }
+                    for (final d in selectedWifi) {
+                      final payloadObj =
+                          _protocolToWifiPayload(p, mac: d.macAddress);
+                      final payloadStr = jsonEncode(payloadObj);
+                      appLogger.i(
+                        'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=${d.macAddress}, payload=$payloadStr)',
+                      );
+                      final resp = await dio.post(
+                        ApiEndpoints.mqttPublish,
+                        data: {
+                          'topic': 'HydraWav3Pro/config',
+                          'payload': payloadStr,
+                        },
+                      );
+                      appLogger.i(
+                        'WiFi: MQTT publish OK (mac=${d.macAddress}, status=${resp.statusCode ?? 200})',
+                      );
+                    }
+                  } on DioException catch (e) {
+                    appLogger.e(
+                      'WiFi: MQTT publish failed '
+                      '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
+                    );
+                  } catch (e) {
+                    appLogger.e('WiFi: MQTT publish failed: $e');
+                  }
+                }
+
+                if (hasWifi && !hasBle) {
+                  await startWifi();
+                  return;
+                }
+                if (hasBle && !hasWifi) {
+                  await startBle();
+                  return;
+                }
+
+                // Both available → ask user which transport to use.
+                final choice = await showModalBottomSheet<String>(
+                  context: context,
+                  showDragHandle: true,
+                  backgroundColor: ThemeConstants.surface,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.vertical(top: Radius.circular(18)),
+                  ),
+                  builder: (ctx) => SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Start session using',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          ListTile(
+                            leading: const Icon(Icons.bluetooth_rounded,
+                                color: Colors.white),
+                            title: const Text('Bluetooth (BLE)',
+                                style: TextStyle(color: Colors.white)),
+                            subtitle: Text(
+                              '${connectedIds.length} connected',
+                              style: const TextStyle(
+                                color: ThemeConstants.textSecondary,
+                              ),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop('ble'),
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.wifi_rounded,
+                                color: Colors.white),
+                            title: const Text('WiFi (MQTT/API)',
+                                style: TextStyle(color: Colors.white)),
+                            subtitle: Text(
+                              '${wifiDevices.length} available',
+                              style: const TextStyle(
+                                color: ThemeConstants.textSecondary,
+                              ),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop('wifi'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+
+                if (!context.mounted || choice == null) return;
+                if (choice == 'wifi') {
+                  await startWifi();
+                } else {
+                  await startBle();
+                }
+              },
               child: Container(
                 height: 56,
                 decoration: BoxDecoration(
@@ -90,6 +327,343 @@ class ProtocolDetailScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+Future<List<DeviceInfo>?> _pickWifiDevices(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final async = await ref.read(wifiDevicesByOrgProvider.future);
+  if (async.isEmpty) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No WiFi devices found for your organization')),
+      );
+    }
+    return null;
+  }
+
+  final selected = <String>{};
+  return showModalBottomSheet<List<DeviceInfo>>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: ThemeConstants.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return SafeArea(
+            top: false,
+            child: FractionallySizedBox(
+              heightFactor: 0.85,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Select WiFi devices',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'These are backend-registered sensors (MQTT/API).',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: ThemeConstants.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: async.length,
+                        itemBuilder: (ctx, i) {
+                          final d = async[i];
+                          final key = d.macAddress;
+                          final checked = selected.contains(key);
+                          return CheckboxListTile(
+                            value: checked,
+                            activeColor: ThemeConstants.accent,
+                            checkColor: Colors.white,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(
+                              d.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                              ),
+                            ),
+                            subtitle: Text(
+                              d.macAddress,
+                              style: const TextStyle(
+                                color: ThemeConstants.textSecondary,
+                                fontSize: 11,
+                              ),
+                            ),
+                            onChanged: (v) {
+                              setSheetState(() {
+                                if (v == true) {
+                                  selected.add(key);
+                                } else {
+                                  selected.remove(key);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () {
+                                final picked = async
+                                    .where((d) => selected.contains(d.macAddress))
+                                    .toList();
+                                Navigator.of(ctx).pop(picked);
+                              },
+                        child: const Text('Send to selected devices'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Map<String, dynamic> _protocolToWifiPayload(
+  Protocol p, {
+  required String mac,
+}) {
+  final cycles = p.cycles;
+  return {
+    'mac': mac,
+    'sessionCount': p.sessions,
+    'sessionPause': p.sessionPause.toInt(),
+    'sDelay': 0,
+    'cycle1': p.cycle1 ? 1 : 0,
+    'cycle5': p.cycle5 ? 1 : 0,
+    'edgeCycleDuration': p.edgecycleduration.toInt(),
+    'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
+    'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
+    'cyclePauses': cycles.map((c) => c.cyclePause.toInt()).toList(),
+    'pauseIntervals': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    'leftFuncs': cycles.map((c) => c.leftFunction).toList(),
+    'rightFuncs': cycles.map((c) => c.rightFunction).toList(),
+    'pwmValues': {
+      'hot': cycles.map((c) => c.hotPwm.toInt()).toList(),
+      'cold': cycles.map((c) => c.coldPwm.toInt()).toList(),
+    },
+    'playCmd': 1,
+    'led': 1,
+    'hotDrop': p.hotdrop.toInt(),
+    'coldDrop': p.colddrop.toInt(),
+    'vibMin': p.vibmin.toInt(),
+    'vibMax': p.vibmax.toInt(),
+    'totalDuration': p.totalDurationSeconds,
+  };
+}
+
+Future<List<String>?> _pickConnectedDevices(
+  BuildContext context,
+  List<String> connectedIds,
+  Protocol protocol,
+) async {
+  final selected = connectedIds.toSet();
+  return showModalBottomSheet<List<String>>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: ThemeConstants.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    ),
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return SafeArea(
+            top: false,
+            child: FractionallySizedBox(
+              heightFactor: 0.9,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Select connected devices',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Choose one or more devices for this session.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: ThemeConstants.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ...connectedIds.map((id) {
+                              final checked = selected.contains(id);
+                              return CheckboxListTile(
+                                value: checked,
+                                activeColor: ThemeConstants.accent,
+                                checkColor: Colors.white,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  id,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                subtitle: const Text(
+                                  'Connected',
+                                  style: TextStyle(
+                                    color: ThemeConstants.textSecondary,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                                onChanged: (v) {
+                                  setSheetState(() {
+                                    if (v == true) {
+                                      selected.add(id);
+                                    } else {
+                                      selected.remove(id);
+                                    }
+                                  });
+                                },
+                              );
+                            }),
+                            const SizedBox(height: 8),
+                            if (selected.isNotEmpty) ...[
+                              const Text(
+                                'Payload preview (first selected device):',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: ThemeConstants.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: ThemeConstants.surfaceVariant,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Consumer(
+                                  builder: (context, ref, _) {
+                                    final selectedTransportId = selected.first;
+                                    final gatt = ref
+                                        .read(bleRepositoryProvider)
+                                        .getGattInfo(selectedTransportId);
+                                    final runtimeDeviceId =
+                                        BleConstants.jsonDeviceIdForSession(
+                                      bleTransportId: selectedTransportId,
+                                      discoveredWriteCharacteristicUuid:
+                                          gatt?.writeUuid,
+                                    );
+                                    return Text(
+                                      const JsonEncoder.withIndent('  ').convert(
+                                        _protocolToSessionPayload(
+                                          protocol,
+                                          transportId: selectedTransportId,
+                                          runtimeDeviceId: runtimeDeviceId,
+                                        ),
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.white,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () => Navigator.of(ctx).pop(selected.toList()),
+                        child: const Text('Start with selected devices'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Map<String, dynamic> _protocolToSessionPayload(
+  Protocol p, {
+  required String transportId,
+  required String runtimeDeviceId,
+}) {
+  final cycles = p.cycles;
+  return {
+    'deviceId': runtimeDeviceId,
+    'mac': transportId,
+    'playCmd': 1,
+    'sessionCount': p.sessions,
+    'sessionPause': p.sessionPause.toInt(),
+    'sDelay': 0,
+    'cycle1': p.cycle1 ? 1 : 0,
+    'cycle5': p.cycle5 ? 1 : 0,
+    'edgeCycleDuration': p.edgecycleduration.toInt(),
+    'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
+    'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
+    'cyclePauses': cycles.map((c) => c.cyclePause.toInt()).toList(),
+    'pauseIntervals': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    'leftFuncs': cycles.map((c) => c.leftFunction).toList(),
+    'rightFuncs': cycles.map((c) => c.rightFunction).toList(),
+    'pwmValues': {
+      'hot': cycles.map((c) => c.hotPwm.toInt()).toList(),
+      'cold': cycles.map((c) => c.coldPwm.toInt()).toList(),
+    },
+    'led': 1,
+    'hotDrop': p.hotdrop.toInt(),
+    'coldDrop': p.colddrop.toInt(),
+    'vibMin': p.vibmin.toInt(),
+    'vibMax': p.vibmax.toInt(),
+    'totalDuration': p.totalDurationSeconds,
+  };
 }
 
 class _R extends StatelessWidget {

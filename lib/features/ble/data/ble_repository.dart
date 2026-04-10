@@ -48,7 +48,17 @@ class BleRepository {
   Stream<Map<String, BleConnectionStatus>> get connectionStates =>
       _connector.connectionStates;
 
+  Stream<BleNotification> get notifications => _connector.notifications;
+
   Future<bool> connectDevice(BluetoothDevice device) async {
+    // Avoid scan activity while connecting. Some stacks/plugin behavior can
+    // be timing-sensitive, and we don't need scan during connection.
+    try {
+      await _scanner.stopScan();
+    } catch (_) {
+      // If scan isn't running or scanner is already disposed, ignore.
+    }
+
     final success = await _connector.connect(device);
     if (success) {
       // Save to paired devices cache
@@ -73,6 +83,7 @@ class BleRepository {
   bool isConnected(String deviceId) => _connector.isConnected(deviceId);
 
   List<String> get connectedDeviceIds => _connector.connectedDeviceIds;
+  BleGattInfo? getGattInfo(String deviceId) => _connector.getGattInfo(deviceId);
 
   // --- Auto-reconnect ---
 

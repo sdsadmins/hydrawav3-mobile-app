@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/utils/extensions.dart';
+import '../../../../core/utils/logger.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../services/session_engine.dart';
 import '../../domain/session_model.dart';
@@ -13,23 +14,100 @@ import '../../domain/session_model.dart';
 class SessionScreen extends ConsumerStatefulWidget {
   final String protocolId;
   final List<String> deviceIds;
-  const SessionScreen({super.key, required this.protocolId, required this.deviceIds});
+  /// 'ble' or 'wifi'
+  final String transport;
+  const SessionScreen({
+    super.key,
+    required this.protocolId,
+    required this.deviceIds,
+    this.transport = 'ble',
+  });
 
   @override
   ConsumerState<SessionScreen> createState() => _SessionScreenState();
 }
 
 class _SessionScreenState extends ConsumerState<SessionScreen> {
+  bool _loadedOnce = false;
+  ProviderSubscription? _protocolSub;
+
+  @override
+  void initState() {
+    super.initState();
+    appLogger.i(
+      'SessionScreen: init(protocolId=${widget.protocolId}, transport=${widget.transport}, deviceIds=${widget.deviceIds})',
+    );
+    // Ensure engine knows the correct transport/deviceIds immediately, before
+    // protocol detail finishes loading (prevents BLE-start aborts in WiFi mode).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(sessionEngineProvider.notifier).prepareSession(
+            deviceIds: widget.deviceIds,
+            transport: widget.transport == 'wifi'
+                ? SessionTransport.wifi
+                : SessionTransport.ble,
+          );
+    });
+
+    // IMPORTANT: `listenManual` may not fire immediately when the provider
+    // already has a cached value. Fetch once explicitly so totalDuration and
+    // auto-start always work (especially for WiFi sessions).
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _loadedOnce) return;
+      try {
+        final protocol = await ref.read(
+          protocolDetailProvider(widget.protocolId).future,
+        );
+        if (!mounted || _loadedOnce) return;
+        final ctrl = ref.read(sessionEngineProvider.notifier);
+        ctrl.loadSession(
+          protocol,
+          widget.deviceIds,
+          transport: widget.transport == 'wifi'
+              ? SessionTransport.wifi
+              : SessionTransport.ble,
+        );
+        _loadedOnce = true;
+        ctrl.start();
+      } catch (e) {
+        appLogger.e('SessionScreen: failed to load protocol for session: $e');
+      }
+    });
+    // Listen once for the protocol details, then load + start the session.
+    _protocolSub = ref.listenManual(
+      protocolDetailProvider(widget.protocolId),
+      (previous, next) {
+        if (_loadedOnce) return;
+        next.whenData((protocol) {
+          final ctrl = ref.read(sessionEngineProvider.notifier);
+          ctrl.loadSession(
+            protocol,
+            widget.deviceIds,
+            transport: widget.transport == 'wifi'
+                ? SessionTransport.wifi
+                : SessionTransport.ble,
+          );
+          _loadedOnce = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            ctrl.start();
+          });
+        });
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _protocolSub?.close();
+    ref.read(sessionEngineProvider.notifier).reset();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final engine = ref.watch(sessionEngineProvider);
     final protocolAsync = ref.watch(protocolDetailProvider(widget.protocolId));
-
-    protocolAsync.whenData((protocol) {
-      if (engine.protocol == null) {
-        ref.read(sessionEngineProvider.notifier).loadSession(protocol, widget.deviceIds);
-      }
-    });
 
     final timer = engine.timer;
     final status = engine.status;
@@ -42,7 +120,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           onPressed: () {
-            if (status == SessionStatus.running || status == SessionStatus.paused) ctrl.stop();
+            if (status == SessionStatus.running || status == SessionStatus.paused) {
+              ctrl.stop();
+            }
+            ctrl.reset();
             context.pop();
           },
         ),
@@ -110,6 +191,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 ),
                 child: Text(_statusLabel(status), style: TextStyle(color: _statusColor(status), fontWeight: FontWeight.w600, fontSize: 13)),
               ),
+              if (engine.error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  engine.error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: ThemeConstants.error,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
 
               if (timer.totalCycles > 0) ...[
                 const SizedBox(height: 8),
@@ -133,7 +226,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     children: [
                       Container(width: 8, height: 8, decoration: const BoxDecoration(color: ThemeConstants.success, shape: BoxShape.circle)),
                       const SizedBox(width: 8),
-                      Text('${widget.deviceIds.length} device(s) connected', style: const TextStyle(color: ThemeConstants.textSecondary, fontSize: 13)),
+                      Text(
+                        widget.transport == 'wifi'
+                            ? '${widget.deviceIds.length} WiFi device(s) selected'
+                            : '${widget.deviceIds.length} device(s) connected',
+                        style: const TextStyle(
+                          color: ThemeConstants.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -147,7 +248,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   Widget _buildControls(SessionStatus status, SessionEngine ctrl) {
     return switch (status) {
-      SessionStatus.idle => SizedBox(height: 52, width: double.infinity, child: ElevatedButton(onPressed: () => ctrl.start(), child: const Text('Start Session'))),
+      SessionStatus.idle => SizedBox(
+        height: 52,
+        width: double.infinity,
+        child: ElevatedButton(
+          // WiFi sessions auto-start once protocol loads; don't allow manual start.
+          onPressed: widget.transport == 'wifi' ? null : () => ctrl.start(),
+          child: Text(widget.transport == 'wifi' ? 'Starting…' : 'Start Session'),
+        ),
+      ),
       SessionStatus.running => Row(children: [
           Expanded(child: SizedBox(height: 52, child: OutlinedButton(onPressed: () => ctrl.pause(), child: const Text('Pause')))),
           const SizedBox(width: 12),
@@ -158,7 +267,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           const SizedBox(width: 12),
           Expanded(child: SizedBox(height: 52, child: ElevatedButton(onPressed: () => ctrl.stop(), style: ElevatedButton.styleFrom(backgroundColor: ThemeConstants.error), child: const Text('Stop')))),
         ]),
-      SessionStatus.stopped || SessionStatus.completed => SizedBox(height: 52, width: double.infinity, child: ElevatedButton(onPressed: () => context.pop(), style: ElevatedButton.styleFrom(backgroundColor: ThemeConstants.success), child: const Text('Done'))),
+      SessionStatus.stopped || SessionStatus.completed => SizedBox(height: 52, width: double.infinity, child: ElevatedButton(onPressed: () { ctrl.reset(); context.pop(); }, style: ElevatedButton.styleFrom(backgroundColor: ThemeConstants.success), child: const Text('Done'))),
     };
   }
 

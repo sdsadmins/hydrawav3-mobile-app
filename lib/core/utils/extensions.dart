@@ -28,6 +28,15 @@ extension StringExtensions on String {
 
   String truncate(int maxLength) =>
       length <= maxLength ? this : '${substring(0, maxLength)}...';
+
+  /// Some APIs return `Bearer <jwt>`; we store the raw JWT and add Bearer in interceptors.
+  String get withoutBearerPrefix {
+    final t = trim();
+    if (t.length > 7 && t.toLowerCase().startsWith('bearer ')) {
+      return t.substring(7).trim();
+    }
+    return t;
+  }
 }
 
 extension DurationExtensions on Duration {

@@ -1,3 +1,5 @@
+import '../../../core/utils/extensions.dart';
+
 class LoginRequest {
   final String username;
   final String password;
@@ -26,8 +28,10 @@ class AuthTokens {
   });
 
   factory AuthTokens.fromJson(Map<String, dynamic> json) => AuthTokens(
-        accessToken: json['JWT_ACCESS_TOKEN'] as String,
-        refreshToken: json['JWT_REFRESH_TOKEN'] as String,
+        accessToken:
+            (json['JWT_ACCESS_TOKEN'] as String).withoutBearerPrefix,
+        refreshToken:
+            (json['JWT_REFRESH_TOKEN'] as String).withoutBearerPrefix,
       );
 }
 

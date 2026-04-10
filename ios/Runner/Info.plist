@@ -53,6 +53,8 @@
 	<string>Hydrawav3 needs Bluetooth to connect to your therapy devices</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Hydrawav3 needs Bluetooth to communicate with your therapy devices</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Hydrawav3 uses location to support Bluetooth scanning on iOS</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hydrawav3 uses the microphone for voice input to the AI assistant</string>
 	<key>NSFaceIDUsageDescription</key>

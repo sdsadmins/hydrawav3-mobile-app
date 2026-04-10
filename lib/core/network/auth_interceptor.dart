@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../constants/api_endpoints.dart';
 import '../storage/secure_storage.dart';
+import '../utils/extensions.dart';
 
 final authInterceptorProvider = Provider<AuthInterceptor>((ref) {
   return AuthInterceptor(ref);
@@ -82,8 +83,10 @@ class AuthInterceptor extends Interceptor {
       final response = await dio.get(ApiEndpoints.refreshToken);
       final data = response.data;
 
-      final newAccessToken = data['JWT_ACCESS_TOKEN'] as String;
-      final newRefreshToken = data['JWT_REFRESH_TOKEN'] as String;
+      final newAccessToken =
+          (data['JWT_ACCESS_TOKEN'] as String).withoutBearerPrefix;
+      final newRefreshToken =
+          (data['JWT_REFRESH_TOKEN'] as String).withoutBearerPrefix;
 
       await storage.saveTokens(
         accessToken: newAccessToken,
