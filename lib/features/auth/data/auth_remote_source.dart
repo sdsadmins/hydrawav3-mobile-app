@@ -33,7 +33,15 @@ class AuthRemoteSource {
   Future<UserProfile> getProfile() async {
     try {
       final response = await _dio.get(ApiEndpoints.profileMe);
-      return UserProfile.fromJson(response.data);
+      // return UserProfile.fromJson(response.data);
+      final data = response.data;
+      print("GET PROFILE RESPONSE: ${response.data}");
+
+if (data is List) {
+  return UserProfile.fromJson(data[0]); // ✅ FIX
+} else {
+  return UserProfile.fromJson(data);
+}
     } on DioException catch (e) {
       throw ServerException(
         e.response?.data?['message'] ?? 'Failed to fetch profile',
@@ -42,20 +50,51 @@ class AuthRemoteSource {
     }
   }
 
+  // Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
+  //   try {
+  //     final response = await _dio.put(
+  //       ApiEndpoints.profileMe,// "/api/v1/profile/me",
+  //       data: data,
+  //     );
+  //     return UserProfile.fromJson(response.data);
+  //   } on DioException catch (e) {
+  //     throw ServerException(
+  //       e.response?.data?['message'] ?? 'Failed to update profile',
+  //       statusCode: e.response?.statusCode,
+  //     );
+  //   }
+  //   print("UPDATE RESPONSE: ${response.data}");
+  // }
   Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.put(
-        ApiEndpoints.profileMe,
-        data: data,
-      );
-      return UserProfile.fromJson(response.data);
-    } on DioException catch (e) {
-      throw ServerException(
-        e.response?.data?['message'] ?? 'Failed to update profile',
-        statusCode: e.response?.statusCode,
-      );
+  try {
+    final response = await _dio.put(
+      ApiEndpoints.profileMe,
+      data: data,
+    );
+
+    print("UPDATE RESPONSE: ${response.data}"); // ✅ HERE
+
+    final res = response.data;
+    print("🔥 FULL RESPONSE: $res");
+
+    if (res is List) {
+      return UserProfile.fromJson(res[0]);
+    } else if (res is Map<String, dynamic>) {
+      return UserProfile.fromJson(res);
+    } else {
+      // Handle unexpected response format
+      throw Exception("Unexpected response format:");
     }
+        return await getProfile();
+
+  } on DioException catch (e) {
+    throw ServerException(
+      e.response?.data?['message'] ?? 'Failed to update profile',
+      statusCode: e.response?.statusCode,
+    );
   }
+}
+
 
   Future<void> changePassword({
     required String oldPassword,
@@ -76,4 +115,12 @@ class AuthRemoteSource {
       );
     }
   }
+
+Future<void> forgotPassword(String userId) async {
+  final response = await _dio.put(
+    "/api/v1/profile/me/forget-password/$userId",
+  );
+
+  print("FORGOT PASSWORD: ${response.data}");
+}
 }

@@ -59,4 +59,8 @@ class AuthRepository {
       newPassword: newPassword,
     );
   }
+  // forgot password
+  Future<void> forgotPassword(String id) {
+  return _remoteSource.forgotPassword(id);
+}
 }
