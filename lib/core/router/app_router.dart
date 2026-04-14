@@ -22,6 +22,7 @@ import '../../features/presets/presentation/screens/preset_management_screen.dar
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
 import '../constants/theme_constants.dart';
 import 'route_names.dart';
+import '../../features/auth/presentation/screens/select_organization_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -31,19 +32,48 @@ final routerProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
-    initialLocation: RoutePaths.protocols,
+    initialLocation: RoutePaths.login,
     redirect: (context, state) {
-      final isAuth = authState.isAuthenticated;
-      final isAuthRoute = state.matchedLocation == RoutePaths.login ||
-          state.matchedLocation == RoutePaths.signup ||
-          state.matchedLocation == RoutePaths.forgotPassword;
-      if (!isAuth && !isAuthRoute) return RoutePaths.login;
-      if (isAuth && isAuthRoute) return RoutePaths.protocols;
-      return null;
-    },
+  final isAuth = authState.isAuthenticated;
+
+  final isAuthRoute =
+      state.matchedLocation == RoutePaths.login ||
+      state.matchedLocation == RoutePaths.signup ||
+      state.matchedLocation == RoutePaths.forgotPassword;
+
+  final isSelectingOrg =
+      state.matchedLocation == '/select-organization';
+
+  /// ✅ ONLY use local selection
+  final hasSelectedOrg = authState.selectedOrgId != null;
+
+  // ❌ Not logged in
+  if (!isAuth && !isAuthRoute) {
+    return RoutePaths.login;
+  }
+
+  // ✅ Logged in but NO org
+  if (isAuth && !hasSelectedOrg && !isSelectingOrg) {
+    return '/select-organization';
+  }
+
+  // ✅ Logged in + org selected
+  if (isAuth && hasSelectedOrg && isAuthRoute) {
+    return RoutePaths.protocols;
+  }
+
+  return null;
+
+
+},
     routes: [
       GoRoute(path: RoutePaths.login, name: RouteNames.login, builder: (c, s) => const LoginScreen()),
       GoRoute(path: RoutePaths.signup, name: RouteNames.signup, builder: (c, s) => const SignupScreen()),
+      GoRoute(
+    path: '/select-organization',
+    name: RouteNames.selectOrganization,
+    builder: (c, s) => const SelectOrganizationPage(),
+  ),
       GoRoute(path: RoutePaths.forgotPassword, name: RouteNames.forgotPassword, builder: (c, s) => const ForgotPasswordScreen()),
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
@@ -53,6 +83,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(path: RoutePaths.devices, name: RouteNames.devices, builder: (c, s) => const DeviceListScreen()),
           GoRoute(path: RoutePaths.history, name: RouteNames.history, builder: (c, s) => const HistoryListScreen()),
           GoRoute(path: RoutePaths.settings, name: RouteNames.settings, builder: (c, s) => const SettingsScreen()),
+          
         ],
       ),
       GoRoute(path: RoutePaths.protocolDetail, name: RouteNames.protocolDetail, builder: (c, s) => ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),

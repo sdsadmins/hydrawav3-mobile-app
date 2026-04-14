@@ -11,11 +11,16 @@ class AuthState {
   final UserProfile? user;
   final String? error;
 
+  final String? selectedOrgId;
+  final String? selectedOrgName; // ✅ ADD THIS
+
   const AuthState({
     this.isAuthenticated = false,
     this.isLoading = false,
     this.user,
     this.error,
+    this.selectedOrgId,
+    this.selectedOrgName, // ✅
   });
 
   AuthState copyWith({
@@ -23,12 +28,18 @@ class AuthState {
     bool? isLoading,
     UserProfile? user,
     String? error,
+    String? selectedOrgId,
+    String? selectedOrgName, // ✅
   }) {
     return AuthState(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
       isLoading: isLoading ?? this.isLoading,
       user: user ?? this.user,
       error: error,
+      selectedOrgId:
+          selectedOrgId != null ? selectedOrgId : this.selectedOrgId,
+      selectedOrgName:
+          selectedOrgName != null ? selectedOrgName : this.selectedOrgName,
     );
   }
 }
@@ -42,14 +53,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> checkAuthStatus() async {
     state = state.copyWith(isLoading: true);
+
     try {
       final isLoggedIn = await _repository.isLoggedIn();
+
       if (isLoggedIn) {
         try {
-          // Try biometric auth if enabled (skip on web)
           final biometricEnabled = await _biometricService.isEnabled();
+
           if (biometricEnabled) {
-            final authenticated = await _biometricService.authenticate();
+            final authenticated =
+                await _biometricService.authenticate();
+
             if (!authenticated) {
               state = state.copyWith(
                 isAuthenticated: false,
@@ -58,19 +73,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
               return;
             }
           }
-        } catch (_) {
-          // Biometric not available (e.g. web) — skip
-        }
+        } catch (_) {}
 
         try {
           final profile = await _repository.getProfile();
+
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
             user: profile,
           );
         } catch (_) {
-          // Offline but has tokens - allow through
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
@@ -82,38 +95,45 @@ class AuthNotifier extends StateNotifier<AuthState> {
           isLoading: false,
         );
       }
-    } catch (e) {
-      // Any crash (web platform, etc.) — just show login
+    } catch (_) {
       state = state.copyWith(
         isAuthenticated: false,
         isLoading: false,
       );
     }
   }
+Future<void> login(LoginRequest request) async {
+  state = state.copyWith(isLoading: true, error: null);
 
-  Future<void> login(LoginRequest request) async {
-    state = state.copyWith(isLoading: true, error: null);
-    try {
-      final profile = await _repository.login(request);
-      state = state.copyWith(
-        isAuthenticated: true,
-        isLoading: false,
-        user: profile,
-      );
-    } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        error: e.toString(),
-      );
-    }
+  try {
+    final profile = await _repository.login(request);
+
+    state = state.copyWith(
+      isAuthenticated: true,
+      isLoading: false,
+      user: profile,
+      selectedOrgId: null, // ✅ FIXED
+    );
+  } catch (e) {
+    state = state.copyWith(
+      isLoading: false,
+      error: e.toString(),
+    );
   }
-
+}
   Future<void> logout() async {
     await _repository.logout();
     state = const AuthState();
   }
 
-  /// 🎮 Demo mode - bypass auth for UI exploration
+  /// ✅ ADD THIS (IMPORTANT 🔥)
+  void setOrganization(String orgId, String orgName) {
+  state = state.copyWith(
+    selectedOrgId: orgId,
+    selectedOrgName: orgName, // ✅ STORE NAME
+  );
+}
+  /// 🎮 Demo mode
   void enterDemoMode() {
     state = AuthState(
       isAuthenticated: true,
@@ -126,6 +146,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         lastName: 'User',
         roles: ['PRACTITIONER'],
       ),
+      selectedOrgId: null, // ✅ ensure org selection required
     );
   }
 
@@ -133,9 +154,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       final profile = await _repository.getProfile();
       state = state.copyWith(user: profile);
-    } catch (_) {
-      // Silently fail - keep existing profile
-    }
+    } catch (_) {}
   }
 }
 
