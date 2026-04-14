@@ -40,8 +40,7 @@ class BleConnector {
   final Map<String, String> _firmwareSessionIdByDevice = {};
   final _stateController =
       StreamController<Map<String, BleConnectionStatus>>.broadcast();
-  final _notificationController =
-      StreamController<BleNotification>.broadcast();
+  final _notificationController = StreamController<BleNotification>.broadcast();
   final Map<String, BleConnectionStatus> _deviceStates = {};
   final Map<String, int> _reconnectAttempts = {};
   final Set<String> _manualDisconnects = {};
@@ -153,7 +152,7 @@ class BleConnector {
       // Give the BLE stack time to settle CCCD state before enabling our
       // strict preferred notify characteristic.
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      _findCharacteristics(deviceId, services);
+      await _findCharacteristics(deviceId, services);
 
       _connectedDevices[deviceId] = device;
       _updateState(deviceId, BleConnectionStatus.connected);
@@ -161,8 +160,7 @@ class BleConnector {
 
       // Listen for disconnection
       _connectionSubs[deviceId]?.cancel();
-      _connectionSubs[deviceId] =
-          device.connectionState.listen((state) {
+      _connectionSubs[deviceId] = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
           appLogger.w('BLE: Device $deviceId disconnected');
           _updateState(deviceId, BleConnectionStatus.disconnected);
@@ -303,7 +301,8 @@ class BleConnector {
           final k = decoded.keys.first;
           if (k is String && k.contains('==') && k.length >= 10) {
             _firmwareSessionIdByDevice[deviceId] = k;
-            appLogger.i('BLE: [$deviceId] Captured firmware deviceId (map key) = $k');
+            appLogger.i(
+                'BLE: [$deviceId] Captured firmware deviceId (map key) = $k');
             return;
           }
         }
@@ -313,7 +312,8 @@ class BleConnector {
           final v = decoded[field];
           if (v is String && v.contains('==') && v.length >= 10) {
             _firmwareSessionIdByDevice[deviceId] = v;
-            appLogger.i('BLE: [$deviceId] Captured firmware deviceId ($field) = $v');
+            appLogger
+                .i('BLE: [$deviceId] Captured firmware deviceId ($field) = $v');
             return;
           }
         }
@@ -338,61 +338,40 @@ class BleConnector {
       appLogger.e('BLE: No write characteristic for $deviceId');
       return false;
     }
-
-    // Log writes at INFO so they're visible even when debug logs are filtered.
-    // Include UUID + small preview to make it obvious a write really happened.
-    final previewLen = data.length < 80 ? data.length : 80;
-    final preview = data.take(previewLen).toList();
+    appLogger.i("🔥 WRITE FUNCTION HIT");
     appLogger.i(
       'BLE: Writing ${data.length} bytes to $deviceId '
-      '(char=${characteristic.uuid.str}, preview=$preview${data.length > previewLen ? '…' : ''})',
+      '(char=${characteristic.uuid.str})',
     );
 
-    Future<void> sendInChunks(bool withoutResponse) async {
-      // UART-style BLE bridges are usually stable with 20-byte chunks.
-      // Keep small pacing delay to prevent RX buffer overflow.
+    try {
       const chunkSize = 20;
+
       for (int i = 0; i < data.length; i += chunkSize) {
         final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
+
         final chunk = data.sublist(i, end);
-        await characteristic.write(chunk, withoutResponse: withoutResponse);
-        // Pacing delay is critical for some firmwares.
+
+        // 🔥 FORCE RELIABLE MODE (WITH RESPONSE - device doesn't support no-response)
+        await characteristic.write(
+          chunk,
+          withoutResponse: false,
+        );
+
+        // 🔥 Required pacing
         if (end < data.length) {
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 120));
         }
       }
-    }
 
-    final primaryMode = BleConstants.preferWriteWithoutResponse;
-    try {
-      await sendInChunks(primaryMode);
-      appLogger.i(
-        'BLE: Wrote ${data.length} bytes to $deviceId '
-        '(withoutResponse=$primaryMode)',
-      );
+      // 🔥 EXTRA FINAL DELAY (CRITICAL)
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      appLogger.i('BLE: Write complete for $deviceId');
       return true;
     } catch (e) {
-      appLogger.w(
-        'BLE: Write failed for $deviceId (withoutResponse=$primaryMode): $e',
-      );
-      if (!BleConstants.retryWithOppositeWriteModeOnFailure) {
-        return false;
-      }
-      final fallbackMode = !primaryMode;
-      try {
-        await sendInChunks(fallbackMode);
-        appLogger.i(
-          'BLE: Write retry succeeded for $deviceId '
-          '(withoutResponse=$fallbackMode)',
-        );
-        return true;
-      } catch (e2) {
-        appLogger.e(
-          'BLE: Write retry failed for $deviceId '
-          '(withoutResponse=$fallbackMode): $e2',
-        );
-        return false;
-      }
+      appLogger.e('BLE: Write failed for $deviceId: $e');
+      return false;
     }
   }
 
@@ -400,8 +379,8 @@ class BleConnector {
   bool isConnected(String deviceId) =>
       _deviceStates[deviceId] == BleConnectionStatus.connected;
 
-  void _findCharacteristics(
-      String deviceId, List<BluetoothService> services) {
+  Future<void> _findCharacteristics(
+      String deviceId, List<BluetoothService> services) async {
     // Prevent stale UUID matches from a previous connection attempt.
     _writeCharacteristics.remove(deviceId);
     _notifyCharacteristics.remove(deviceId);
@@ -411,30 +390,32 @@ class BleConnector {
     String? selectedWriteUuid;
     String? selectedNotifyUuid;
     String n(String s) => s.toLowerCase().replaceAll('-', '');
-    final preferredService =
-        BleConstants.preferredServiceUuid == null
-            ? null
-            : n(BleConstants.preferredServiceUuid!);
-    final preferredWrite =
-        BleConstants.preferredWriteCharacteristicUuid == null
-            ? null
-            : n(BleConstants.preferredWriteCharacteristicUuid!);
+    final preferredService = BleConstants.preferredServiceUuid == null
+        ? null
+        : n(BleConstants.preferredServiceUuid!);
+    final preferredWrite = BleConstants.preferredWriteCharacteristicUuid == null
+        ? null
+        : n(BleConstants.preferredWriteCharacteristicUuid!);
+    appLogger.i("EXPECTED WRITE → $preferredWrite");
     final preferredNotify =
         BleConstants.preferredNotifyCharacteristicUuid == null
             ? null
             : n(BleConstants.preferredNotifyCharacteristicUuid!);
-
+    appLogger.i("EXPECTED NOTIFY → $preferredNotify");
     // -------------------------------------------------------------------------
     // [GATT DUMP] — logged at INFO so it is always visible in the console.
     // Read these lines to find the correct write / notify UUIDs, then set
     // BleConstants.preferredWriteCharacteristicUuid and
     // BleConstants.preferredNotifyCharacteristicUuid accordingly.
     // -------------------------------------------------------------------------
+
     appLogger.i('BLE: [$deviceId] ════════════ [GATT DUMP START] ════════════');
-    appLogger.i('BLE: [$deviceId] Total services discovered: ${services.length}');
+    appLogger
+        .i('BLE: [$deviceId] Total services discovered: ${services.length}');
     for (final s in services) {
       appLogger.i('BLE: [$deviceId] ┌─ SERVICE: ${s.uuid.str}');
       for (final c in s.characteristics) {
+        appLogger.i("DEBUG UUID → ${n(c.uuid.str)}");
         final canWrite =
             c.properties.write || c.properties.writeWithoutResponse;
         if (canWrite) {
@@ -467,26 +448,36 @@ class BleConnector {
         preferredNotify != null) {
       for (final service in services) {
         final serviceUuid = n(service.uuid.str);
-        if (preferredService != null && serviceUuid != preferredService) continue;
+        if (false &&
+            preferredService != null &&
+            serviceUuid != preferredService) continue;
         for (final char in service.characteristics) {
           final charUuid = n(char.uuid.str);
           if (preferredWrite != null && charUuid == preferredWrite) {
             _writeCharacteristics[deviceId] = char;
             selectedServiceUuid = service.uuid.str;
             selectedWriteUuid = char.uuid.str;
-            appLogger.d('BLE: Found preferred write characteristic for $deviceId');
+            appLogger
+                .d('BLE: Found preferred write characteristic for $deviceId');
           }
           if (preferredNotify != null && charUuid == preferredNotify) {
-            final canNotify = char.properties.notify || char.properties.indicate;
+            final canNotify =
+                char.properties.notify || char.properties.indicate;
+
             if (!canNotify) {
               appLogger.w(
                 'BLE: Preferred notify UUID matched but is not notifiable: ${char.uuid.str}',
               );
             } else {
               _notifyCharacteristics[deviceId] = char;
+
+              // 🔥 THIS LINE WAS MISSING (CRITICAL)
+              await char.setNotifyValue(true);
+
               selectedServiceUuid ??= service.uuid.str;
               selectedNotifyUuid = char.uuid.str;
-              appLogger.d('BLE: Found preferred notify characteristic for $deviceId');
+
+              appLogger.i("✅ Correct NOTIFY enabled: ${char.uuid.str}");
             }
           }
         }
@@ -497,8 +488,10 @@ class BleConnector {
     if (BleConstants.strictHydraGattProfile) {
       final missing = <String>[];
       if (preferredService == null) missing.add('preferredServiceUuid');
-      if (preferredWrite == null) missing.add('preferredWriteCharacteristicUuid');
-      if (preferredNotify == null) missing.add('preferredNotifyCharacteristicUuid');
+      if (preferredWrite == null)
+        missing.add('preferredWriteCharacteristicUuid');
+      if (preferredNotify == null)
+        missing.add('preferredNotifyCharacteristicUuid');
       if (missing.isNotEmpty) {
         throw Exception(
           'BLE: Strict GATT profile is enabled but missing constants: ${missing.join(', ')}',
@@ -597,7 +590,8 @@ class BleConnector {
     );
   }
 
-  Future<void> _attemptReconnect(String deviceId, BluetoothDevice device) async {
+  Future<void> _attemptReconnect(
+      String deviceId, BluetoothDevice device) async {
     final next = (_reconnectAttempts[deviceId] ?? 0) + 1;
     _reconnectAttempts[deviceId] = next;
     appLogger.i(
@@ -608,7 +602,8 @@ class BleConnector {
     );
 
     if (_manualDisconnects.contains(deviceId)) return;
-    if ((_reconnectAttempts[deviceId] ?? 0) < BleConstants.maxReconnectAttempts) {
+    if ((_reconnectAttempts[deviceId] ?? 0) <
+        BleConstants.maxReconnectAttempts) {
       await connect(device, autoReconnect: true);
     }
   }

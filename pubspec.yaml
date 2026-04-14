@@ -1,6 +1,6 @@
 name: hydrawav3
 description: Hydrawav3 - Physical therapy device control app
-publish_to: 'none'
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
@@ -85,6 +85,7 @@ dev_dependencies:
   drift_dev: ^2.22.1
   mockito: ^5.4.5
   mocktail: ^1.0.4
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
@@ -95,3 +96,9 @@ flutter:
     - assets/icons/svg/
     - assets/fonts/
     - assets/animations/
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/images/icon.jpg"
+  min_sdk_android: 21

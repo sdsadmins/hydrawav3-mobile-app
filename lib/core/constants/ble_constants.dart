@@ -48,12 +48,15 @@ class BleConstants {
   // ── Paste your real UUIDs here after reading the [GATT DUMP] log ─────────
   // ℹ️ If your device uses Nordic NUS (most common for UART bridges):
   static const String? preferredServiceUuid =
-      '6e400001-b5a3-f393-e0a9-e50e24dcca9e';     // NUS service
+      '12345678-1234-5678-1234-56789abcdef0';
+
   static const String? preferredWriteCharacteristicUuid =
-      '6e400002-b5a3-f393-e0a9-e50e24dcca9e';     // NUS RX (phone → device)
+      'abcdef01-1234-5678-1234-56789abcdef1';
+
+// ⚠️ YOU MUST FIND THIS FROM LOGS
   static const String? preferredNotifyCharacteristicUuid =
-      '6e400003-b5a3-f393-e0a9-e50e24dcca9e';     // NUS TX (device → phone)
-  
+      'abcdef03-1234-5678-1234-56789abcdef9'; // guess → verify
+
   // ❌ OLD FAKE UUIDs (DO NOT USE):
   // '12345678-1234-5678-1234-56789abcdef0'
   // 'abcdef01-1234-5678-1234-56789abcdef1'
@@ -64,7 +67,7 @@ class BleConstants {
   /// - Connect fails if we can't find the exact service/write/notify UUIDs
   // TEMP: disable strict matching so we can observe actual discovery/fallback
   // behavior and test the correct WRITE/NOTIFY UUID pairing.
-  static const bool strictHydraGattProfile = false;
+  static const bool strictHydraGattProfile = true;
 
   // UART write tuning.
   static const bool preferWriteWithoutResponse = false;
@@ -80,20 +83,20 @@ class BleConstants {
   // Short UUIDs are stored here without dashes so they can be compared with
   // the normalised (hex-only) form produced by _findCharacteristics.
   static const Set<String> systemCharacteristicUuids = {
-    '00002a00',  // Device Name            (Generic Access)
-    '00002a01',  // Appearance             (Generic Access)
-    '00002a02',  // Peripheral Privacy Flag
-    '00002a03',  // Reconnection Address
-    '00002a04',  // Peripheral Preferred Connection Parameters
-    '00002a05',  // ⚠️ Service Changed      (Generic Attribute) — the 2A05 bug
-    '00002a06',  // Alert Level
-    '00002a07',  // Tx Power Level
-    '2a00',      // Short-form aliases (some stacks omit leading zeros)
+    '00002a00', // Device Name            (Generic Access)
+    '00002a01', // Appearance             (Generic Access)
+    '00002a02', // Peripheral Privacy Flag
+    '00002a03', // Reconnection Address
+    '00002a04', // Peripheral Preferred Connection Parameters
+    '00002a05', // ⚠️ Service Changed      (Generic Attribute) — the 2A05 bug
+    '00002a06', // Alert Level
+    '00002a07', // Tx Power Level
+    '2a00', // Short-form aliases (some stacks omit leading zeros)
     '2a01',
     '2a02',
     '2a03',
     '2a04',
-    '2a05',      // ⚠️ Service Changed — short form
+    '2a05', // ⚠️ Service Changed — short form
     '2a06',
     '2a07',
   };
@@ -156,7 +159,8 @@ class BleConstants {
   static const int requestedMtu = 512;
 
   // Play commands
-  static const int cmdPause = 0;
-  static const int cmdResume = 1;
-  static const int cmdStop = 2;
+  static const int cmdPause =
+      2; // 🔥 FIX: Was 0, should be 0x02 to match device firmware
+  static const int cmdResume = 1; // ✅ Correct (0x01)
+  static const int cmdStop = 0; // 🔥 FIX: Was 2, device expects 0x00 for stop
 }

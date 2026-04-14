@@ -3,7 +3,7 @@ class ApiEndpoints {
 
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
-  static const String nodeBaseUrl = 'http://127.0.0.1:5000/hydrawav/v1';
+  static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -51,8 +51,7 @@ class ApiEndpoints {
   static const String publishableKey = '/payments/publishable-key';
   static String createCheckoutSession(String orgId) =>
       '/payments/create-checkout-session/$orgId';
-  static String currentPlan(String orgId) =>
-      '/payments/current-plan/$orgId';
+  static String currentPlan(String orgId) => '/payments/current-plan/$orgId';
   static const String paymentUser = '/payments/user';
   static const String products = '/products';
 

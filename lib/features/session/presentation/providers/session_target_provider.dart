@@ -26,8 +26,12 @@ class SessionTargetNotifier extends StateNotifier<SessionTargetState> {
   SessionTargetNotifier() : super(const SessionTargetState());
 
   void setTransport(SessionTransport t) {
-    // keep selection but user can clear manually if needed
-    state = state.copyWith(transport: t);
+    // Clear previously selected devices when transport changes
+    // since WiFi device IDs are incompatible with BLE and vice versa
+    state = SessionTargetState(
+      transport: t,
+      deviceIds: const <String>[],
+    );
   }
 
   void setSelected(List<String> deviceIds) {
@@ -51,4 +55,3 @@ final sessionTargetProvider =
     StateNotifierProvider<SessionTargetNotifier, SessionTargetState>((ref) {
   return SessionTargetNotifier();
 });
-

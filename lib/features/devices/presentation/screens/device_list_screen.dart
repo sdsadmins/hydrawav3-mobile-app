@@ -194,18 +194,19 @@ class DeviceListScreen extends ConsumerWidget {
             ),
           ),
 
-          // Device list by selected transport
-          if (target.transport == SessionTransport.wifi)
+          // Display device types based on transport selection
+
+          // === WiFi DEVICES SECTION (only when WiFi selected) ===
+          if (target.transport == SessionTransport.wifi) ...[
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: AnimatedEntrance(
                   index: 0,
-                  child: SectionHeader(title: 'Devices'),
+                  child: SectionHeader(title: 'WiFi Devices'),
                 ),
               ),
             ),
-          if (target.transport == SessionTransport.wifi)
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               sliver: wifiAsync.when(
@@ -274,14 +275,18 @@ class DeviceListScreen extends ConsumerWidget {
                 },
               ),
             ),
-          // BLE Section - Always show scan button, even while loading paired devices
-          if (target.transport == SessionTransport.ble)
+          ],
+
+          // === BLUETOOTH DEVICES SECTION (only when Bluetooth selected) ===
+          if (target.transport == SessionTransport.ble) ...[
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const SectionHeader(title: 'Bluetooth Devices'),
+                    const SizedBox(height: 12),
                     // Scan button - always visible
                     GestureDetector(
                       onTap: () => ref.read(startScanProvider)(),
@@ -310,8 +315,7 @@ class DeviceListScreen extends ConsumerWidget {
                 ),
               ),
             ),
-          // BLE Device List
-          if (target.transport == SessionTransport.ble)
+            // BLE Device List - Connected and Available
             pairedDevices.when(
               data: (devices) {
                 final scanResults = ref.watch(bleScanResultsProvider);
@@ -385,6 +389,17 @@ class DeviceListScreen extends ConsumerWidget {
                                       final ok = await ref
                                           .read(bleRepositoryProvider)
                                           .connectDevice(r.device);
+
+                                      // CRITICAL FIX: Allow database stream and connection state
+                                      // stream to propagate before showing snackbar and allowing UI rebuild.
+                                      // Without this delay, the device appears connected but the card
+                                      // doesn't appear in the "Connected" section immediately.
+                                      if (ok) {
+                                        await Future<void>.delayed(
+                                          const Duration(milliseconds: 150),
+                                        );
+                                      }
+
                                       if (!context.mounted) return;
                                       messenger.showSnackBar(SnackBar(
                                           content: Text(ok
@@ -443,6 +458,7 @@ class DeviceListScreen extends ConsumerWidget {
                 ),
               ),
             ),
+          ],
         ],
       ),
     );

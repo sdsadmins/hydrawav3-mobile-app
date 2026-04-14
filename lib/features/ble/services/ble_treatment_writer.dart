@@ -50,7 +50,8 @@ class BleTreatmentWriter {
     final mqttSuccess = await _sendViaMqtt(command);
     if (mqttSuccess) return true;
 
-    appLogger.e('All command delivery methods failed for ${command.macAddress}');
+    appLogger
+        .e('All command delivery methods failed for ${command.macAddress}');
     return false;
   }
 
@@ -61,6 +62,28 @@ class BleTreatmentWriter {
   }) async {
     final results = <String, bool>{};
     final deviceIds = _connector.connectedDeviceIds;
+
+    await Future.wait(
+      deviceIds.map((deviceId) async {
+        final command = BleCommand(
+          macAddress: deviceId,
+          type: type,
+          payload: payload,
+        );
+        results[deviceId] = await sendCommand(command);
+      }),
+    );
+
+    return results;
+  }
+
+  /// Send to specific devices only.
+  Future<Map<String, bool>> sendToDevices(
+    List<String> deviceIds,
+    CommandType type, {
+    Map<String, dynamic>? payload,
+  }) async {
+    final results = <String, bool>{};
 
     await Future.wait(
       deviceIds.map((deviceId) async {
