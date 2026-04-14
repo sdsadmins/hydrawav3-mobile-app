@@ -6,7 +6,7 @@ class RouteNames {
   static const String signup = 'signup';
   static const String forgotPassword = 'forgot-password';
   static const String resetPassword = 'reset-password';
-
+static const selectOrganization = 'selectOrganization';
   // Main tabs
   static const String protocols = 'protocols';
   static const String devices = 'devices';

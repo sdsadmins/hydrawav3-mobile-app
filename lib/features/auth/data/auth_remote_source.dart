@@ -57,6 +57,11 @@ class AuthRemoteSource {
     }
   }
 
+Future<List<Map<String, dynamic>>> getOrganizations() async {
+  final response = await _dio.get('/api/v1/admin/organizations');
+  return List<Map<String, dynamic>>.from(response.data);
+}
+
   Future<void> changePassword({
     required String oldPassword,
     required String newPassword,

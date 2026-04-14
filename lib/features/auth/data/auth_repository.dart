@@ -49,6 +49,10 @@ class AuthRepository {
   Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
     return await _remoteSource.updateProfile(data);
   }
+  Future<List<Map<String, dynamic>>> getOrganizations() async {
+  final response = await _remoteSource.getOrganizations();
+  return response;
+}
 
   Future<void> changePassword({
     required String oldPassword,
