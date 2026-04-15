@@ -4,21 +4,34 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+
   <key>CFBundleExecutable</key>
   <string>App</string>
+
   <key>CFBundleIdentifier</key>
   <string>io.flutter.flutter.app</string>
+
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+
   <key>CFBundleName</key>
   <string>App</string>
+
   <key>CFBundlePackageType</key>
   <string>FMWK</string>
+
   <key>CFBundleShortVersionString</key>
   <string>1.0</string>
+
   <key>CFBundleSignature</key>
   <string>????</string>
+
   <key>CFBundleVersion</key>
   <string>1.0</string>
+
+  <!-- 🔥 ADD THIS -->
+  <key>MinimumOSVersion</key>
+  <string>13.0</string>
+
 </dict>
 </plist>

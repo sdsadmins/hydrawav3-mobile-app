@@ -1,5 +1,3 @@
-
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,7 +8,7 @@ import '../../../../core/network/dio_client.dart';
 import '../providers/auth_provider.dart';
 
 final organizationProvider =
-    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   final dio = ref.read(djangoDioProvider);
   final response = await dio.get('/admin/organizations');
   return List<Map<String, dynamic>>.from(response.data);
@@ -27,6 +25,15 @@ class SelectOrganizationPage extends ConsumerStatefulWidget {
 class _SelectOrganizationPageState
     extends ConsumerState<SelectOrganizationPage> {
   String? selectedOrgId;
+
+  @override
+  void initState() {
+    super.initState();
+
+    Future.microtask(() {
+      ref.refresh(organizationProvider);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,13 +71,15 @@ class _SelectOrganizationPageState
                 physics: const BouncingScrollPhysics(),
                 child: SizedBox(
                   height: MediaQuery.of(context).size.height, // ✅ FULL HEIGHT
-                  child: Center( // ✅ TRUE CENTER
+                  child: Center(
+                    // ✅ TRUE CENTER
                     child: Padding(
                       padding: const EdgeInsets.all(20),
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 420),
                         child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center, // ✅ CENTER VERTICALLY
+                          mainAxisAlignment:
+                              MainAxisAlignment.center, // ✅ CENTER VERTICALLY
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             /// 🔥 TITLE
@@ -136,17 +145,20 @@ class _SelectOrganizationPageState
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(18),
                                   onTap: () {
-  setState(() {
-    selectedOrgId = orgId;
-  });
+                                    setState(() {
+                                      selectedOrgId = orgId;
+                                    });
 
-  ref.read(authStateProvider.notifier).setOrganization(
-    orgId,
-    org['name'] ?? 'Organization', // ✅ PASS NAME
-  );
+                                    ref
+                                        .read(authStateProvider.notifier)
+                                        .setOrganization(
+                                          orgId,
+                                          org['name'] ??
+                                              'Organization', // ✅ PASS NAME
+                                        );
 
-  context.go(RoutePaths.protocols);
-},
+                                    context.go(RoutePaths.protocols);
+                                  },
                                   child: Row(
                                     children: [
                                       Container(

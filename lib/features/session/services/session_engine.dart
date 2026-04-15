@@ -455,8 +455,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else if (state.transport == SessionTransport.ble) {
       // Send BLE pause command to session devices only
       if (state.deviceIds.isNotEmpty) {
-        final writer = _ref.read(bleTreatmentWriterProvider);
-        await writer.sendToDevices(state.deviceIds, CommandType.pause);
+        final connector = _ref.read(bleConnectorProvider);
+
+        for (final mac in state.deviceIds) {
+          await connector.writeToDevice(mac, [0x02]); // 🔥 PAUSE
+        }
       }
     }
 
@@ -487,8 +490,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else if (state.transport == SessionTransport.ble) {
       // Send BLE resume command to session devices only
       if (state.deviceIds.isNotEmpty) {
-        final writer = _ref.read(bleTreatmentWriterProvider);
-        await writer.sendToDevices(state.deviceIds, CommandType.resume);
+        final connector = _ref.read(bleConnectorProvider);
+
+        for (final mac in state.deviceIds) {
+          await connector.writeToDevice(mac, [0x01]); // 🔥 RESUME
+        }
       }
     }
 
@@ -503,8 +509,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else if (state.transport == SessionTransport.ble) {
       // Send BLE stop command to session devices only
       if (state.deviceIds.isNotEmpty) {
-        final writer = _ref.read(bleTreatmentWriterProvider);
-        await writer.sendToDevices(state.deviceIds, CommandType.stop);
+        final connector = _ref.read(bleConnectorProvider);
+
+        for (final mac in state.deviceIds) {
+          await connector.writeToDevice(mac, [0x03]); // 🔥 STOP
+        }
       }
     }
 
