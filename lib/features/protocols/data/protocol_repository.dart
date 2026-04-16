@@ -6,15 +6,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/storage/local_db.dart';
-import '../../../core/utils/logger.dart';
 import '../domain/protocol_model.dart';
 import 'protocol_remote_source.dart';
+import '../../auth/presentation/providers/auth_provider.dart'; // ✅ ADDED
 
 final protocolRepositoryProvider = Provider<ProtocolRepository>((ref) {
+  final auth = ref.watch(authStateProvider); // ✅ ADDED (watch org)
+
   return ProtocolRepository(
     remoteSource: ref.read(protocolRemoteSourceProvider),
     db: ref.read(databaseProvider),
     isOnline: ref.read(isOnlineProvider),
+    orgId: auth.selectedOrgId, // ✅ ADDED
   );
 });
 
@@ -22,55 +25,52 @@ class ProtocolRepository {
   final ProtocolRemoteSource _remoteSource;
   final AppDatabase _db;
   final bool _isOnline;
+  final String? _orgId; // ✅ ADDED
 
   ProtocolRepository({
     required ProtocolRemoteSource remoteSource,
     required AppDatabase db,
     required bool isOnline,
+    required String? orgId, // ✅ ADDED
   })  : _remoteSource = remoteSource,
         _db = db,
-        _isOnline = isOnline;
+        _isOnline = isOnline,
+        _orgId = orgId; // ✅ ADDED
 
-  Future<List<Protocol>> getProtocols({int page = 1, int perPage = 50}) async {
-    appLogger.i('🗄️  Repository: Getting protocols (online=$_isOnline)...');
-
+  Future<List<Protocol>> getProtocols({
+  int page = 1,
+  int perPage = 50,
+  String? orgId, // ✅ ADD THIS
+}) async {
     // Try cache first
     List<CachedProtocol> cached = [];
     try {
       cached = await _db.getAllCachedProtocols();
-      appLogger
-          .i('💾 Repository: Cache hit - ${cached.length} cached protocols');
-    } catch (e) {
-      appLogger.w('💾 Repository: Cache read failed: $e');
+    } catch (_) {
       // DB may fail on web — continue without cache
     }
 
     final isCacheStale = cached.isEmpty ||
-        cached.first.cachedAt.isBefore(
-            DateTime.now().subtract(AppConstants.protocolCacheStaleness));
-
-    appLogger.i(
-        '📋 Repository: Cache stale? $isCacheStale (empty=${cached.isEmpty})');
+        cached.first.cachedAt
+            .isBefore(DateTime.now().subtract(AppConstants.protocolCacheStaleness));
 
     if (_isOnline && isCacheStale) {
       try {
-        appLogger.i('🌐 Repository: Fetching from API (cache stale)...');
-        final protocols = await _remoteSource.getProtocols(
-          page: page,
-          perPage: perPage,
-        );
-        appLogger.i('✅ Repository: Got ${protocols.length} protocols from API');
+      final protocols = await _remoteSource.getProtocols(
+  page: page,
+  perPage: perPage,
+  orgId: orgId ?? _orgId, // ✅ ADD THIS
+);
 
         // Update cache (ignore errors)
         for (final protocol in protocols) {
           try {
-            appLogger.d('💾 Repository: Caching protocol ${protocol.id}');
             await _db.upsertProtocol(CachedProtocolsCompanion(
               id: Value(protocol.id),
               templateName: Value(protocol.templateName),
               sessions: Value(protocol.sessions),
-              cyclesJson: Value(
-                  jsonEncode(protocol.cycles.map((c) => c.toJson()).toList())),
+              cyclesJson: Value(jsonEncode(
+                  protocol.cycles.map((c) => c.toJson()).toList())),
               hotdrop: Value(protocol.hotdrop),
               colddrop: Value(protocol.colddrop),
               vibmin: Value(protocol.vibmin),
@@ -82,49 +82,32 @@ class ProtocolRepository {
               description: Value(protocol.description),
               cachedAt: Value(DateTime.now()),
             ));
-          } catch (e) {
-            appLogger
-                .w('❌ Repository: Failed to cache protocol ${protocol.id}: $e');
-          }
+          } catch (_) {}
         }
-        appLogger.i(
-            '✅ Repository: Returning ${protocols.length} fresh protocols from API');
         return protocols;
-      } catch (e) {
-        appLogger
-            .e('❌ Repository: API fetch failed: $e. Falling back to cache...');
+      } catch (_) {
         // Network failed — fall through to cache
       }
     }
 
     // Return cached data
-    appLogger.i('💾 Repository: Returning ${cached.length} cached protocols');
     return cached.map(_cachedToProtocol).toList();
   }
 
   Future<Protocol> getProtocol(String id) async {
-    appLogger
-        .i('🔍 Repository: Getting protocol by id=$id (online=$_isOnline)');
     if (_isOnline) {
       try {
-        appLogger.i('🌐 Repository: Fetching protocol $id from API');
-        return await _remoteSource.getProtocol(id);
-      } catch (e) {
-        appLogger
-            .w('❌ Repository: API fetch for $id failed: $e. Trying cache...');
-      }
+        return await _remoteSource.getProtocol(
+          id,
+          orgId: _orgId, // ✅ ADDED
+        );
+      } catch (_) {}
     }
 
     try {
       final cached = await _db.getCachedProtocol(id);
-      if (cached != null) {
-        appLogger.i('✅ Repository: Found cached protocol $id');
-        return _cachedToProtocol(cached);
-      }
-      appLogger.w('❌ Repository: Protocol $id not found in cache');
-    } catch (e) {
-      appLogger.e('❌ Repository: Cache lookup failed for $id: $e');
-    }
+      if (cached != null) return _cachedToProtocol(cached);
+    } catch (_) {}
 
     throw Exception('Protocol not found');
   }
