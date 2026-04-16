@@ -69,7 +69,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // 🔥 STEP 4 (ONLY ONCE)
         await Future.delayed(const Duration(milliseconds: 200));
         if (!mounted) return;
-        ctrl.start();
+        //ctrl.start();
       } catch (e) {
         appLogger.e('SessionScreen error: $e');
       }

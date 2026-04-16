@@ -87,6 +87,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
       "playCmd": 1,
     };
+    appLogger.e("🚨 FULL PAYLOAD SENT");
 
     final jsonStr = jsonEncode(fullPayload) + "\n";
 
@@ -190,8 +191,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   Future<void> start() async {
+    if (state.status != SessionStatus.idle) {
+      appLogger.e("⛔ BLOCKED start() — status: ${state.status}");
+      return;
+    }
     if (!_isActive) return; // Guard against updates after disposal
-    if (state.status == SessionStatus.running) return;
+    if (state.status == SessionStatus.running ||
+        state.status == SessionStatus.paused) {
+      appLogger.w("⚠️ Ignoring start() — session already active");
+      return;
+    }
 
     appLogger.i(
       'Session: start() transport=${state.transport} deviceIds=${state.deviceIds}',

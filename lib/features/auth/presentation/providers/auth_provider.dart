@@ -130,9 +130,10 @@ Future<void> login(LoginRequest request) async {
   void setOrganization(String orgId, String orgName) {
   state = state.copyWith(
     selectedOrgId: orgId,
-    selectedOrgName: orgName, // ✅ STORE NAME
+    selectedOrgName: orgName,
   );
 }
+
   /// 🎮 Demo mode
   void enterDemoMode() {
     state = AuthState(
