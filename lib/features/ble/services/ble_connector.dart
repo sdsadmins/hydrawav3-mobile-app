@@ -100,10 +100,17 @@ class BleConnector {
 
       // NOTE: `autoConnect` is unreliable across platforms and can cause
       // confusing states. Prefer explicit connects + our own reconnect loop.
-      await device.connect(
-        timeout: BleConstants.connectionTimeout,
-        autoConnect: false,
-      );
+      bool connectSuccess = true;
+
+      try {
+        await device.connect(
+          timeout: BleConstants.connectionTimeout,
+          autoConnect: false,
+        );
+      } catch (e) {
+        appLogger.w('BLE: connect() failed, continuing anyway: $e');
+        connectSuccess = false; // 🔥 don't fail
+      }
 
       // Many UART-style bridges are flaky if you immediately discover services.
       // This matches the strict flow requested for Hydra devices.
@@ -112,12 +119,14 @@ class BleConnector {
       }
 
       // Request MTU
-      if (device.isConnected) {
+      try {
         await device.requestMtu(BleConstants.requestedMtu);
-      }
+      } catch (_) {}
 
       // Discover services
+      await Future.delayed(const Duration(seconds: 2)); // 🔥 ADD THIS
       final services = await device.discoverServices();
+      appLogger.i("🔥 SERVICES COUNT = ${services.length}");
 
       // In practice, some Android stacks / plugins may turn on notifications for
       // Bluetooth SIG system characteristics (e.g. Service Changed 0x2A05)
@@ -257,7 +266,26 @@ class BleConnector {
       appLogger.i('BLE: Connected to ${device.platformName}');
       return true;
     } catch (e) {
-      appLogger.e('BLE: Connection failed for $deviceId: $e');
+      appLogger.w('BLE: Connect error ignored for $deviceId: $e');
+
+      // 🔥 TRY TO CONTINUE ANYWAY
+      try {
+        await Future.delayed(const Duration(seconds: 2));
+
+        final services = await device.discoverServices();
+
+        if (services.isNotEmpty) {
+          appLogger.i('BLE: Recovered connection via discoverServices');
+
+          await _findCharacteristics(deviceId, services);
+
+          _connectedDevices[deviceId] = device;
+          _updateState(deviceId, BleConnectionStatus.connected);
+
+          return true; // 🔥 SUCCESS EVEN AFTER FAILURE
+        }
+      } catch (_) {}
+
       _updateState(deviceId, BleConnectionStatus.error);
       return false;
     }

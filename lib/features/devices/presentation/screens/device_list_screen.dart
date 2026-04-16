@@ -319,11 +319,17 @@ class DeviceListScreen extends ConsumerWidget {
             pairedDevices.when(
               data: (devices) {
                 final scanResults = ref.watch(bleScanResultsProvider);
-                final connectedDevices = devices
-                    .where((d) =>
-                        ref.watch(bleDeviceStatusProvider(d.macAddress)) ==
-                        BleConnectionStatus.connected)
-                    .toList();
+
+                final connectedDevices = scanResults.when(
+                  data: (list) => list.where((r) {
+                    final state = ref.watch(
+                      bleDeviceStatusProvider(r.device.remoteId.str),
+                    );
+                    return state == BleConnectionStatus.connected;
+                  }).toList(),
+                  loading: () => [],
+                  error: (_, __) => [],
+                );
 
                 return SliverPadding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -333,22 +339,24 @@ class DeviceListScreen extends ConsumerWidget {
                       if (connectedDevices.isNotEmpty) ...[
                         const SectionHeader(title: 'Connected')
                       ],
-                      ...connectedDevices.map((d) {
+                      ...connectedDevices.map((r) {
                         final selected =
-                            target.deviceIds.contains(d.macAddress);
+                            target.deviceIds.contains(r.device.remoteId.str);
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: _ConnectedDeviceCard(
-                            name: d.name,
-                            macAddress: d.macAddress,
+                            name: r.device.platformName.isNotEmpty
+                                ? r.device.platformName
+                                : 'Unknown Device',
+                            macAddress: r.device.remoteId.str,
                             selected: selected,
                             onSelect: () => ref
                                 .read(sessionTargetProvider.notifier)
-                                .toggleDevice(d.macAddress),
+                                .toggleDevice(r.device.remoteId.str),
                             onDisconnect: () async {
                               await ref
                                   .read(bleRepositoryProvider)
-                                  .disconnectDevice(d.macAddress);
+                                  .disconnectDevice(r.device.remoteId.str);
                             },
                           ),
                         );
