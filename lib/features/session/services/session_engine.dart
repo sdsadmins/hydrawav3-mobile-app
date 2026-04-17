@@ -458,16 +458,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (!_isActive) return; // Guard against updates after disposal
     if (state.status != SessionStatus.running) return;
 
+    appLogger.i('🔥 PAUSE: Sending pause command to device');
     if (state.transport == SessionTransport.wifi) {
-      // User-specified WiFi pause command.
+      // WiFi pause command = playCmd=3
       await _publishWifiPlayCmd(3);
+      appLogger.i('🔥 PAUSE: WiFi playCmd=3 sent');
     } else if (state.transport == SessionTransport.ble) {
       // Send BLE pause command to session devices only
       if (state.deviceIds.isNotEmpty) {
         final connector = _ref.read(bleConnectorProvider);
 
         for (final mac in state.deviceIds) {
-          await connector.writeToDevice(mac, [0x02]); // 🔥 PAUSE
+          await connector.writeToDevice(mac, [0x02]); // 🔥 PAUSE = 0x02
+          appLogger.i('🔥 PAUSE: BLE 0x02 sent to $mac');
         }
       }
     }
@@ -478,6 +481,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     try {
       state = state.copyWith(status: SessionStatus.paused);
+      appLogger.i('🔥 PAUSE: State updated to paused');
     } catch (e) {
       appLogger.d('Session: pause() state update ignored (notifier disposed)');
     }
@@ -487,6 +491,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (!_isActive) return; // Guard against updates after disposal
     if (state.status != SessionStatus.paused) return;
 
+    appLogger.i('🔄 RESUME: Sending resume/continue command to device');
     try {
       state = state.copyWith(status: SessionStatus.running);
     } catch (e) {
@@ -494,34 +499,44 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     if (state.transport == SessionTransport.wifi) {
-      // User-specified WiFi resume command.
+      // WiFi resume/continue command = playCmd=4
+      // This continues the session from where it was paused
       await _publishWifiPlayCmd(4);
+      appLogger.i('🔄 RESUME: WiFi playCmd=4 sent (continue from pause)');
     } else if (state.transport == SessionTransport.ble) {
-      // Send BLE resume command to session devices only
+      // Send BLE resume/continue command to session devices only
+      // 0x04 = Resume/Continue (NOT 0x01 which is start)
       if (state.deviceIds.isNotEmpty) {
         final connector = _ref.read(bleConnectorProvider);
 
         for (final mac in state.deviceIds) {
-          await connector.writeToDevice(mac, [0x01]); // 🔥 RESUME
+          await connector.writeToDevice(
+              mac, [0x04]); // 🔄 RESUME = 0x04 (continue from pause)
+          appLogger.i('🔄 RESUME: BLE 0x04 sent to $mac (continue from pause)');
         }
       }
     }
 
     _stopwatch.start();
     _timer = Timer.periodic(const Duration(seconds: 1), _onTick);
+    appLogger.i('🔄 RESUME: Timer restarted on app side');
   }
 
   Future<void> stop() async {
     // Send stop command to devices via transport-specific method
+    appLogger.i('🛑 STOP: Sending stop command to device');
     if (state.transport == SessionTransport.wifi) {
+      // WiFi stop command = playCmd=2
       await _publishWifiPlayCmd(2);
+      appLogger.i('🛑 STOP: WiFi playCmd=2 sent');
     } else if (state.transport == SessionTransport.ble) {
       // Send BLE stop command to session devices only
       if (state.deviceIds.isNotEmpty) {
         final connector = _ref.read(bleConnectorProvider);
 
         for (final mac in state.deviceIds) {
-          await connector.writeToDevice(mac, [0x03]); // 🔥 STOP
+          await connector.writeToDevice(mac, [0x03]); // 🛑 STOP = 0x03
+          appLogger.i('🛑 STOP: BLE 0x03 sent to $mac');
         }
       }
     }
@@ -629,8 +644,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   Future<void> _completeSession() async {
+    appLogger.i('✅ SESSION COMPLETED: Time limit reached, stopping device');
+
+    // CRITICAL: Stop the stopwatch and cancel timer FIRST
     _stopwatch.stop();
     _timer?.cancel();
+    _timer = null;
+
+    // THEN send STOP command to device (WiFi or BLE)
+    appLogger.i('✅ SENDING STOP COMMAND TO DEVICE NOW');
+    if (state.transport == SessionTransport.wifi) {
+      await _publishWifiPlayCmd(2);
+      appLogger.i('✅ WiFi STOP sent (playCmd=2)');
+    } else if (state.transport == SessionTransport.ble) {
+      if (state.deviceIds.isNotEmpty) {
+        final connector = _ref.read(bleConnectorProvider);
+        for (final mac in state.deviceIds) {
+          await connector.writeToDevice(mac, [0x03]); // 🛑 STOP = 0x03
+          appLogger.i('✅ BLE STOP sent to $mac (0x03)');
+        }
+      }
+    }
+
+    // Finally, update UI state
     if (!_isActive) return;
     state = state.copyWith(
       status: SessionStatus.completed,
@@ -639,6 +675,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         isRunning: false,
       ),
     );
+    appLogger.i('✅ SESSION COMPLETED: UI state updated, device stopped');
   }
 
   @override
