@@ -34,20 +34,17 @@ class ProtocolRemoteSource {
       );
 
       final data = response.data;
-      final List<dynamic> items =
-          data is List ? data : (data['data'] ?? []);
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
 
       return items
-          .map((e) =>
-              Protocol.fromJson(e as Map<String, dynamic>))
+          .map((e) => Protocol.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
       appLogger.e('❌ Protocol: API error (status: ${e.response?.statusCode})');
       appLogger.e('   Message: ${e.response?.data?['message'] ?? e.message}');
       appLogger.e('   Full error: ${e.response?.data}');
       throw ServerException(
-        e.response?.data?['message'] ??
-            'Failed to fetch protocols',
+        e.response?.data?['message'] ?? 'Failed to fetch protocols',
         statusCode: e.response?.statusCode,
       );
     } catch (e) {
@@ -68,13 +65,16 @@ class ProtocolRemoteSource {
         },
       );
 
-      return Protocol.fromJson(response.data);
+      return Protocol.fromJson(
+        response.data is Map<String, dynamic>
+            ? response.data
+            : {'data': response.data},
+      );
     } on DioException catch (e) {
       appLogger.e(
           '❌ Protocol: Failed to fetch protocol $id (status: ${e.response?.statusCode})');
       throw ServerException(
-        e.response?.data?['message'] ??
-            'Failed to fetch protocol',
+        e.response?.data?['message'] ?? 'Failed to fetch protocol',
         statusCode: e.response?.statusCode,
       );
     }

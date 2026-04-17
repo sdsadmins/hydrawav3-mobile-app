@@ -12,8 +12,7 @@ class PairedDevices extends Table {
   TextColumn get name => text()();
   BoolColumn get autoReconnect => boolean().withDefault(const Constant(true))();
   DateTimeColumn get lastConnected => dateTime().nullable()();
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -30,12 +29,11 @@ class CachedProtocols extends Table {
   RealColumn get vibmax => real().withDefault(const Constant(0.0))();
   BoolColumn get cycle1 => boolean().withDefault(const Constant(false))();
   BoolColumn get cycle5 => boolean().withDefault(const Constant(false))();
-  RealColumn get edgecycleduration =>
-      real().withDefault(const Constant(0.0))();
+  RealColumn get edgecycleduration => real().withDefault(const Constant(0.0))();
   RealColumn get sessionPause => real().withDefault(const Constant(0.0))();
   TextColumn get description => text().withDefault(const Constant(''))();
-  DateTimeColumn get cachedAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  TextColumn get deviceId => text().nullable()();
+  DateTimeColumn get cachedAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -67,10 +65,8 @@ class Presets extends Table {
   TextColumn get advancedSettingsJson =>
       text().withDefault(const Constant('{}'))(); // JSON
   IntColumn get sortOrder => integer().withDefault(const Constant(0))();
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
-  DateTimeColumn get updatedAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -81,8 +77,7 @@ class CommandQueue extends Table {
   TextColumn get macAddress => text()();
   TextColumn get commandJson => text()(); // JSON-encoded command
   BoolColumn get synced => boolean().withDefault(const Constant(false))();
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
 // --- Database Definition ---
@@ -98,7 +93,19 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'hydrawav3'));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(cachedProtocols, cachedProtocols.deviceId);
+          }
+        },
+      );
 
   // --- Paired Devices ---
   Future<List<PairedDevice>> getAllPairedDevices() =>
@@ -111,8 +118,7 @@ class AppDatabase extends _$AppDatabase {
       into(pairedDevices).insertOnConflictUpdate(device);
 
   Future<void> removePairedDevice(String macAddress) =>
-      (delete(pairedDevices)
-            ..where((t) => t.macAddress.equals(macAddress)))
+      (delete(pairedDevices)..where((t) => t.macAddress.equals(macAddress)))
           .go();
 
   // --- Cached Protocols ---
@@ -132,15 +138,13 @@ class AppDatabase extends _$AppDatabase {
   Future<void> clearProtocolCache() => delete(cachedProtocols).go();
 
   // --- Local Sessions ---
-  Future<List<LocalSession>> getAllLocalSessions() =>
-      (select(localSessions)
-            ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
-          .get();
+  Future<List<LocalSession>> getAllLocalSessions() => (select(localSessions)
+        ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
+      .get();
 
-  Stream<List<LocalSession>> watchLocalSessions() =>
-      (select(localSessions)
-            ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
-          .watch();
+  Stream<List<LocalSession>> watchLocalSessions() => (select(localSessions)
+        ..orderBy([(t) => OrderingTerm.desc(t.completedAt)]))
+      .watch();
 
   Future<List<LocalSession>> getUnsyncedSessions() =>
       (select(localSessions)..where((t) => t.synced.equals(false))).get();
@@ -154,8 +158,7 @@ class AppDatabase extends _$AppDatabase {
 
   // --- Presets ---
   Future<List<Preset>> getAllPresets() =>
-      (select(presets)..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]))
-          .get();
+      (select(presets)..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
 
   Stream<List<Preset>> watchPresets() =>
       (select(presets)..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]))

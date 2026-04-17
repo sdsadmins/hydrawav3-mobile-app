@@ -12,6 +12,7 @@ class Protocol {
   final double edgecycleduration;
   final double sessionPause;
   final String description;
+  final String? deviceId;
 
   const Protocol({
     required this.id,
@@ -27,42 +28,66 @@ class Protocol {
     this.edgecycleduration = 0,
     this.sessionPause = 0,
     this.description = '',
+    this.deviceId,
   });
 
-  factory Protocol.fromJson(Map<String, dynamic> json) => Protocol(
-        id: json['_id'] as String? ?? json['id'] as String? ?? '',
-        templateName: json['template_name'] as String? ?? '',
-        sessions: json['sessions'] as int? ?? 1,
-        cycles: (json['cycles'] as List<dynamic>?)
-                ?.map((e) => ProtocolCycle.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-        hotdrop: (json['hotdrop'] as num?)?.toDouble() ?? 0,
-        colddrop: (json['colddrop'] as num?)?.toDouble() ?? 0,
-        vibmin: (json['vibmin'] as num?)?.toDouble() ?? 0,
-        vibmax: (json['vibmax'] as num?)?.toDouble() ?? 0,
-        cycle1: json['cycle1'] as bool? ?? false,
-        cycle5: json['cycle5'] as bool? ?? false,
-        edgecycleduration:
-            (json['edgecycleduration'] as num?)?.toDouble() ?? 0,
-        sessionPause: (json['session_pause'] as num?)?.toDouble() ?? 0,
-        description: json['description'] as String? ?? '',
-      );
+  factory Protocol.fromJson(Map<String, dynamic> json) {
+    final data = json['data'] is Map<String, dynamic>
+        ? json['data'] as Map<String, dynamic>
+        : json;
 
-  Map<String, dynamic> toJson() => {
-        'template_name': templateName,
-        'sessions': sessions,
-        'cycles': cycles.map((c) => c.toJson()).toList(),
-        'hotdrop': hotdrop,
-        'colddrop': colddrop,
-        'vibmin': vibmin,
-        'vibmax': vibmax,
-        'cycle1': cycle1,
-        'cycle5': cycle5,
-        'edgecycleduration': edgecycleduration,
-        'session_pause': sessionPause,
-        'description': description,
-      };
+    return Protocol(
+      id: data['_id'] as String? ?? data['id'] as String? ?? '',
+      templateName: data['template_name'] as String? ?? '',
+      sessions: data['sessions'] as int? ?? 1,
+      cycles: (data['cycles'] as List<dynamic>?)
+              ?.map((e) => ProtocolCycle.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      hotdrop: (data['hotdrop'] as num?)?.toDouble() ?? 0,
+      colddrop: (data['colddrop'] as num?)?.toDouble() ?? 0,
+      vibmin: (data['vibmin'] as num?)?.toDouble() ?? 0,
+      vibmax: (data['vibmax'] as num?)?.toDouble() ?? 0,
+      cycle1: data['cycle1'] as bool? ?? false,
+      cycle5: data['cycle5'] as bool? ?? false,
+      edgecycleduration: (data['edgecycleduration'] as num?)?.toDouble() ?? 0,
+      sessionPause: (data['session_pause'] as num?)?.toDouble() ?? 0,
+      description: data['description'] as String? ?? '',
+      deviceId: _parseDeviceId(data),
+    );
+  }
+
+  static String? _parseDeviceId(Map<String, dynamic> json) {
+    final rawDeviceId = json['deviceId'] ??
+        json['device_id'] ??
+        json['firmwareDeviceId'] ??
+        json['firmware_device_id'] ??
+        json['firmware_id'] ??
+        json['firmwareid'] ??
+        json['deviceid'];
+    return rawDeviceId is String ? rawDeviceId : null;
+  }
+
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> data = {
+      'template_name': templateName,
+      'sessions': sessions,
+      'cycles': cycles.map((c) => c.toJson()).toList(),
+      'hotdrop': hotdrop,
+      'colddrop': colddrop,
+      'vibmin': vibmin,
+      'vibmax': vibmax,
+      'cycle1': cycle1,
+      'cycle5': cycle5,
+      'edgecycleduration': edgecycleduration,
+      'session_pause': sessionPause,
+      'description': description,
+    };
+    if (deviceId != null) {
+      data['deviceId'] = deviceId;
+    }
+    return data;
+  }
 
   /// Total duration in seconds across all cycles and sessions.
   int get totalDurationSeconds {
@@ -106,8 +131,7 @@ class ProtocolCycle {
         leftFunction: json['left_function'] as String? ?? '',
         pauseSeconds: (json['pause_seconds'] as num?)?.toDouble() ?? 0,
         rightFunction: json['right_function'] as String? ?? '',
-        durationSeconds:
-            (json['duration_seconds'] as num?)?.toDouble() ?? 0,
+        durationSeconds: (json['duration_seconds'] as num?)?.toDouble() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {

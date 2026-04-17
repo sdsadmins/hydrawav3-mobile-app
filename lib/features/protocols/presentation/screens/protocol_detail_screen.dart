@@ -137,6 +137,10 @@ class ProtocolDetailScreen extends ConsumerWidget {
                   onTap: () async {
                     // Prefer the user-selected transport + devices from Devices tab.
                     final target = ref.read(sessionTargetProvider);
+                    appLogger.i(
+                      'ProtocolDetail: Start tapped '
+                      '(protocolId=${p.id}, name=${p.templateName}, sessions=${p.sessions}, cycles=${p.cycles.length})',
+                    );
                     if (target.deviceIds.isNotEmpty) {
                       if (target.transport == SessionTransport.wifi) {
                         // Navigate immediately to timer, publish MQTT in background.
@@ -144,6 +148,7 @@ class ProtocolDetailScreen extends ConsumerWidget {
                           RoutePaths.session,
                           extra: {
                             'protocolId': p.id,
+                            'protocol': p,
                             'deviceIds': target.deviceIds,
                             'transport': 'wifi',
                           },
@@ -205,6 +210,7 @@ class ProtocolDetailScreen extends ConsumerWidget {
                         RoutePaths.session,
                         extra: {
                           'protocolId': p.id,
+                          'protocol': p,
                           'deviceIds': target.deviceIds,
                           'transport': 'ble',
                         },
@@ -278,6 +284,7 @@ class ProtocolDetailScreen extends ConsumerWidget {
                         RoutePaths.session,
                         extra: {
                           'protocolId': p.id,
+                          'protocol': p,
                           'deviceIds': selected,
                           'transport': 'ble'
                         },
@@ -298,6 +305,7 @@ class ProtocolDetailScreen extends ConsumerWidget {
                         RoutePaths.session,
                         extra: {
                           'protocolId': p.id,
+                          'protocol': p,
                           'deviceIds':
                               selectedWifi.map((d) => d.macAddress).toList(),
                           'transport': 'wifi',
@@ -461,7 +469,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
     return null;
   }
 
-  final selected = <String>{};
+  String? selectedMac;
   return showModalBottomSheet<List<DeviceInfo>>(
     context: context,
     isScrollControlled: true,
@@ -483,7 +491,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Select WiFi devices',
+                      'Select one WiFi device',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -505,11 +513,11 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                         itemBuilder: (ctx, i) {
                           final d = async[i];
                           final key = d.macAddress;
-                          final checked = selected.contains(key);
-                          return CheckboxListTile(
-                            value: checked,
+                          final checked = selectedMac == key;
+                          return RadioListTile<String>(
+                            value: key,
+                            groupValue: selectedMac,
                             activeColor: ThemeConstants.accent,
-                            checkColor: Colors.white,
                             contentPadding: EdgeInsets.zero,
                             title: Text(
                               d.name,
@@ -527,11 +535,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                             ),
                             onChanged: (v) {
                               setSheetState(() {
-                                if (v == true) {
-                                  selected.add(key);
-                                } else {
-                                  selected.remove(key);
-                                }
+                                selectedMac = v;
                               });
                             },
                           );
@@ -542,16 +546,15 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: selected.isEmpty
+                        onPressed: selectedMac == null
                             ? null
                             : () {
                                 final picked = async
-                                    .where(
-                                        (d) => selected.contains(d.macAddress))
+                                    .where((d) => d.macAddress == selectedMac)
                                     .toList();
                                 Navigator.of(ctx).pop(picked);
                               },
-                        child: const Text('Send to selected devices'),
+                        child: const Text('Send to selected device'),
                       ),
                     ),
                   ],
@@ -580,8 +583,9 @@ Map<String, dynamic> _protocolToWifiPayload(
     'edgeCycleDuration': p.edgecycleduration.toInt(),
     'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
     'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
-    'cyclePauses': cycles.map((c) => c.cyclePause.toInt()).toList(),
-    'pauseIntervals': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    // Match web sender exactly.
+    'cyclePauses': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    'pauseIntervals': cycles.map((c) => c.cyclePause.toInt()).toList(),
     'leftFuncs': cycles.map((c) => c.leftFunction).toList(),
     'rightFuncs': cycles.map((c) => c.rightFunction).toList(),
     'pwmValues': {
@@ -603,7 +607,7 @@ Future<List<String>?> _pickConnectedDevices(
   List<String> connectedIds,
   Protocol protocol,
 ) async {
-  final selected = connectedIds.toSet();
+  String? selectedId = connectedIds.isNotEmpty ? connectedIds.first : null;
   return showModalBottomSheet<List<String>>(
     context: context,
     isScrollControlled: true,
@@ -625,7 +629,7 @@ Future<List<String>?> _pickConnectedDevices(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Select connected devices',
+                      'Select one connected device',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -634,7 +638,7 @@ Future<List<String>?> _pickConnectedDevices(
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      'Choose one or more devices for this session.',
+                      'Choose one device for this session.',
                       style: TextStyle(
                         fontSize: 13,
                         color: ThemeConstants.textSecondary,
@@ -647,11 +651,11 @@ Future<List<String>?> _pickConnectedDevices(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             ...connectedIds.map((id) {
-                              final checked = selected.contains(id);
-                              return CheckboxListTile(
-                                value: checked,
+                              final checked = selectedId == id;
+                              return RadioListTile<String>(
+                                value: id,
+                                groupValue: selectedId,
                                 activeColor: ThemeConstants.accent,
-                                checkColor: Colors.white,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(
                                   id,
@@ -669,17 +673,13 @@ Future<List<String>?> _pickConnectedDevices(
                                 ),
                                 onChanged: (v) {
                                   setSheetState(() {
-                                    if (v == true) {
-                                      selected.add(id);
-                                    } else {
-                                      selected.remove(id);
-                                    }
+                                    selectedId = v;
                                   });
                                 },
                               );
                             }),
                             const SizedBox(height: 8),
-                            if (selected.isNotEmpty) ...[
+                            if (selectedId != null) ...[
                               const Text(
                                 'Payload preview (first selected device):',
                                 style: TextStyle(
@@ -697,16 +697,16 @@ Future<List<String>?> _pickConnectedDevices(
                                 ),
                                 child: Consumer(
                                   builder: (context, ref, _) {
-                                    final selectedTransportId = selected.first;
+                                    final selectedTransportId = selectedId!;
                                     final gatt = ref
                                         .read(bleRepositoryProvider)
                                         .getGattInfo(selectedTransportId);
-                                    final runtimeDeviceId =
+                                    final runtimeDeviceId = protocol.deviceId ??
                                         BleConstants.jsonDeviceIdForSession(
-                                      bleTransportId: selectedTransportId,
-                                      discoveredWriteCharacteristicUuid:
-                                          gatt?.writeUuid,
-                                    );
+                                          bleTransportId: selectedTransportId,
+                                          discoveredWriteCharacteristicUuid:
+                                              gatt?.writeUuid,
+                                        );
                                     return Text(
                                       const JsonEncoder.withIndent('  ')
                                           .convert(
@@ -734,10 +734,10 @@ Future<List<String>?> _pickConnectedDevices(
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: selected.isEmpty
+                        onPressed: selectedId == null
                             ? null
-                            : () => Navigator.of(ctx).pop(selected.toList()),
-                        child: const Text('Start with selected devices'),
+                            : () => Navigator.of(ctx).pop(<String>[selectedId!]),
+                        child: const Text('Start with selected device'),
                       ),
                     ),
                   ],
@@ -758,7 +758,6 @@ Map<String, dynamic> _protocolToSessionPayload(
 }) {
   final cycles = p.cycles;
   return {
-    'deviceId': runtimeDeviceId,
     'mac': transportId,
     'playCmd': 1,
     'sessionCount': p.sessions,
@@ -769,8 +768,8 @@ Map<String, dynamic> _protocolToSessionPayload(
     'edgeCycleDuration': p.edgecycleduration.toInt(),
     'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
     'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
-    'cyclePauses': cycles.map((c) => c.cyclePause.toInt()).toList(),
-    'pauseIntervals': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    'cyclePauses': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
+    'pauseIntervals': cycles.map((c) => c.cyclePause.toInt()).toList(),
     'leftFuncs': cycles.map((c) => c.leftFunction).toList(),
     'rightFuncs': cycles.map((c) => c.rightFunction).toList(),
     'pwmValues': {

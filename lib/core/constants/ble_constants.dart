@@ -53,6 +53,10 @@ class BleConstants {
   static const String? preferredWriteCharacteristicUuid =
       'abcdef01-1234-5678-1234-56789abcdef1';
 
+  // Dedicated JSON payload channel (web: JSON_CHAR_UUID).
+  static const String? preferredJsonCharacteristicUuid =
+      '12345607-1234-5678-1234-56789abcdef9';
+
 // ⚠️ YOU MUST FIND THIS FROM LOGS
   static const String? preferredNotifyCharacteristicUuid =
       'abcdef03-1234-5678-1234-56789abcdef9'; // guess → verify

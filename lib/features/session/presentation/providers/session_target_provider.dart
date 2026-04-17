@@ -35,17 +35,16 @@ class SessionTargetNotifier extends StateNotifier<SessionTargetState> {
   }
 
   void setSelected(List<String> deviceIds) {
-    state = state.copyWith(deviceIds: deviceIds);
+    final single = deviceIds.isEmpty ? const <String>[] : <String>[deviceIds.first];
+    state = state.copyWith(deviceIds: single);
   }
 
   void toggleDevice(String deviceId) {
-    final set = state.deviceIds.toSet();
-    if (set.contains(deviceId)) {
-      set.remove(deviceId);
-    } else {
-      set.add(deviceId);
-    }
-    state = state.copyWith(deviceIds: set.toList());
+    final isAlreadySelected =
+        state.deviceIds.isNotEmpty && state.deviceIds.first == deviceId;
+    state = state.copyWith(
+      deviceIds: isAlreadySelected ? const <String>[] : <String>[deviceId],
+    );
   }
 
   void clear() => state = state.copyWith(deviceIds: const <String>[]);

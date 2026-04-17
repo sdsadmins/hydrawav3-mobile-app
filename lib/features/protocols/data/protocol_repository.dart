@@ -38,10 +38,10 @@ class ProtocolRepository {
         _orgId = orgId; // ✅ ADDED
 
   Future<List<Protocol>> getProtocols({
-  int page = 1,
-  int perPage = 50,
-  String? orgId, // ✅ ADD THIS
-}) async {
+    int page = 1,
+    int perPage = 50,
+    String? orgId, // ✅ ADD THIS
+  }) async {
     // Try cache first
     List<CachedProtocol> cached = [];
     try {
@@ -50,17 +50,20 @@ class ProtocolRepository {
       // DB may fail on web — continue without cache
     }
 
+    final hasMissingDeviceId =
+        cached.any((protocol) => protocol.deviceId?.isEmpty ?? true);
     final isCacheStale = cached.isEmpty ||
-        cached.first.cachedAt
-            .isBefore(DateTime.now().subtract(AppConstants.protocolCacheStaleness));
+        hasMissingDeviceId ||
+        cached.first.cachedAt.isBefore(
+            DateTime.now().subtract(AppConstants.protocolCacheStaleness));
 
     if (_isOnline && isCacheStale) {
       try {
-      final protocols = await _remoteSource.getProtocols(
-  page: page,
-  perPage: perPage,
-  orgId: orgId ?? _orgId, // ✅ ADD THIS
-);
+        final protocols = await _remoteSource.getProtocols(
+          page: page,
+          perPage: perPage,
+          orgId: orgId ?? _orgId, // ✅ ADD THIS
+        );
 
         // Update cache (ignore errors)
         for (final protocol in protocols) {
@@ -69,8 +72,8 @@ class ProtocolRepository {
               id: Value(protocol.id),
               templateName: Value(protocol.templateName),
               sessions: Value(protocol.sessions),
-              cyclesJson: Value(jsonEncode(
-                  protocol.cycles.map((c) => c.toJson()).toList())),
+              cyclesJson: Value(
+                  jsonEncode(protocol.cycles.map((c) => c.toJson()).toList())),
               hotdrop: Value(protocol.hotdrop),
               colddrop: Value(protocol.colddrop),
               vibmin: Value(protocol.vibmin),
@@ -80,6 +83,7 @@ class ProtocolRepository {
               edgecycleduration: Value(protocol.edgecycleduration),
               sessionPause: Value(protocol.sessionPause),
               description: Value(protocol.description),
+              deviceId: Value(protocol.deviceId),
               cachedAt: Value(DateTime.now()),
             ));
           } catch (_) {}
@@ -130,6 +134,7 @@ class ProtocolRepository {
       edgecycleduration: cached.edgecycleduration,
       sessionPause: cached.sessionPause,
       description: cached.description,
+      deviceId: cached.deviceId,
     );
   }
 }

@@ -35,6 +35,8 @@ class BleConnector {
   final Map<String, BluetoothDevice> _connectedDevices = {};
   final Map<String, StreamSubscription> _connectionSubs = {};
   final Map<String, StreamSubscription> _notifySubs = {};
+  final Map<String, BluetoothCharacteristic> _controlCharacteristics = {};
+  final Map<String, BluetoothCharacteristic> _jsonCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _writeCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _notifyCharacteristics = {};
   final Map<String, String> _firmwareSessionIdByDevice = {};
@@ -59,6 +61,55 @@ class BleConnector {
   BleGattInfo? getGattInfo(String deviceId) => _gattInfoByDevice[deviceId];
   String? getFirmwareSessionId(String deviceId) =>
       _firmwareSessionIdByDevice[deviceId];
+
+  /// Wait for a post-config notification from firmware.
+  /// Returns true when an ACK-like message is observed, false on timeout.
+  Future<bool> waitForConfigAck(
+    String deviceId, {
+    Duration timeout = const Duration(milliseconds: 1800),
+  }) async {
+    StreamSubscription<BleNotification>? sub;
+    Timer? timer;
+    final completer = Completer<bool>();
+
+    bool isAckLike(String text) {
+      final t = text.toLowerCase();
+      return t.contains('ack') ||
+          t.contains('ok') ||
+          t.contains('config') ||
+          t.contains('received') ||
+          t.contains('ready') ||
+          t.contains('apply');
+    }
+
+    try {
+      sub = notifications.listen((n) {
+        if (n.deviceId != deviceId || completer.isCompleted) return;
+        final decoded = utf8.decode(n.value, allowMalformed: true).trim();
+        if (decoded.isEmpty) return;
+
+        appLogger.i('BLE: notify after config ($deviceId): $decoded');
+
+        // Prefer explicit ACK-like text, but accept any non-empty response
+        // as a signal that firmware processed incoming config traffic.
+        if (isAckLike(decoded) || decoded.isNotEmpty) {
+          completer.complete(true);
+        }
+      });
+
+      timer = Timer(timeout, () {
+        if (!completer.isCompleted) {
+          appLogger.w('BLE: config ACK timeout for $deviceId');
+          completer.complete(false);
+        }
+      });
+
+      return await completer.future;
+    } finally {
+      timer?.cancel();
+      await sub?.cancel();
+    }
+  }
 
   /// Connect to a device by its BluetoothDevice reference.
   Future<bool> connect(BluetoothDevice device,
@@ -173,6 +224,8 @@ class BleConnector {
         if (state == BluetoothConnectionState.disconnected) {
           appLogger.w('BLE: Device $deviceId disconnected');
           _updateState(deviceId, BleConnectionStatus.disconnected);
+          _controlCharacteristics.remove(deviceId);
+          _jsonCharacteristics.remove(deviceId);
           _writeCharacteristics.remove(deviceId);
           _notifyCharacteristics.remove(deviceId);
           _notifySubs[deviceId]?.cancel();
@@ -303,6 +356,8 @@ class BleConnector {
       _notifySubs.remove(deviceId);
       await device.disconnect();
       _connectedDevices.remove(deviceId);
+      _controlCharacteristics.remove(deviceId);
+      _jsonCharacteristics.remove(deviceId);
       _writeCharacteristics.remove(deviceId);
       _notifyCharacteristics.remove(deviceId);
       _gattInfoByDevice.remove(deviceId);
@@ -359,21 +414,25 @@ class BleConnector {
     }
   }
 
-  /// Write data to a device's write characteristic.
-  Future<bool> writeToDevice(String deviceId, List<int> data) async {
-    final characteristic = _writeCharacteristics[deviceId];
+  Future<bool> _writeInChunks(
+    String deviceId,
+    List<int> data,
+    BluetoothCharacteristic? characteristic, {
+    required String channelName,
+  }) async {
     if (characteristic == null) {
-      appLogger.e('BLE: No write characteristic for $deviceId');
+      appLogger.e('BLE: No $channelName characteristic for $deviceId');
       return false;
     }
     appLogger.i("🔥 WRITE FUNCTION HIT");
     appLogger.i(
       'BLE: Writing ${data.length} bytes to $deviceId '
-      '(char=${characteristic.uuid.str})',
+      '(channel=$channelName, char=${characteristic.uuid.str})',
     );
 
     try {
-      const chunkSize = 20;
+      // Match web BLE sender pacing/chunking as closely as possible.
+      const chunkSize = 180;
 
       for (int i = 0; i < data.length; i += chunkSize) {
         final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
@@ -386,14 +445,13 @@ class BleConnector {
           withoutResponse: false,
         );
 
-        // 🔥 Required pacing
+        // Match web delay between chunks
         if (end < data.length) {
-          await Future.delayed(const Duration(milliseconds: 120));
+          await Future.delayed(const Duration(milliseconds: 50));
         }
       }
 
-      // 🔥 EXTRA FINAL DELAY (CRITICAL)
-      await Future.delayed(const Duration(milliseconds: 400));
+      await Future.delayed(const Duration(milliseconds: 50));
 
       appLogger.i('BLE: Write complete for $deviceId');
       return true;
@@ -401,6 +459,35 @@ class BleConnector {
       appLogger.e('BLE: Write failed for $deviceId: $e');
       return false;
     }
+  }
+
+  /// Write control bytes (PLAY/PAUSE/STOP/RESUME) to control characteristic.
+  Future<bool> writeToDevice(String deviceId, List<int> data) async {
+    final control = _controlCharacteristics[deviceId] ?? _writeCharacteristics[deviceId];
+    return _writeInChunks(
+      deviceId,
+      data,
+      control,
+      channelName: 'control',
+    );
+  }
+
+  /// Write JSON session payload to dedicated JSON characteristic.
+  Future<bool> writeJsonToDevice(String deviceId, List<int> data) async {
+    final jsonChar = _jsonCharacteristics[deviceId];
+    if (jsonChar != null) {
+      return _writeInChunks(
+        deviceId,
+        data,
+        jsonChar,
+        channelName: 'json',
+      );
+    }
+    // Backward-compatible fallback for older devices exposing single write char.
+    appLogger.w(
+      'BLE: JSON characteristic missing for $deviceId, falling back to control write channel',
+    );
+    return writeToDevice(deviceId, data);
   }
 
   /// Check if a device is connected.
@@ -411,6 +498,8 @@ class BleConnector {
       String deviceId, List<BluetoothService> services) async {
     // Prevent stale UUID matches from a previous connection attempt.
     _writeCharacteristics.remove(deviceId);
+    _controlCharacteristics.remove(deviceId);
+    _jsonCharacteristics.remove(deviceId);
     _notifyCharacteristics.remove(deviceId);
     _gattInfoByDevice.remove(deviceId);
 
@@ -424,7 +513,11 @@ class BleConnector {
     final preferredWrite = BleConstants.preferredWriteCharacteristicUuid == null
         ? null
         : n(BleConstants.preferredWriteCharacteristicUuid!);
-    appLogger.i("EXPECTED WRITE → $preferredWrite");
+    final preferredJson = BleConstants.preferredJsonCharacteristicUuid == null
+        ? null
+        : n(BleConstants.preferredJsonCharacteristicUuid!);
+    appLogger.i("EXPECTED CONTROL WRITE → $preferredWrite");
+    appLogger.i("EXPECTED JSON WRITE → $preferredJson");
     final preferredNotify =
         BleConstants.preferredNotifyCharacteristicUuid == null
             ? null
@@ -482,11 +575,16 @@ class BleConnector {
         for (final char in service.characteristics) {
           final charUuid = n(char.uuid.str);
           if (preferredWrite != null && charUuid == preferredWrite) {
+            _controlCharacteristics[deviceId] = char;
             _writeCharacteristics[deviceId] = char;
             selectedServiceUuid = service.uuid.str;
             selectedWriteUuid = char.uuid.str;
             appLogger
                 .d('BLE: Found preferred write characteristic for $deviceId');
+          }
+          if (preferredJson != null && charUuid == preferredJson) {
+            _jsonCharacteristics[deviceId] = char;
+            appLogger.d('BLE: Found preferred JSON characteristic for $deviceId');
           }
           if (preferredNotify != null && charUuid == preferredNotify) {
             final canNotify =
@@ -527,14 +625,18 @@ class BleConnector {
       }
 
       final hasWrite = _writeCharacteristics.containsKey(deviceId);
+      final hasJson = preferredJson == null || _jsonCharacteristics.containsKey(deviceId);
       final hasNotify = _notifyCharacteristics.containsKey(deviceId);
-      if (!hasWrite || !hasNotify) {
+      if (!hasWrite || !hasJson || !hasNotify) {
         throw Exception(
           'BLE: Strict GATT profile mismatch for $deviceId. '
           'Expected service=${BleConstants.preferredServiceUuid}, '
           'write=${BleConstants.preferredWriteCharacteristicUuid}, '
+          'json=${BleConstants.preferredJsonCharacteristicUuid}, '
           'notify=${BleConstants.preferredNotifyCharacteristicUuid}. '
-          'Found write=$selectedWriteUuid notify=$selectedNotifyUuid',
+          'Found write=$selectedWriteUuid '
+          'json=${_jsonCharacteristics[deviceId]?.uuid.str} '
+          'notify=$selectedNotifyUuid',
         );
       }
 
@@ -545,7 +647,10 @@ class BleConnector {
       );
       appLogger.i(
         'BLE: [$deviceId] Selected GATT UUIDs (strict): '
-        'service=$selectedServiceUuid write=$selectedWriteUuid notify=$selectedNotifyUuid',
+        'service=$selectedServiceUuid '
+        'control=${_controlCharacteristics[deviceId]?.uuid.str} '
+        'json=${_jsonCharacteristics[deviceId]?.uuid.str} '
+        'notify=$selectedNotifyUuid',
       );
       return;
     }
@@ -575,6 +680,14 @@ class BleConnector {
         }
         if (_writeCharacteristics.containsKey(deviceId)) break;
       }
+    }
+
+    if (!_jsonCharacteristics.containsKey(deviceId) &&
+        _writeCharacteristics.containsKey(deviceId)) {
+      _jsonCharacteristics[deviceId] = _writeCharacteristics[deviceId]!;
+      appLogger.w(
+        'BLE: [$deviceId] JSON characteristic not found; using fallback write char ${_jsonCharacteristics[deviceId]!.uuid.str}',
+      );
     }
 
     // Fallback: pick first notifiable/indicatable characteristic.
@@ -614,7 +727,10 @@ class BleConnector {
     );
     appLogger.i(
       'BLE: [$deviceId] Selected GATT UUIDs: '
-      'service=$selectedServiceUuid write=$selectedWriteUuid notify=$selectedNotifyUuid',
+      'service=$selectedServiceUuid '
+      'control=${_controlCharacteristics[deviceId]?.uuid.str} '
+      'json=${_jsonCharacteristics[deviceId]?.uuid.str} '
+      'notify=$selectedNotifyUuid',
     );
   }
 

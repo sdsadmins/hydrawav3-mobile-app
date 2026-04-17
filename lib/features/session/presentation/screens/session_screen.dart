@@ -7,12 +7,14 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
+import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../services/session_engine.dart';
 import '../../domain/session_model.dart';
 
 class SessionScreen extends ConsumerStatefulWidget {
   final String protocolId;
+  final Protocol? protocol;
   final List<String> deviceIds;
 
   /// 'ble' or 'wifi'
@@ -20,6 +22,7 @@ class SessionScreen extends ConsumerStatefulWidget {
   const SessionScreen({
     super.key,
     required this.protocolId,
+    this.protocol,
     required this.deviceIds,
     this.transport = 'ble',
   });
@@ -51,9 +54,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         );
 
         // 🔥 STEP 2
-        final protocol = await ref.read(
-          protocolDetailProvider(widget.protocolId).future,
-        );
+        final Protocol protocol = widget.protocol ??
+            await ref.read(
+              protocolDetailProvider(widget.protocolId).future,
+            );
 
         if (!mounted) return;
 
@@ -88,7 +92,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   Widget build(BuildContext context) {
     final engine = ref.watch(
         sessionEngineProvider); // ✅ FIX: WATCH instead of READ so UI rebuilds on state changes
-    final protocolAsync = ref.watch(protocolDetailProvider(widget.protocolId));
+    final protocolAsync = widget.protocol != null
+        ? AsyncValue.data(widget.protocol!)
+        : ref.watch(protocolDetailProvider(widget.protocolId));
 
     final timer = engine.timer;
     final status = engine.status;

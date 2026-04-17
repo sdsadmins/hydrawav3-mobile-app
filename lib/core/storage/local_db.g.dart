@@ -467,6 +467,12 @@ class $CachedProtocolsTable extends CachedProtocols
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant(''));
+  static const VerificationMeta _deviceIdMeta =
+      const VerificationMeta('deviceId');
+  @override
+  late final GeneratedColumn<String> deviceId = GeneratedColumn<String>(
+      'device_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _cachedAtMeta =
       const VerificationMeta('cachedAt');
   @override
@@ -490,6 +496,7 @@ class $CachedProtocolsTable extends CachedProtocols
         edgecycleduration,
         sessionPause,
         description,
+        deviceId,
         cachedAt
       ];
   @override
@@ -569,6 +576,10 @@ class $CachedProtocolsTable extends CachedProtocols
           description.isAcceptableOrUnknown(
               data['description']!, _descriptionMeta));
     }
+    if (data.containsKey('device_id')) {
+      context.handle(_deviceIdMeta,
+          deviceId.isAcceptableOrUnknown(data['device_id']!, _deviceIdMeta));
+    }
     if (data.containsKey('cached_at')) {
       context.handle(_cachedAtMeta,
           cachedAt.isAcceptableOrUnknown(data['cached_at']!, _cachedAtMeta));
@@ -608,6 +619,8 @@ class $CachedProtocolsTable extends CachedProtocols
           .read(DriftSqlType.double, data['${effectivePrefix}session_pause'])!,
       description: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}description'])!,
+      deviceId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}device_id']),
       cachedAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}cached_at'])!,
     );
@@ -633,6 +646,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
   final double edgecycleduration;
   final double sessionPause;
   final String description;
+  final String? deviceId;
   final DateTime cachedAt;
   const CachedProtocol(
       {required this.id,
@@ -648,6 +662,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
       required this.edgecycleduration,
       required this.sessionPause,
       required this.description,
+      this.deviceId,
       required this.cachedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -665,6 +680,9 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
     map['edgecycleduration'] = Variable<double>(edgecycleduration);
     map['session_pause'] = Variable<double>(sessionPause);
     map['description'] = Variable<String>(description);
+    if (!nullToAbsent || deviceId != null) {
+      map['device_id'] = Variable<String>(deviceId);
+    }
     map['cached_at'] = Variable<DateTime>(cachedAt);
     return map;
   }
@@ -684,6 +702,9 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
       edgecycleduration: Value(edgecycleduration),
       sessionPause: Value(sessionPause),
       description: Value(description),
+      deviceId: deviceId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deviceId),
       cachedAt: Value(cachedAt),
     );
   }
@@ -705,6 +726,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
       edgecycleduration: serializer.fromJson<double>(json['edgecycleduration']),
       sessionPause: serializer.fromJson<double>(json['sessionPause']),
       description: serializer.fromJson<String>(json['description']),
+      deviceId: serializer.fromJson<String?>(json['deviceId']),
       cachedAt: serializer.fromJson<DateTime>(json['cachedAt']),
     );
   }
@@ -725,6 +747,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
       'edgecycleduration': serializer.toJson<double>(edgecycleduration),
       'sessionPause': serializer.toJson<double>(sessionPause),
       'description': serializer.toJson<String>(description),
+      'deviceId': serializer.toJson<String?>(deviceId),
       'cachedAt': serializer.toJson<DateTime>(cachedAt),
     };
   }
@@ -743,6 +766,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
           double? edgecycleduration,
           double? sessionPause,
           String? description,
+          Value<String?> deviceId = const Value.absent(),
           DateTime? cachedAt}) =>
       CachedProtocol(
         id: id ?? this.id,
@@ -758,6 +782,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
         edgecycleduration: edgecycleduration ?? this.edgecycleduration,
         sessionPause: sessionPause ?? this.sessionPause,
         description: description ?? this.description,
+        deviceId: deviceId.present ? deviceId.value : this.deviceId,
         cachedAt: cachedAt ?? this.cachedAt,
       );
   CachedProtocol copyWithCompanion(CachedProtocolsCompanion data) {
@@ -783,6 +808,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
           : this.sessionPause,
       description:
           data.description.present ? data.description.value : this.description,
+      deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
       cachedAt: data.cachedAt.present ? data.cachedAt.value : this.cachedAt,
     );
   }
@@ -803,6 +829,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
           ..write('edgecycleduration: $edgecycleduration, ')
           ..write('sessionPause: $sessionPause, ')
           ..write('description: $description, ')
+          ..write('deviceId: $deviceId, ')
           ..write('cachedAt: $cachedAt')
           ..write(')'))
         .toString();
@@ -823,6 +850,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
       edgecycleduration,
       sessionPause,
       description,
+      deviceId,
       cachedAt);
   @override
   bool operator ==(Object other) =>
@@ -841,6 +869,7 @@ class CachedProtocol extends DataClass implements Insertable<CachedProtocol> {
           other.edgecycleduration == this.edgecycleduration &&
           other.sessionPause == this.sessionPause &&
           other.description == this.description &&
+          other.deviceId == this.deviceId &&
           other.cachedAt == this.cachedAt);
 }
 
@@ -858,6 +887,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
   final Value<double> edgecycleduration;
   final Value<double> sessionPause;
   final Value<String> description;
+  final Value<String?> deviceId;
   final Value<DateTime> cachedAt;
   final Value<int> rowid;
   const CachedProtocolsCompanion({
@@ -874,6 +904,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
     this.edgecycleduration = const Value.absent(),
     this.sessionPause = const Value.absent(),
     this.description = const Value.absent(),
+    this.deviceId = const Value.absent(),
     this.cachedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -891,6 +922,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
     this.edgecycleduration = const Value.absent(),
     this.sessionPause = const Value.absent(),
     this.description = const Value.absent(),
+    this.deviceId = const Value.absent(),
     this.cachedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
@@ -910,6 +942,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
     Expression<double>? edgecycleduration,
     Expression<double>? sessionPause,
     Expression<String>? description,
+    Expression<String>? deviceId,
     Expression<DateTime>? cachedAt,
     Expression<int>? rowid,
   }) {
@@ -927,6 +960,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
       if (edgecycleduration != null) 'edgecycleduration': edgecycleduration,
       if (sessionPause != null) 'session_pause': sessionPause,
       if (description != null) 'description': description,
+      if (deviceId != null) 'device_id': deviceId,
       if (cachedAt != null) 'cached_at': cachedAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -946,6 +980,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
       Value<double>? edgecycleduration,
       Value<double>? sessionPause,
       Value<String>? description,
+      Value<String?>? deviceId,
       Value<DateTime>? cachedAt,
       Value<int>? rowid}) {
     return CachedProtocolsCompanion(
@@ -962,6 +997,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
       edgecycleduration: edgecycleduration ?? this.edgecycleduration,
       sessionPause: sessionPause ?? this.sessionPause,
       description: description ?? this.description,
+      deviceId: deviceId ?? this.deviceId,
       cachedAt: cachedAt ?? this.cachedAt,
       rowid: rowid ?? this.rowid,
     );
@@ -1009,6 +1045,9 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
     if (description.present) {
       map['description'] = Variable<String>(description.value);
     }
+    if (deviceId.present) {
+      map['device_id'] = Variable<String>(deviceId.value);
+    }
     if (cachedAt.present) {
       map['cached_at'] = Variable<DateTime>(cachedAt.value);
     }
@@ -1034,6 +1073,7 @@ class CachedProtocolsCompanion extends UpdateCompanion<CachedProtocol> {
           ..write('edgecycleduration: $edgecycleduration, ')
           ..write('sessionPause: $sessionPause, ')
           ..write('description: $description, ')
+          ..write('deviceId: $deviceId, ')
           ..write('cachedAt: $cachedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -2586,6 +2626,7 @@ typedef $$CachedProtocolsTableCreateCompanionBuilder = CachedProtocolsCompanion
   Value<double> edgecycleduration,
   Value<double> sessionPause,
   Value<String> description,
+  Value<String?> deviceId,
   Value<DateTime> cachedAt,
   Value<int> rowid,
 });
@@ -2604,6 +2645,7 @@ typedef $$CachedProtocolsTableUpdateCompanionBuilder = CachedProtocolsCompanion
   Value<double> edgecycleduration,
   Value<double> sessionPause,
   Value<String> description,
+  Value<String?> deviceId,
   Value<DateTime> cachedAt,
   Value<int> rowid,
 });
@@ -2656,6 +2698,9 @@ class $$CachedProtocolsTableFilterComposer
 
   ColumnFilters<String> get description => $composableBuilder(
       column: $table.description, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get deviceId => $composableBuilder(
+      column: $table.deviceId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get cachedAt => $composableBuilder(
       column: $table.cachedAt, builder: (column) => ColumnFilters(column));
@@ -2712,6 +2757,9 @@ class $$CachedProtocolsTableOrderingComposer
   ColumnOrderings<String> get description => $composableBuilder(
       column: $table.description, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get deviceId => $composableBuilder(
+      column: $table.deviceId, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get cachedAt => $composableBuilder(
       column: $table.cachedAt, builder: (column) => ColumnOrderings(column));
 }
@@ -2764,6 +2812,9 @@ class $$CachedProtocolsTableAnnotationComposer
   GeneratedColumn<String> get description => $composableBuilder(
       column: $table.description, builder: (column) => column);
 
+  GeneratedColumn<String> get deviceId =>
+      $composableBuilder(column: $table.deviceId, builder: (column) => column);
+
   GeneratedColumn<DateTime> get cachedAt =>
       $composableBuilder(column: $table.cachedAt, builder: (column) => column);
 }
@@ -2808,6 +2859,7 @@ class $$CachedProtocolsTableTableManager extends RootTableManager<
             Value<double> edgecycleduration = const Value.absent(),
             Value<double> sessionPause = const Value.absent(),
             Value<String> description = const Value.absent(),
+            Value<String?> deviceId = const Value.absent(),
             Value<DateTime> cachedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -2825,6 +2877,7 @@ class $$CachedProtocolsTableTableManager extends RootTableManager<
             edgecycleduration: edgecycleduration,
             sessionPause: sessionPause,
             description: description,
+            deviceId: deviceId,
             cachedAt: cachedAt,
             rowid: rowid,
           ),
@@ -2842,6 +2895,7 @@ class $$CachedProtocolsTableTableManager extends RootTableManager<
             Value<double> edgecycleduration = const Value.absent(),
             Value<double> sessionPause = const Value.absent(),
             Value<String> description = const Value.absent(),
+            Value<String?> deviceId = const Value.absent(),
             Value<DateTime> cachedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -2859,6 +2913,7 @@ class $$CachedProtocolsTableTableManager extends RootTableManager<
             edgecycleduration: edgecycleduration,
             sessionPause: sessionPause,
             description: description,
+            deviceId: deviceId,
             cachedAt: cachedAt,
             rowid: rowid,
           ),

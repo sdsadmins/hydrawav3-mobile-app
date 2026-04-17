@@ -13,6 +13,7 @@ import '../../features/history/presentation/screens/history_list_screen.dart';
 import '../../features/history/presentation/screens/session_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
+import '../../features/protocols/domain/protocol_model.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
 import '../../features/settings/presentation/screens/change_password_screen.dart';
 import '../../features/settings/presentation/screens/profile_edit_screen.dart';
@@ -91,6 +92,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         final extra = s.extra as Map<String, dynamic>?;
         return SessionScreen(
           protocolId: extra?['protocolId'] as String? ?? '',
+          protocol: extra?['protocol'] as Protocol?,
           deviceIds: extra?['deviceIds'] as List<String>? ?? [],
           transport: extra?['transport'] as String? ?? 'ble',
         );
