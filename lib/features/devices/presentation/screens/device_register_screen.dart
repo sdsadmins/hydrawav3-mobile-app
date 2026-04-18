@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../data/device_repository.dart';
 import '../../domain/device_model.dart';
@@ -37,7 +38,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     final orgIdRaw = auth.user?.organizationId;
     if (orgIdRaw == null || orgIdRaw.isEmpty) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Organization not available')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Organization not available')));
       }
       return;
     }
@@ -45,7 +47,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     final orgId = int.tryParse(orgIdRaw);
     if (orgId == null) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid organization id')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Invalid organization id')));
       }
       return;
     }
@@ -61,12 +64,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       ref.refresh(wifiDevicesByOrgProvider);
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device registered successfully')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Device registered successfully')));
         Navigator.of(context).pop();
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Register failed: ${e.toString()}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Register failed: ${e.toString()}')));
       }
     } finally {
       setState(() => _submitting = false);
@@ -80,13 +85,15 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) {
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
           child: SingleChildScrollView(
             child: Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: ThemeConstants.surface,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20)),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -96,9 +103,16 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                     width: 40,
                     height: 4,
                     margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                    decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2)),
                   ),
-                  const Text('Create new device', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white), textAlign: TextAlign.center),
+                  const Text('Create new device',
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white),
+                      textAlign: TextAlign.center),
                   const SizedBox(height: 16),
                   Form(
                     key: _formKey,
@@ -111,9 +125,12 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           style: const TextStyle(color: Colors.white),
                           decoration: const InputDecoration(
                             hintText: 'Serial Number / MAC Address',
-                            prefixIcon: Icon(Icons.qr_code_rounded, color: ThemeConstants.textTertiary, size: 20),
+                            prefixIcon: Icon(Icons.qr_code_rounded,
+                                color: ThemeConstants.textTertiary, size: 20),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? 'Required'
+                              : null,
                         ),
                         const SizedBox(height: 12),
                         TextFormField(
@@ -121,18 +138,27 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           style: const TextStyle(color: Colors.white),
                           decoration: const InputDecoration(
                             hintText: 'Device Name',
-                            prefixIcon: Icon(Icons.label_outline_rounded, color: ThemeConstants.textTertiary, size: 20),
+                            prefixIcon: Icon(Icons.label_outline_rounded,
+                                color: ThemeConstants.textTertiary, size: 20),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? 'Required'
+                              : null,
                         ),
                         const SizedBox(height: 24),
                         SizedBox(
                           width: double.infinity,
                           height: 48,
                           child: ElevatedButton(
-                            onPressed: _submitting ? null : () => _registerDevice(context),
+                            onPressed: _submitting
+                                ? null
+                                : () => _registerDevice(context),
                             child: _submitting
-                                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
                                 : const Text('Create device'),
                           ),
                         ),
@@ -154,17 +180,19 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
         children: [
           Icon(icon, size: 20, color: ThemeConstants.textSecondary),
           const SizedBox(height: 6),
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.black54, fontWeight: FontWeight.w600)),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: ThemeConstants.textTertiary,
+                  fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
   Widget _buildDeviceCard(DeviceInfo device) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      color: Colors.white,
+    return GradientCard(
+      borderRadius: 24,
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -179,13 +207,17 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                     color: ThemeConstants.accent.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Icon(Icons.memory, size: 24, color: ThemeConstants.accent),
+                  child: Icon(Icons.memory,
+                      size: 24, color: ThemeConstants.accent),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
                     device.name,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black87),
+                    style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white),
                   ),
                 ),
               ],
@@ -201,9 +233,18 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('HARDWARE MAC', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: Colors.black45)),
+                  const Text('HARDWARE MAC',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6,
+                          color: ThemeConstants.textTertiary)),
                   const SizedBox(height: 8),
-                  Text(device.macAddress, style: const TextStyle(fontSize: 14, color: Colors.black87, fontWeight: FontWeight.w600)),
+                  Text(device.macAddress,
+                      style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -242,9 +283,15 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
-                        Text('DEVICES FLEET', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: Colors.white)),
+                        Text('DEVICES FLEET',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white)),
                         SizedBox(height: 8),
-                        Text('Manage clinical hardware connections and firmware protocols.', style: TextStyle(color: Colors.white70)),
+                        Text(
+                            'Manage clinical hardware connections and firmware protocols.',
+                            style: TextStyle(color: Colors.white70)),
                       ],
                     ),
                   ),
@@ -256,9 +303,11 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       label: const Text('Register Device'),
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size(0, 48),
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 12),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20)),
                       ),
                     ),
                   ),
@@ -268,16 +317,20 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: ThemeConstants.surface,
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: TextField(
                   controller: _searchCtrl,
-                  onChanged: (value) => setState(() => _searchText = value.trim()),
+                  onChanged: (value) =>
+                      setState(() => _searchText = value.trim()),
                   decoration: InputDecoration(
-                    hintText: 'Filter by hardware name, MAC ID or protocol type...',
-                    hintStyle: const TextStyle(color: Colors.black38),
-                    prefixIcon: const Icon(Icons.search, color: Colors.black38),
+                    hintText:
+                        'Filter by hardware name, MAC ID or protocol type...',
+                    hintStyle:
+                        const TextStyle(color: ThemeConstants.textTertiary),
+                    prefixIcon: const Icon(Icons.search,
+                        color: ThemeConstants.textTertiary),
                     border: InputBorder.none,
                   ),
                 ),
@@ -289,8 +342,11 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                     final filteredDevices = _searchText.isEmpty
                         ? devices
                         : devices.where((device) {
-                            final normalized = '${device.name} ${device.macAddress}'.toLowerCase();
-                            return normalized.contains(_searchText.toLowerCase());
+                            final normalized =
+                                '${device.name} ${device.macAddress}'
+                                    .toLowerCase();
+                            return normalized
+                                .contains(_searchText.toLowerCase());
                           }).toList();
 
                     if (filteredDevices.isEmpty) {
@@ -298,7 +354,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 24),
                           child: Text(
-                            _searchText.isEmpty ? 'No registered devices found.' : 'No devices match your search.',
+                            _searchText.isEmpty
+                                ? 'No registered devices found.'
+                                : 'No devices match your search.',
                             style: const TextStyle(color: Colors.white70),
                             textAlign: TextAlign.center,
                           ),
@@ -310,14 +368,19 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       padding: EdgeInsets.zero,
                       itemCount: filteredDevices.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) => _buildDeviceCard(filteredDevices[index]),
+                      itemBuilder: (context, index) =>
+                          _buildDeviceCard(filteredDevices[index]),
                     );
                   },
-                  loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)),
+                  loading: () => const Center(
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white70)),
                   error: (error, stack) => Center(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Text('Unable to load devices: ${error.toString()}', style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+                      child: Text('Unable to load devices: ${error.toString()}',
+                          style: const TextStyle(color: Colors.white70),
+                          textAlign: TextAlign.center),
                     ),
                   ),
                 ),
