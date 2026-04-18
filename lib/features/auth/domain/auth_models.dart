@@ -46,6 +46,9 @@ class UserProfile {
   final List<String>? roles;
   final String? profilePicture;
   final String? organizationId;
+  final String? country;
+  final String? state;
+  final String? dob;
 
   const UserProfile({
     this.id,
@@ -58,6 +61,9 @@ class UserProfile {
     this.roles,
     this.profilePicture,
     this.organizationId,
+    this.country,
+    this.state,
+    this.dob,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -67,12 +73,24 @@ class UserProfile {
         firstName: json['firstName'] as String?,
         lastName: json['lastName'] as String?,
         phone: json['phone'] as String?,
-        role: json['role'] as String?,
-        roles: (json['roles'] as List<dynamic>?)
-            ?.map((e) => e as String)
-            .toList(),
+        // role: json['role'] as String?,
+        role: json['role']?.toString(),
+        // roles: (json['roles'] as List<dynamic>?)
+        //     ?.map((e) => e as String)
+        //     .toList(),
+        roles: json['roles'] is List
+    ? (json['roles'] as List).map((e) => e.toString()).toList()
+    : json['roles'] != null
+        ? [json['roles'].toString()]
+        : null,
         profilePicture: json['profilePicture'] as String?,
-        organizationId: json['organization']?['id']?.toString(),
+        // organizationId: json['organization']?['id']?.toString(),
+        organizationId: json['organization'] is Map
+    ? json['organization']['id']?.toString()
+    : json['organization']?.toString(),
+        country: json['country'] as String?,
+        state: json['state'] as String?,
+        dob: json['dateOfBirth'] as String?,
       );
 
   String get displayName {

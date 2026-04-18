@@ -1,18 +1,26 @@
 class ApiEndpoints {
   ApiEndpoints._();
 
+//   Auth
+static const String profileMe = "/profile/me";
+static const String changePassword = "/profile/me/password";
+static const String forgotPassword = "/profile/me/forget-password";
+
+// /changed
+// static const String login = '/auth/login';
+static const String login = '/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
-  static const String login = '/auth/login';
-  static const String refreshToken = '/auth/refreshToken';
 
+  static const String refreshToken = '/auth/refreshToken';
+static const String baseUrl = "http://54.241.236.53:8080";
   // Profile
-  static const String profileMe = '/profile/me';
-  static const String changePassword = '/profile/me/password';
+//   static const String profileMe = '/profile/me';
+//   static const String changePassword = '/profile/me/password';
 
   // Organizations
   static const String organizations = '/admin/organizations';

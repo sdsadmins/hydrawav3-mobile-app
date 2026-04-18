@@ -25,9 +25,17 @@ class AuthInterceptor extends Interceptor {
   ) async {
     final storage = _ref.read(secureStorageProvider);
     final token = await storage.getAccessToken();
-    if (token != null) {
+    if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $token';
     }
+    print("FINAL HEADERS: ${options.headers}"); // 🔥 DEBUG
+//     if (token != null && token.isNotEmpty) {
+//   if (token.startsWith('Bearer ')) {
+//     options.headers['Authorization'] = token;
+//   } else {
+//     options.headers['Authorization'] = 'Bearer $token';
+//   }
+// }
     handler.next(options);
   }
 
