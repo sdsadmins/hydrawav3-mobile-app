@@ -82,7 +82,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         children: [
           Expanded(child: msgs.isEmpty ? _welcome() : ListView.builder(
             controller: _scroll,
-            physics: const BouncingScrollPhysics(),
+            physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.all(16),
             itemCount: msgs.length,
             itemBuilder: (c, i) => _Bubble(msg: msgs[i], index: i),

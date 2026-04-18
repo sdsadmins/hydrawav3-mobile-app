@@ -58,6 +58,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   final Ref _ref;
   Timer? _timer;
   final Stopwatch _stopwatch = Stopwatch();
+  Duration _sessionClockOffset = Duration.zero;
+  DateTime? _firstBlePlayAnchor;
+  bool _startInProgress = false;
   int _cycleIndex = 0;
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
@@ -67,6 +70,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   static const String _debugLightProtocolId = 'light-on';
 
   SessionEngine(this._ref) : super(const SessionEngineState());
+
+  /// Adds [DateTime.now() - anchor] to the running timer so UI matches hardware
+  /// when navigation / setup finishes after the device already started.
+  void applySessionClockOffsetFromWallAnchor(DateTime anchor) {
+    if (!_isActive) return;
+    final lag = DateTime.now().difference(anchor);
+    _sessionClockOffset = lag.isNegative ? Duration.zero : lag;
+    appLogger.i(
+      'Session: clock offset $_sessionClockOffset from wall anchor $anchor',
+    );
+  }
+
+  Duration get _effectiveElapsed =>
+      _stopwatch.elapsed + _sessionClockOffset;
 
   Future<bool> _sendLargePayload(
     String mac,
@@ -154,17 +171,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         timer: TimerState(
           totalDuration: protocol.totalDuration,
           totalCycles: protocol.cycles.length,
+          lastVisualCycleIndex: protocol.cycles.isNotEmpty ? 0 : -1,
         ),
       );
     } catch (e) {
       appLogger
           .d('Session: loadSession state update ignored (notifier disposed)');
     }
-    _cycleIndex = 0;
+    _cycleIndex = -1;
     _repetition = 0;
+    _sessionClockOffset = Duration.zero;
+    _firstBlePlayAnchor = null;
+    _startInProgress = false;
   }
 
   Future<void> start() async {
+    if (_startInProgress) {
+      appLogger.w('⚠️ Ignoring start() — start sequence already in progress');
+      return;
+    }
     if (state.status != SessionStatus.idle) {
       appLogger.e("⛔ BLOCKED start() — status: ${state.status}");
       return;
@@ -179,70 +204,64 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i(
       'Session: start() transport=${state.transport} deviceIds=${state.deviceIds}',
     );
+    _startInProgress = true;
 
-    if (state.protocol == null) {
-      appLogger.w('Session: start() ignored — protocol not loaded yet');
-      return;
-    }
-
-    // WiFi sessions: command is already sent via MQTT/API from the protocol
-    // screen. We just run the timer UI.
-    if (state.transport == SessionTransport.wifi) {
-      appLogger.i(
-        'Session: Starting WiFi session timer (devices=${state.deviceIds.length})',
-      );
-      try {
-        state = state.copyWith(status: SessionStatus.running, error: null);
-      } catch (e) {
-        appLogger
-            .d('Session: start() state update ignored (notifier disposed)');
+    try {
+      if (state.protocol == null) {
+        appLogger.w('Session: start() ignored — protocol not loaded yet');
         return;
       }
-      _stopwatch.start();
-      _timer = Timer.periodic(const Duration(seconds: 1), _onTick);
-      return;
-    }
 
-    final connector = _ref.read(bleConnectorProvider);
-    final targetDeviceIds = state.deviceIds.isNotEmpty
-        ? state.deviceIds
-        : connector.connectedDeviceIds;
+      // WiFi sessions: command is already sent via MQTT/API from the protocol
+      // screen. We just run the timer UI.
+      if (state.transport == SessionTransport.wifi) {
+        appLogger.i(
+          'Session: Starting WiFi session timer (devices=${state.deviceIds.length})',
+        );
+        _beginRuntimeTimer();
+        return;
+      }
 
-    if (targetDeviceIds.isEmpty) {
-      if (!_isActive) return;
-      state = state.copyWith(
-        error: 'No BLE device selected/connected',
-      );
-      appLogger.w('Session: Start aborted — no target BLE devices');
-      return;
-    }
+      final connector = _ref.read(bleConnectorProvider);
+      final targetDeviceIds = state.deviceIds.isNotEmpty
+          ? state.deviceIds
+          : connector.connectedDeviceIds;
 
-    // CRITICAL FIX: Verify all devices are actually connected before attempting payload send.
-    // This fixes the issue where selected devices may have disconnected between device
-    // selection and session start.
-    final actuallyConnectedIds =
-        targetDeviceIds.where((id) => connector.isConnected(id)).toList();
+      if (targetDeviceIds.isEmpty) {
+        if (!_isActive) return;
+        state = state.copyWith(
+          error: 'No BLE device selected/connected',
+        );
+        appLogger.w('Session: Start aborted — no target BLE devices');
+        return;
+      }
 
-    if (actuallyConnectedIds.isEmpty) {
-      if (!_isActive) return;
+      // CRITICAL FIX: Verify all devices are actually connected before attempting payload send.
+      // This fixes the issue where selected devices may have disconnected between device
+      // selection and session start.
+      final actuallyConnectedIds =
+          targetDeviceIds.where((id) => connector.isConnected(id)).toList();
 
-      state = state.copyWith(
-        error: 'No BLE devices connected...',
-      );
-      return;
-    }
+      if (actuallyConnectedIds.isEmpty) {
+        if (!_isActive) return;
 
-    // Log warning if some selected devices disconnected
-    final disconnectedIds =
-        targetDeviceIds.where((id) => !connector.isConnected(id)).toList();
-    if (disconnectedIds.isNotEmpty) {
-      appLogger.w(
-        'Session: Some selected devices disconnected, proceeding with connected devices only '
-        '(disconnected=${disconnectedIds.join(", ")}, connected=${actuallyConnectedIds.join(", ")})',
-      );
-    }
+        state = state.copyWith(
+          error: 'No BLE devices connected...',
+        );
+        return;
+      }
 
-    if (BleConstants.startSendsOnlyPlayCmd) {
+      // Log warning if some selected devices disconnected
+      final disconnectedIds =
+          targetDeviceIds.where((id) => !connector.isConnected(id)).toList();
+      if (disconnectedIds.isNotEmpty) {
+        appLogger.w(
+          'Session: Some selected devices disconnected, proceeding with connected devices only '
+          '(disconnected=${disconnectedIds.join(", ")}, connected=${actuallyConnectedIds.join(", ")})',
+        );
+      }
+
+      if (BleConstants.startSendsOnlyPlayCmd) {
       // This mode is only meant to "turn on" by sending a tiny command.
       // Cancel any previously running timer so we don't tick while
       // `state.protocol` is null (this was causing the crash you pasted).
@@ -291,30 +310,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
 
       // In playCmd-only mode, we don't run the protocol timer.
-      if (!_isActive) return;
-      state = state.copyWith(status: SessionStatus.stopped, error: null);
-      return;
-    }
+        if (!_isActive) return;
+        state = state.copyWith(status: SessionStatus.stopped, error: null);
+        return;
+      }
 
-    if (state.protocol == null) return;
+      if (state.protocol == null) return;
 
-    final protocol = state.protocol!;
-    appLogger.i(
-      'Session: start payload source '
-      '(protocolId=${protocol.id}, name=${protocol.templateName}, sessions=${protocol.sessions}, cycles=${protocol.cycles.length})',
-    );
+      final protocol = state.protocol!;
+      appLogger.i(
+        'Session: start payload source '
+        '(protocolId=${protocol.id}, name=${protocol.templateName}, sessions=${protocol.sessions}, cycles=${protocol.cycles.length})',
+      );
 
-    // Start timer/status immediately so UI timing aligns with device run start,
-    // instead of waiting for all BLE writes to complete.
-    appLogger.i('Session: Starting');
-    if (!_isActive) return;
-    state = state.copyWith(status: SessionStatus.running, error: null);
-    _stopwatch.start();
-    _timer = Timer.periodic(const Duration(seconds: 1), _onTick);
+      // For BLE we intentionally start UI timer only AFTER PLAY succeeds,
+      // so elapsed time tracks physical device runtime.
+      appLogger.i('Session: Starting BLE send sequence (timer starts after PLAY)');
 
-    // Send protocol JSON to each connected device over BLE (RS232 bridge).
-    final failed = <String>[];
-    for (final mac in actuallyConnectedIds) {
+      // Send protocol JSON to each connected device over BLE (RS232 bridge).
+      final failed = <String>[];
+      final bool singleBleDevice = actuallyConnectedIds.length == 1;
+      var bleTimerStarted = false;
+      _firstBlePlayAnchor = null;
+      for (final mac in actuallyConnectedIds) {
       final legacyShape = _protocolToRs232Json(
         protocol,
         transportId: mac,
@@ -371,30 +389,75 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       // has been written. This mirrors the JS flow: config → wait → 0x01.
       await Future<void>.delayed(prePlayDelay);
       appLogger.i('Session: Sending raw PLAY command (0x01) to $mac');
+      final playAnchor = DateTime.now();
       final okRawPlay = await connector.writeToDevice(mac, [0x01]);
       appLogger.i(
         'Session: BLE raw PLAY command result for $mac → $okRawPlay',
       );
+      if (okRawPlay) {
+        _firstBlePlayAnchor ??= playAnchor;
+      }
       if (!okRawPlay) {
         failed.add(mac);
+      } else if (singleBleDevice) {
+        // Single-device: start UI clock as soon as PLAY succeeds; offset
+        // catches BLE write latency so elapsed tracks the machine.
+        bleTimerStarted = true;
+        if (_firstBlePlayAnchor != null) {
+          applySessionClockOffsetFromWallAnchor(_firstBlePlayAnchor!);
+        }
+        _beginRuntimeTimer();
       }
 
       await Future<void>.delayed(
           const Duration(milliseconds: 300)); // Gap between devices
-    }
+      }
 
-    if (failed.isNotEmpty) {
-      _stopwatch.stop();
-      _timer?.cancel();
-      _timer = null;
-      if (!_isActive) return;
-      state = state.copyWith(
-        status: SessionStatus.stopped,
-        error: 'Failed to send protocol to: ${failed.join(', ')}',
-      );
-      appLogger.w('Session: Start aborted — protocol send failed');
+      if (failed.isNotEmpty) {
+        _stopwatch.stop();
+        _timer?.cancel();
+        _timer = null;
+        if (!_isActive) return;
+        state = state.copyWith(
+          status: SessionStatus.stopped,
+          error: 'Failed to send protocol to: ${failed.join(', ')}',
+        );
+        appLogger.w('Session: Start aborted — protocol send failed');
+        return;
+      }
+
+      if (!bleTimerStarted) {
+        if (_firstBlePlayAnchor != null) {
+          applySessionClockOffsetFromWallAnchor(_firstBlePlayAnchor!);
+        }
+        _beginRuntimeTimer();
+      }
+    } finally {
+      _startInProgress = false;
+    }
+  }
+
+  void _beginRuntimeTimer() {
+    appLogger.i(
+      'Session: Runtime timer started (clockOffset=$_sessionClockOffset)',
+    );
+    if (!_isActive) return;
+    try {
+      state = state.copyWith(status: SessionStatus.running, error: null);
+    } catch (e) {
+      appLogger.d('Session: timer start state update ignored (notifier disposed)');
       return;
     }
+    final alreadyRunning = _stopwatch.isRunning;
+    if (!alreadyRunning) {
+      _stopwatch.reset();
+      _stopwatch.start();
+    }
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+    // Periodic timer does not fire until the first interval; sync once now
+    // so remaining time and cycle/pad UI match the device immediately.
+    _syncDisplayedTimerFromStopwatch();
   }
 
   Map<String, dynamic> _protocolToRs232Json(
@@ -498,7 +561,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     _stopwatch.start();
-    _timer = Timer.periodic(const Duration(seconds: 1), _onTick);
+    _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+    _syncDisplayedTimerFromStopwatch();
     appLogger.i('🔄 RESUME: Timer restarted on app side');
   }
 
@@ -539,7 +603,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocolName: state.protocol!.templateName,
       deviceIds: state.deviceIds,
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
-      elapsedSeconds: _stopwatch.elapsed.inSeconds,
+      elapsedSeconds: _effectiveElapsed.inSeconds,
       discomfortBefore: discomfortBefore,
       discomfortAfter: discomfortAfter,
       notes: notes,
@@ -550,23 +614,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void reset() {
     _timer?.cancel();
     _stopwatch.reset();
-    _cycleIndex = 0;
+    _sessionClockOffset = Duration.zero;
+    _firstBlePlayAnchor = null;
+    _startInProgress = false;
+    _cycleIndex = -1;
     _repetition = 0;
     state = const SessionEngineState();
   }
 
   void _onTick(Timer timer) {
-    // Guard against updates after disposal/deactivation
     if (!_isActive || state.status != SessionStatus.running) {
       timer.cancel();
       _timer = null;
       return;
     }
+    _syncDisplayedTimerFromStopwatch();
+  }
 
-    final elapsed = _stopwatch.elapsed;
+  void _syncDisplayedTimerFromStopwatch() {
+    if (!_isActive || state.status != SessionStatus.running) return;
+
+    final elapsed = _effectiveElapsed;
     final protocol = state.protocol;
     if (protocol == null) {
-      // Guard against a stale timer running after protocol was cleared.
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();
@@ -585,8 +655,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     _calculateCurrentPosition(elapsed);
 
-    // Safe guard: don't update if disposed
     if (!_isActive) return;
+
+    final prevVisual = state.timer.lastVisualCycleIndex;
+    final int newVisual;
+    if (protocol.cycles.isEmpty) {
+      newVisual = -1;
+    } else if (_cycleIndex >= 0) {
+      newVisual = _cycleIndex;
+    } else if (prevVisual >= 0) {
+      newVisual = prevVisual;
+    } else {
+      newVisual = 0;
+    }
 
     try {
       state = state.copyWith(
@@ -594,33 +675,62 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           elapsed: elapsed,
           currentCycleIndex: _cycleIndex,
           currentRepetition: _repetition,
+          lastVisualCycleIndex: newVisual,
           isRunning: true,
         ),
       );
     } catch (e) {
-      // Silently ignore if notifier is disposed
-      appLogger.d('Session: _onTick state update ignored (notifier disposed)');
+      appLogger.d('Session: tick state update ignored (notifier disposed)');
     }
   }
 
   void _calculateCurrentPosition(Duration elapsed) {
     final protocol = state.protocol!;
     int accumulatedSeconds = 0;
+    final elapsedSeconds = elapsed.inSeconds;
 
-    for (int c = 0; c < protocol.cycles.length; c++) {
-      final cycle = protocol.cycles[c];
-      for (int r = 0; r < cycle.repetitions; r++) {
-        accumulatedSeconds += cycle.durationSeconds.toInt();
-        if (elapsed.inSeconds < accumulatedSeconds) {
-          _cycleIndex = c;
-          _repetition = r;
+    for (int s = 0; s < protocol.sessions; s++) {
+      for (int c = 0; c < protocol.cycles.length; c++) {
+        final cycle = protocol.cycles[c];
+        for (int r = 0; r < cycle.repetitions; r++) {
+          accumulatedSeconds += cycle.durationSeconds.toInt();
+          if (elapsedSeconds < accumulatedSeconds) {
+            _cycleIndex = c;
+            _repetition = r;
+            return;
+          }
+
+          // Matches web payload mapping: pauseIntervals = cycle_pause.
+          if (r < cycle.repetitions - 1) {
+            accumulatedSeconds += cycle.cyclePause.toInt();
+            if (elapsedSeconds < accumulatedSeconds) {
+              _cycleIndex = -1;
+              _repetition = r;
+              return;
+            }
+          }
+        }
+
+        // Matches web payload mapping: cyclePauses = pause_seconds.
+        accumulatedSeconds += cycle.pauseSeconds.toInt();
+        if (elapsedSeconds < accumulatedSeconds) {
+          _cycleIndex = -1;
+          _repetition = cycle.repetitions > 0 ? cycle.repetitions - 1 : 0;
           return;
         }
-        if (r < cycle.repetitions - 1) {
-          accumulatedSeconds += cycle.cyclePause.toInt();
+      }
+
+      if (s < protocol.sessions - 1) {
+        accumulatedSeconds += protocol.sessionPause.toInt();
+        if (elapsedSeconds < accumulatedSeconds) {
+          _cycleIndex = -1;
+          _repetition = 0;
+          return;
         }
       }
     }
+
+    _cycleIndex = protocol.cycles.isNotEmpty ? protocol.cycles.length - 1 : -1;
   }
 
   Future<void> _completeSession() async {

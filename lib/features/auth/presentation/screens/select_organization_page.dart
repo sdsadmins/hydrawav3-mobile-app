@@ -68,7 +68,7 @@ class _SelectOrganizationPageState
             ),
             data: (orgs) {
               return SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
+                physics: const ClampingScrollPhysics(),
                 child: SizedBox(
                   height: MediaQuery.of(context).size.height, // ✅ FULL HEIGHT
                   child: Center(

@@ -57,19 +57,29 @@ class TimerState {
   final int totalCycles;
   final bool isRunning;
 
+  /// Last cycle index while the device was in an active treatment segment
+  /// (not in a timed pause gap). Used for moon/sun pad colors when
+  /// [currentCycleIndex] is `-1` during those gaps so UI matches hardware.
+  final int lastVisualCycleIndex;
+
   const TimerState({
     this.elapsed = Duration.zero,
     this.totalDuration = Duration.zero,
-    this.currentCycleIndex = 0,
+    this.currentCycleIndex = -1,
     this.currentRepetition = 0,
     this.totalCycles = 0,
     this.isRunning = false,
+    this.lastVisualCycleIndex = -1,
   });
 
-  Duration get remaining => totalDuration - elapsed;
+  Duration get remaining {
+    final r = totalDuration - elapsed;
+    return r.isNegative ? Duration.zero : r;
+  }
   double get progress =>
-      totalDuration.inSeconds > 0
-          ? elapsed.inSeconds / totalDuration.inSeconds
+      totalDuration.inMilliseconds > 0
+          ? (elapsed.inMilliseconds / totalDuration.inMilliseconds)
+              .clamp(0.0, 1.0)
           : 0;
 
   TimerState copyWith({
@@ -79,6 +89,7 @@ class TimerState {
     int? currentRepetition,
     int? totalCycles,
     bool? isRunning,
+    int? lastVisualCycleIndex,
   }) {
     return TimerState(
       elapsed: elapsed ?? this.elapsed,
@@ -87,6 +98,8 @@ class TimerState {
       currentRepetition: currentRepetition ?? this.currentRepetition,
       totalCycles: totalCycles ?? this.totalCycles,
       isRunning: isRunning ?? this.isRunning,
+      lastVisualCycleIndex:
+          lastVisualCycleIndex ?? this.lastVisualCycleIndex,
     );
   }
 }

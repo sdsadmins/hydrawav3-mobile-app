@@ -61,6 +61,11 @@ class ApiEndpoints {
   // MQTT
   static const String mqttPublish = '/mqtt/publish';
 
+  /// Node Nest: `GET /hydrawav/v1/sessions/active/:organizationId`
+  /// Returns active sessions with per-device `moon` / `sun` pad strings.
+  static String sessionsActive(String organizationId) =>
+      'sessions/active/$organizationId';
+
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';
   static const String aiChat = '/api/chat';

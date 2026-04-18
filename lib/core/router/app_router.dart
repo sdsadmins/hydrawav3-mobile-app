@@ -90,11 +90,16 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: RoutePaths.protocolDetail, name: RouteNames.protocolDetail, builder: (c, s) => ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
       GoRoute(path: RoutePaths.session, name: RouteNames.session, builder: (c, s) {
         final extra = s.extra as Map<String, dynamic>?;
+        final anchorRaw = extra?['sessionClockAnchorMs'];
+        final sessionClockAnchorMs = anchorRaw is int
+            ? anchorRaw
+            : (anchorRaw is num ? anchorRaw.toInt() : null);
         return SessionScreen(
           protocolId: extra?['protocolId'] as String? ?? '',
           protocol: extra?['protocol'] as Protocol?,
           deviceIds: extra?['deviceIds'] as List<String>? ?? [],
           transport: extra?['transport'] as String? ?? 'ble',
+          sessionClockAnchorMs: sessionClockAnchorMs,
         );
       }),
       GoRoute(path: RoutePaths.deviceRegister, name: RouteNames.deviceRegister, builder: (c, s) => const DeviceRegisterScreen()),

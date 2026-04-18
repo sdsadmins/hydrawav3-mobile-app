@@ -49,7 +49,7 @@ class ProtocolDetailScreen extends ConsumerWidget {
             message: e.toString(),
             onRetry: () => ref.invalidate(protocolDetailProvider(protocolId))),
         data: (p) => ListView(
-          physics: const BouncingScrollPhysics(),
+          physics: const ClampingScrollPhysics(),
           padding: const EdgeInsets.all(16),
           children: [
             AnimatedEntrance(
@@ -92,12 +92,38 @@ class ProtocolDetailScreen extends ConsumerWidget {
                 ])),
             const SizedBox(height: 24),
             AnimatedEntrance(
-                index: 2, child: const SectionHeader(title: 'Cycles')),
+              index: 2,
+              child: GradientCard(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Web Payload Mapping',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _R('Session Count', '${p.sessions}'),
+                    _R('Session Pause', '${p.sessionPause.toInt()}s'),
+                    _R('Cycle 1 (edge)', p.cycle1 ? 'enabled' : 'disabled'),
+                    _R('Cycle 5 (edge)', p.cycle5 ? 'enabled' : 'disabled'),
+                    _R('Edge Cycle Duration', '${p.edgecycleduration.toInt()}s'),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            AnimatedEntrance(
+                index: 3, child: const SectionHeader(title: 'Cycles')),
             ...p.cycles.asMap().entries.map((e) {
               final i = e.key;
               final c = e.value;
               return AnimatedEntrance(
-                  index: i + 3,
+                  index: i + 4,
                   child: Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: GradientCard(
@@ -111,21 +137,29 @@ class ProtocolDetailScreen extends ConsumerWidget {
                                   size: 36,
                                   iconSize: 18),
                               const SizedBox(width: 12),
-                              Text('Cycle ${i + 1}',
+                              Text('Cycle ${i + 1} (C${i + 1})',
                                   style: const TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w600,
                                       color: Colors.white)),
                             ]),
                             const SizedBox(height: 12),
-                            _R('Duration', '${c.durationSeconds.toInt()}s'),
-                            _R('Repetitions', '${c.repetitions}'),
+                            _R('Duration (cycleDurations)', '${c.durationSeconds.toInt()}s'),
+                            _R('Repetitions (cycleRepetitions)', '${c.repetitions}'),
+                            _R(
+                              'Pause Between Repetitions (pauseIntervals/cycle_pause)',
+                              '${c.cyclePause.toInt()}s',
+                            ),
+                            _R(
+                              'Pause After Cycle (cyclePauses/pause_seconds)',
+                              '${c.pauseSeconds.toInt()}s',
+                            ),
                             _R('Hot PWM', '${c.hotPwm.toInt()}'),
                             _R('Cold PWM', '${c.coldPwm.toInt()}'),
                             if (c.leftFunction.isNotEmpty)
-                              _R('Left', c.leftFunction),
+                              _R('Left Function', c.leftFunction),
                             if (c.rightFunction.isNotEmpty)
-                              _R('Right', c.rightFunction),
+                              _R('Right Function', c.rightFunction),
                           ],
                         )),
                   ));
@@ -143,16 +177,8 @@ class ProtocolDetailScreen extends ConsumerWidget {
                     );
                     if (target.deviceIds.isNotEmpty) {
                       if (target.transport == SessionTransport.wifi) {
-                        // Navigate immediately to timer, publish MQTT in background.
-                        context.push(
-                          RoutePaths.session,
-                          extra: {
-                            'protocolId': p.id,
-                            'protocol': p,
-                            'deviceIds': target.deviceIds,
-                            'transport': 'wifi',
-                          },
-                        );
+                        // Publish first so device and in-app timer stay aligned
+                        // (session screen auto-starts the clock on open).
                         try {
                           final dio = ref.read(djangoDioProvider);
                           for (final mac in target.deviceIds) {
@@ -172,7 +198,28 @@ class ProtocolDetailScreen extends ConsumerWidget {
                           }
                         } catch (e) {
                           appLogger.e('WiFi: publish failed: $e');
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('WiFi publish failed: $e'),
+                              ),
+                            );
+                          }
+                          return;
                         }
+                        if (!context.mounted) return;
+                        final sessionClockAnchorMs =
+                            DateTime.now().millisecondsSinceEpoch;
+                        context.push(
+                          RoutePaths.session,
+                          extra: {
+                            'protocolId': p.id,
+                            'protocol': p,
+                            'deviceIds': target.deviceIds,
+                            'transport': 'wifi',
+                            'sessionClockAnchorMs': sessionClockAnchorMs,
+                          },
+                        );
                         return;
                       }
 
@@ -299,19 +346,6 @@ class ProtocolDetailScreen extends ConsumerWidget {
                         return;
                       }
 
-                      // Immediately go to the Session timer UI (WiFi transport)
-                      // as soon as devices are selected.
-                      context.push(
-                        RoutePaths.session,
-                        extra: {
-                          'protocolId': p.id,
-                          'protocol': p,
-                          'deviceIds':
-                              selectedWifi.map((d) => d.macAddress).toList(),
-                          'transport': 'wifi',
-                        },
-                      );
-
                       try {
                         final dio = ref.read(djangoDioProvider);
 
@@ -341,9 +375,42 @@ class ProtocolDetailScreen extends ConsumerWidget {
                           'WiFi: MQTT publish failed '
                           '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
                         );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'WiFi publish failed: ${e.message ?? e.toString()}',
+                              ),
+                            ),
+                          );
+                        }
+                        return;
                       } catch (e) {
                         appLogger.e('WiFi: MQTT publish failed: $e');
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('WiFi publish failed: $e'),
+                            ),
+                          );
+                        }
+                        return;
                       }
+
+                      if (!context.mounted) return;
+                      final sessionClockAnchorMs =
+                          DateTime.now().millisecondsSinceEpoch;
+                      context.push(
+                        RoutePaths.session,
+                        extra: {
+                          'protocolId': p.id,
+                          'protocol': p,
+                          'deviceIds':
+                              selectedWifi.map((d) => d.macAddress).toList(),
+                          'transport': 'wifi',
+                          'sessionClockAnchorMs': sessionClockAnchorMs,
+                        },
+                      );
                     }
 
                     if (hasWifi && !hasBle) {
@@ -791,16 +858,35 @@ class _R extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
-        child:
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(l,
-              style: const TextStyle(
-                  fontSize: 13, color: ThemeConstants.textSecondary)),
-          Text(v,
-              style: const TextStyle(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 6,
+              child: Text(
+                l,
+                softWrap: true,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: ThemeConstants.textSecondary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 4,
+              child: Text(
+                v,
+                softWrap: true,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Colors.white)),
-        ]),
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
       );
 }
