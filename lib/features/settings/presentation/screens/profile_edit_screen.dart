@@ -151,21 +151,51 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             const SizedBox(height: 12),
 
             // ✅ DOB
-            TextFormField(
-              controller: dobController,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                hintText: 'Date of Birth',
-              ),
-            ),
+          TextFormField(
+  controller: dobController,
+  readOnly: true,
+  style: const TextStyle(color: Colors.white),
+  decoration: const InputDecoration(
+    hintText: 'Date of Birth',
+    prefixIcon: Icon(Icons.calendar_today, color: ThemeConstants.textTertiary, size: 20),
+  ),
+  onTap: () async {
+    DateTime initialDate;
+
+    // ✅ 1. Try to parse existing backend date
+    try {
+      initialDate = DateTime.parse(dobController.text);
+    } catch (e) {
+      initialDate = DateTime(2000); // fallback default
+    }
+
+    final pickedDate = await showDatePicker(
+      context: context,
+
+      // ✅ Start from existing DOB
+      initialDate: initialDate,
+
+      // ❌ No future dates allowed (today excluded)
+      lastDate: DateTime.now().subtract(const Duration(days: 1)),
+
+      // optional minimum age range
+      firstDate: DateTime(1900),
+    );
+
+    if (pickedDate != null) {
+      dobController.text =
+          "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+    }
+  },
+),
 
             const SizedBox(height: 24),
             // psw 
-            const Text('Password'),
-    TextFormField(
-      controller: passwordController,
-      obscureText: true,
-    ),
+    //         const Text('Password'),
+    // TextFormField(
+    //   controller: passwordController,
+    //   obscureText: true,
+    // ),
 
     const SizedBox(height: 24),
             // ✅ SAVE BUTTON

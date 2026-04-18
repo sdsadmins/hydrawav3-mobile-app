@@ -2,13 +2,13 @@ class ApiEndpoints {
   ApiEndpoints._();
 
 //   Auth
-static const String profileMe = "/api/v1/profile/me";
-static const String changePassword = "/api/v1/profile/me/password";
-static const String forgotPassword = "/api/v1/profile/me/forget-password";
+static const String profileMe = "/profile/me";
+static const String changePassword = "/profile/me/password";
+static const String forgotPassword = "/profile/me/forget-password";
 
 // /changed
 // static const String login = '/auth/login';
-static const String login = '/api/v1/auth/login';
+static const String login = '/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';

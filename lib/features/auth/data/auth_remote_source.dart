@@ -7,6 +7,7 @@ import '../../../core/network/dio_client.dart';
 import '../domain/auth_models.dart';
 
 final authRemoteSourceProvider = Provider<AuthRemoteSource>((ref) {
+
   return AuthRemoteSource(ref.read(djangoDioProvider));
 });
 
@@ -36,7 +37,7 @@ class AuthRemoteSource {
       // return UserProfile.fromJson(response.data);
       final data = response.data;
       print("GET PROFILE RESPONSE: ${response.data}");
-
+      //  appLogger.i("GET PROFILE RESPONSE: $data");r
 if (data is List) {
   return UserProfile.fromJson(data[0]); // ✅ FIX
 } else {

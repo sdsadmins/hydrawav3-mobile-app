@@ -90,7 +90,7 @@ class UserProfile {
     : json['organization']?.toString(),
         country: json['country'] as String?,
         state: json['state'] as String?,
-        dob: json['dob'] as String?,
+        dob: json['dateOfBirth'] as String?,
       );
 
   String get displayName {
