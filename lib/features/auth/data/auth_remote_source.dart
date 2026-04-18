@@ -51,6 +51,9 @@ if (data is List) {
     }
   }
 
+
+
+
 //   Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
 //   try {
 //     final response = await _dio.put(
@@ -114,6 +117,7 @@ Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
     );
   }
 }
+
 
 
 Future<List<Map<String, dynamic>>> getOrganizations() async {
