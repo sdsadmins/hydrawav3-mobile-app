@@ -7,7 +7,8 @@ static const String changePassword = "/api/v1/profile/me/password";
 static const String forgotPassword = "/api/v1/profile/me/forget-password";
 
 // /changed
-static const String login = '/auth/login';
+// static const String login = '/auth/login';
+static const String login = '/api/v1/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080';
   static const String nodeBaseUrl = 'http://127.0.0.1:5000/hydrawav/v1';

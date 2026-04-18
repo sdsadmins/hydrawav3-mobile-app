@@ -50,44 +50,63 @@ if (data is List) {
     }
   }
 
-  // Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
-  //   try {
-  //     final response = await _dio.put(
-  //       ApiEndpoints.profileMe,// "/api/v1/profile/me",
-  //       data: data,
-  //     );
-  //     return UserProfile.fromJson(response.data);
-  //   } on DioException catch (e) {
-  //     throw ServerException(
-  //       e.response?.data?['message'] ?? 'Failed to update profile',
-  //       statusCode: e.response?.statusCode,
-  //     );
-  //   }
-  //   print("UPDATE RESPONSE: ${response.data}");
-  // }
-  Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
+//   Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
+//   try {
+//     final response = await _dio.put(
+//       ApiEndpoints.profileMe,
+//       data: data,
+//     );
+
+//     print("UPDATE RESPONSE: ${response.data}"); // ✅ HERE
+
+//     final res = response.data;
+//     print("🔥 FULL RESPONSE: $res");
+
+//     if (res is List) {
+//       return UserProfile.fromJson(res[0]);
+//     } else if (res is Map<String, dynamic>) {
+//       return UserProfile.fromJson(res);
+//     } else {
+//       // Handle unexpected response format
+//       throw Exception("Unexpected response format:");
+//     }
+//         return await getProfile();
+
+//   } on DioException catch (e) {
+//     throw ServerException(
+//       e.response?.data?['message'] ?? 'Failed to update profile',
+//       statusCode: e.response?.statusCode,
+//     );
+//   }
+// }
+Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
   try {
     final response = await _dio.put(
       ApiEndpoints.profileMe,
       data: data,
     );
 
-    print("UPDATE RESPONSE: ${response.data}"); // ✅ HERE
+    print("UPDATE RESPONSE: ${response.data}");
 
     final res = response.data;
-    print("🔥 FULL RESPONSE: $res");
 
-    if (res is List) {
-      return UserProfile.fromJson(res[0]);
+    // ✅ Handle null or empty response (e.g., 204 No Content or 403)
+    if (res == null || res == '' || res == []) {
+      // Server returned no body — refetch the profile
+      return await getProfile();
+    }
+
+    if (res is List && res.isNotEmpty) {
+      return UserProfile.fromJson(res[0] as Map<String, dynamic>);
     } else if (res is Map<String, dynamic>) {
       return UserProfile.fromJson(res);
     } else {
-      // Handle unexpected response format
-      throw Exception("Unexpected response format:");
+      // Fallback: just refetch instead of crashing
+      return await getProfile();
     }
-        return await getProfile();
 
   } on DioException catch (e) {
+    print("DIO ERROR: ${e.response?.statusCode} - ${e.response?.data}");
     throw ServerException(
       e.response?.data?['message'] ?? 'Failed to update profile',
       statusCode: e.response?.statusCode,
