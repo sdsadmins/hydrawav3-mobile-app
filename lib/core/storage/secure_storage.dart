@@ -23,15 +23,22 @@ class SecureStorageService {
     required String accessToken,
     required String refreshToken,
   }) async {
+    print("SAVED TOKEN: $accessToken");
     await Future.wait([
       _storage.write(key: _accessTokenKey, value: accessToken),
       _storage.write(key: _refreshTokenKey, value: refreshToken),
     ]);
   }
+  
 
-  Future<String?> getAccessToken() =>
-      _storage.read(key: _accessTokenKey);
-
+  // Future<String?> getAccessToken() =>
+  //     _storage.read(key: _accessTokenKey);
+  //     print("GET TOKEN: $token");
+Future<String?> getAccessToken() async {
+  final token = await _storage.read(key: 'access_token');
+  print("GET TOKEN FROM STORAGE: $token"); // ✅ ADD
+  return token;
+}
   Future<String?> getRefreshToken() =>
       _storage.read(key: _refreshTokenKey);
 
