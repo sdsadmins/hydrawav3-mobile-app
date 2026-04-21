@@ -251,6 +251,7 @@ class SettingsScreen extends ConsumerWidget {
                     ],
                   ),
                 ),
+                const SizedBox(height: 20),
                 // Logout
                 AnimatedEntrance(
                     index: 6,
