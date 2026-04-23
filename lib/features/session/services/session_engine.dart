@@ -132,14 +132,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     required SessionTransport transport,
   }) {
     if (!_isActive) return;
-    final singleDeviceIds =
-        deviceIds.isEmpty ? const <String>[] : <String>[deviceIds.first];
+    final selectedDeviceIds = List<String>.from(deviceIds);
     state = state.copyWith(
-      deviceIds: singleDeviceIds,
+      deviceIds: selectedDeviceIds,
       transport: transport,
     );
     appLogger.i(
-      'Session: prepareSession(transport=$transport, deviceIds=$singleDeviceIds)',
+      'Session: prepareSession(transport=$transport, deviceIds=$selectedDeviceIds)',
     );
   }
 
@@ -159,14 +158,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i('  Total Duration: ${protocol.totalDurationSeconds}s');
     appLogger.i('═══════════════════════════════════════════════════');
 
-    final singleDeviceIds =
-        deviceIds.isEmpty ? const <String>[] : <String>[deviceIds.first];
+    final selectedDeviceIds = List<String>.from(deviceIds);
 
     try {
       state = SessionEngineState(
         status: SessionStatus.idle,
         protocol: protocol,
-        deviceIds: singleDeviceIds,
+        deviceIds: selectedDeviceIds,
         transport: transport,
         timer: TimerState(
           totalDuration: protocol.totalDuration,

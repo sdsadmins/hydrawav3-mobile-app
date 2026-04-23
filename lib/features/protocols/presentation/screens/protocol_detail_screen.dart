@@ -536,7 +536,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
     return null;
   }
 
-  String? selectedMac;
+  final Set<String> selectedMacs = <String>{};
   return showModalBottomSheet<List<DeviceInfo>>(
     context: context,
     isScrollControlled: true,
@@ -558,7 +558,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Select one WiFi device',
+                      'Select WiFi devices',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -580,11 +580,11 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                         itemBuilder: (ctx, i) {
                           final d = async[i];
                           final key = d.macAddress;
-                          final checked = selectedMac == key;
-                          return RadioListTile<String>(
-                            value: key,
-                            groupValue: selectedMac,
-                            activeColor: ThemeConstants.accent,
+                            final checked = selectedMacs.contains(key);
+                            return CheckboxListTile(
+                              value: checked,
+                              activeColor: ThemeConstants.accent,
+                              checkColor: Colors.white,
                             contentPadding: EdgeInsets.zero,
                             title: Text(
                               d.name,
@@ -600,11 +600,15 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                                 fontSize: 11,
                               ),
                             ),
-                            onChanged: (v) {
-                              setSheetState(() {
-                                selectedMac = v;
-                              });
-                            },
+                              onChanged: (v) {
+                                setSheetState(() {
+                                  if (v == true) {
+                                    selectedMacs.add(key);
+                                  } else {
+                                    selectedMacs.remove(key);
+                                  }
+                                });
+                              },
                           );
                         },
                       ),
@@ -613,15 +617,19 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: selectedMac == null
+                        onPressed: selectedMacs.isEmpty
                             ? null
                             : () {
                                 final picked = async
-                                    .where((d) => d.macAddress == selectedMac)
+                                    .where((d) => selectedMacs.contains(d.macAddress))
                                     .toList();
                                 Navigator.of(ctx).pop(picked);
                               },
-                        child: const Text('Send to selected device'),
+                        child: Text(
+                          selectedMacs.length <= 1
+                              ? 'Send to selected device'
+                              : 'Send to ${selectedMacs.length} devices',
+                        ),
                       ),
                     ),
                   ],
@@ -674,7 +682,7 @@ Future<List<String>?> _pickConnectedDevices(
   List<String> connectedIds,
   Protocol protocol,
 ) async {
-  String? selectedId = connectedIds.isNotEmpty ? connectedIds.first : null;
+  final Set<String> selectedIds = <String>{};
   return showModalBottomSheet<List<String>>(
     context: context,
     isScrollControlled: true,
@@ -696,7 +704,7 @@ Future<List<String>?> _pickConnectedDevices(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Select one connected device',
+                      'Select connected devices',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -705,7 +713,7 @@ Future<List<String>?> _pickConnectedDevices(
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      'Choose one device for this session.',
+                      'Choose one or more devices for this session.',
                       style: TextStyle(
                         fontSize: 13,
                         color: ThemeConstants.textSecondary,
@@ -718,11 +726,11 @@ Future<List<String>?> _pickConnectedDevices(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             ...connectedIds.map((id) {
-                              final checked = selectedId == id;
-                              return RadioListTile<String>(
-                                value: id,
-                                groupValue: selectedId,
+                              final checked = selectedIds.contains(id);
+                              return CheckboxListTile(
+                                value: checked,
                                 activeColor: ThemeConstants.accent,
+                                checkColor: Colors.white,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(
                                   id,
@@ -740,13 +748,17 @@ Future<List<String>?> _pickConnectedDevices(
                                 ),
                                 onChanged: (v) {
                                   setSheetState(() {
-                                    selectedId = v;
+                                    if (v == true) {
+                                      selectedIds.add(id);
+                                    } else {
+                                      selectedIds.remove(id);
+                                    }
                                   });
                                 },
                               );
                             }),
                             const SizedBox(height: 8),
-                            if (selectedId != null) ...[
+                            if (selectedIds.isNotEmpty) ...[
                               const Text(
                                 'Payload preview (first selected device):',
                                 style: TextStyle(
@@ -764,7 +776,7 @@ Future<List<String>?> _pickConnectedDevices(
                                 ),
                                 child: Consumer(
                                   builder: (context, ref, _) {
-                                    final selectedTransportId = selectedId!;
+                                    final selectedTransportId = selectedIds.first;
                                     final gatt = ref
                                         .read(bleRepositoryProvider)
                                         .getGattInfo(selectedTransportId);
@@ -801,10 +813,15 @@ Future<List<String>?> _pickConnectedDevices(
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: selectedId == null
+                        onPressed: selectedIds.isEmpty
                             ? null
-                            : () => Navigator.of(ctx).pop(<String>[selectedId!]),
-                        child: const Text('Start with selected device'),
+                            : () =>
+                                Navigator.of(ctx).pop(selectedIds.toList()),
+                        child: Text(
+                          selectedIds.length <= 1
+                              ? 'Start with selected device'
+                              : 'Start with ${selectedIds.length} devices',
+                        ),
                       ),
                     ),
                   ],
