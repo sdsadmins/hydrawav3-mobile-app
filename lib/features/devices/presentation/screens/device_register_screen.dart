@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/theme_constants.dart';
@@ -22,6 +23,11 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   final _searchCtrl = TextEditingController();
   String _searchText = '';
   bool _submitting = false;
+  bool _isAutoScan = true;
+  bool _isHydrawav3Only = true;
+  bool _isScanning = false;
+  List<ScanResult> _discoveredDevices = [];
+  String? _selectedDeviceMac;
 
   @override
   void dispose() {
@@ -78,97 +84,585 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     }
   }
 
+  Future<void> _startBleScan() async {
+    setState(() {
+      _isScanning = true;
+      _discoveredDevices.clear();
+    });
+
+    try {
+      // Check if Bluetooth is on
+      bool isOn = await FlutterBluePlus.isOn;
+      if (!isOn) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please enable Bluetooth')),
+          );
+        }
+        setState(() => _isScanning = false);
+        return;
+      }
+
+      // Start scanning
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+
+      // Listen to scan results
+      FlutterBluePlus.scanResults.listen((results) {
+        if (mounted) {
+          setState(() {
+            _discoveredDevices = results;
+          });
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Scan error: ${e.toString()}')),
+        );
+      }
+    } finally {
+      // Scan will auto stop after 15 seconds timeout
+      Future.delayed(const Duration(seconds: 16), () {
+        if (mounted) {
+          setState(() => _isScanning = false);
+        }
+      });
+    }
+  }
+
+  List<ScanResult> _getFilteredDevices() {
+    if (_isHydrawav3Only) {
+      return _discoveredDevices
+          .where((device) =>
+              device.advertisementData.localName
+                  .toLowerCase()
+                  .contains('hydrawav') ||
+              device.device.name.toLowerCase().contains('hydrawav'))
+          .toList();
+    }
+    return _discoveredDevices;
+  }
+
+  Widget _buildDeviceItem(ScanResult device) {
+    final deviceName = device.advertisementData.localName.isEmpty
+        ? device.device.name
+        : device.advertisementData.localName;
+    final macAddress = device.device.id.toString();
+    final isSelected = _selectedDeviceMac == macAddress;
+
+    return GestureDetector(
+      onTap: () {
+        _serialCtrl.text = macAddress;
+        if (_nameCtrl.text.trim().isEmpty) {
+          _nameCtrl.text = deviceName.isEmpty ? 'Device' : deviceName;
+        }
+        setState(() => _selectedDeviceMac = macAddress);
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? ThemeConstants.accent.withOpacity(0.2)
+              : Colors.white.withOpacity(0.05),
+          border: Border.all(
+            color: isSelected
+                ? ThemeConstants.accent
+                : Colors.white.withOpacity(0.1),
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.bluetooth_connected,
+              color: isSelected ? ThemeConstants.accent : Colors.white60,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    deviceName.isEmpty ? 'Unknown Device' : deviceName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    macAddress,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              Icon(Icons.check_circle,
+                  color: ThemeConstants.accent, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showCreateSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return Padding(
-          padding:
-              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-          child: SingleChildScrollView(
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: ThemeConstants.surface,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2)),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom),
+              child: SingleChildScrollView(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.surface,
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(20)),
                   ),
-                  const Text('Create new device',
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 16),
-                  Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextFormField(
-                          controller: _serialCtrl,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: 'Serial Number / MAC Address',
-                            prefixIcon: Icon(Icons.qr_code_rounded,
-                                color: ThemeConstants.textTertiary, size: 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Header with title and close button
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Expanded(
+                            child: Text('Register New Hardware',
+                                style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white),
+                                textAlign: TextAlign.center),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Required'
-                              : null,
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white),
+                            onPressed: () => Navigator.of(context).pop(),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      // Tab buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () =>
+                                  setModalState(() => _isAutoScan = true),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 12, horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: _isAutoScan
+                                      ? Colors.white
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: _isAutoScan
+                                        ? Colors.transparent
+                                        : Colors.white12,
+                                  ),
+                                ),
+                                child: Text('AUTO SCAN (BLE)',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: _isAutoScan
+                                            ? Colors.black
+                                            : Colors.white60),
+                                    textAlign: TextAlign.center),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () =>
+                                  setModalState(() => _isAutoScan = false),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 12, horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: !_isAutoScan
+                                      ? Colors.white
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: !_isAutoScan
+                                        ? Colors.transparent
+                                        : Colors.white12,
+                                  ),
+                                ),
+                                child: Text('MANUAL ENTRY',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: !_isAutoScan
+                                            ? Colors.black
+                                            : Colors.white60),
+                                    textAlign: TextAlign.center),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      // Content based on selected tab
+                      if (_isAutoScan) ...[
+                        // Filter buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: () => setModalState(
+                                    () => _isHydrawav3Only = true),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 10, horizontal: 12),
+                                  decoration: BoxDecoration(
+                                    color: _isHydrawav3Only
+                                        ? const Color(0xFF2A3F5F)
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: _isHydrawav3Only
+                                          ? const Color(0xFF2A3F5F)
+                                          : Colors.white12,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.shield_rounded,
+                                          size: 16,
+                                          color: _isHydrawav3Only
+                                              ? Colors.white
+                                              : Colors.white60),
+                                      const SizedBox(width: 6),
+                                      Text('Hydrawav3',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: _isHydrawav3Only
+                                                  ? Colors.white
+                                                  : Colors.white60),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: () => setModalState(
+                                    () => _isHydrawav3Only = false),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 10, horizontal: 12),
+                                  decoration: BoxDecoration(
+                                    color: !_isHydrawav3Only
+                                        ? const Color(0xFF2A3F5F)
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: !_isHydrawav3Only
+                                          ? const Color(0xFF2A3F5F)
+                                          : Colors.white12,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.signal_cellular_alt,
+                                          size: 16,
+                                          color: !_isHydrawav3Only
+                                              ? Colors.white
+                                              : Colors.white60),
+                                      const SizedBox(width: 6),
+                                      Text('All Devices',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color: !_isHydrawav3Only
+                                                  ? Colors.white
+                                                  : Colors.white60),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          controller: _nameCtrl,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            hintText: 'Device Name',
-                            prefixIcon: Icon(Icons.label_outline_rounded,
-                                color: ThemeConstants.textTertiary, size: 20),
+                        const SizedBox(height: 40),
+                        // BLE Discovery - Devices List or Discovery State
+                        if (_isScanning)
+                          const SizedBox(
+                            height: 200,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor:
+                                        AlwaysStoppedAnimation<Color>(
+                                            Colors.white),
+                                  ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    'Scanning for devices...',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else if (_getFilteredDevices().isEmpty)
+                          Center(
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 40),
+                              child: Column(
+                                children: [
+                                  Icon(Icons.bluetooth,
+                                      size: 60,
+                                      color: Colors.white.withOpacity(0.3)),
+                                  const SizedBox(height: 24),
+                                  const Text(
+                                    'NO DEVICES DETECTED IN IMMEDIATE RANGE.',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.white54,
+                                        fontWeight: FontWeight.w500),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else
+                          SizedBox(
+                            height: 240,
+                            child: SingleChildScrollView(
+                              child: Column(
+                                children: _getFilteredDevices()
+                                    .map((device) => _buildDeviceItem(device))
+                                    .toList(),
+                              ),
+                            ),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Required'
-                              : null,
+                        const SizedBox(height: 24),
+                        // Initialize Discovery button or Register button
+                        if (!_isScanning && _selectedDeviceMac != null)
+                          SizedBox(
+                            width: double.infinity,
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: () {
+                                if (_nameCtrl.text.trim().isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content:
+                                            Text('Please enter device name')),
+                                  );
+                                  return;
+                                }
+                                _registerDevice(context);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1F3A52),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16)),
+                              ),
+                              child: const Text('REGISTER ASSET',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white)),
+                            ),
+                          )
+                        else
+                          SizedBox(
+                            width: double.infinity,
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed:
+                                  _isScanning ? null : () => _startBleScan(),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1F3A52),
+                                disabledBackgroundColor: Colors.white12,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16)),
+                              ),
+                              child: Text('INITIALIZE DISCOVERY',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: _isScanning
+                                          ? Colors.white54
+                                          : Colors.white)),
+                            ),
+                          ),
+                      ] else ...[
+                        // Manual Entry Form
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 20),
+                          decoration: BoxDecoration(
+                            color: ThemeConstants.background.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'MANUAL ENTRY IS RESTRICTED TO VERIFIED CLINICAL MAC IDENTIFIERS ONLY.',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFFFF9500),
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 24),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 48,
-                          child: ElevatedButton(
-                            onPressed: _submitting
-                                ? null
-                                : () => _registerDevice(context),
-                            child: _submitting
-                                ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white))
-                                : const Text('Create device'),
+                        Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('HARDWARE FRIENDLY NAME',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.white54,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.3)),
+                              const SizedBox(height: 8),
+                              TextFormField(
+                                controller: _nameCtrl,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: 'e.g. Clinical_Sun_A',
+                                  hintStyle: const TextStyle(
+                                      color: Colors.white30, fontSize: 14),
+                                  filled: true,
+                                  fillColor: Colors.white.withOpacity(0.05),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withOpacity(0.1)),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withOpacity(0.1)),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 10),
+                                ),
+                                validator: (v) => (v == null || v.trim().isEmpty)
+                                    ? 'Required'
+                                    : null,
+                              ),
+                              const SizedBox(height: 20),
+                              const Text('MAC IDENTIFIER (XX:XX:XX:XX:XX:XX)',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.white54,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.3)),
+                              const SizedBox(height: 8),
+                              TextFormField(
+                                controller: _serialCtrl,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: '00:00:00:00:00:00',
+                                  hintStyle: const TextStyle(
+                                      color: Colors.white30, fontSize: 14),
+                                  filled: true,
+                                  fillColor: Colors.white.withOpacity(0.05),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withOpacity(0.1)),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withOpacity(0.1)),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 10),
+                                ),
+                                validator: (v) => (v == null || v.trim().isEmpty)
+                                    ? 'Required'
+                                    : null,
+                              ),
+                              const SizedBox(height: 24),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 48,
+                                child: ElevatedButton(
+                                  onPressed: _submitting
+                                      ? null
+                                      : () => _registerDevice(context),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF1F3A52),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(16)),
+                                  ),
+                                  child: _submitting
+                                      ? const SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white))
+                                      : const Text('REGISTER ASSET',
+                                          style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.white)),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
@@ -315,11 +809,6 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               ),
               const SizedBox(height: 24),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: ThemeConstants.surface,
-                  borderRadius: BorderRadius.circular(24),
-                ),
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (value) =>
