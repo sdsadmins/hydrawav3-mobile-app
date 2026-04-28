@@ -48,6 +48,17 @@ class SessionTargetNotifier extends StateNotifier<SessionTargetState> {
     );
   }
 
+  void ensureSelected(String deviceId) {
+    if (state.deviceIds.contains(deviceId)) return;
+    state = state.copyWith(deviceIds: [...state.deviceIds, deviceId]);
+  }
+
+  void ensureDeselected(String deviceId) {
+    if (!state.deviceIds.contains(deviceId)) return;
+    final updated = List<String>.from(state.deviceIds)..remove(deviceId);
+    state = state.copyWith(deviceIds: updated);
+  }
+
   void clear() => state = state.copyWith(deviceIds: const <String>[]);
 }
 

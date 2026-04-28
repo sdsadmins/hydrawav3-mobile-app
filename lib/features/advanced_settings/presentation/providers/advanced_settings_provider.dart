@@ -10,26 +10,35 @@ final advancedSettingsProvider =
 class AdvancedSettingsNotifier extends StateNotifier<AdvancedSettings> {
   AdvancedSettingsNotifier() : super(const AdvancedSettings());
 
-  void updateHotPwm(double value) =>
-      state = state.copyWith(hotPwm: value);
+  void setLights(bool value) => state = state.copyWith(lights: value);
 
-  void updateColdPwm(double value) =>
-      state = state.copyWith(coldPwm: value);
+  void setVibrationMode(String mode) =>
+      state = state.copyWith(vibrationMode: mode);
 
-  void updateVibMin(double value) =>
-      state = state.copyWith(vibMin: value);
+  void setVibrationSweepMin(double value) =>
+      state = state.copyWith(vibrationSweepMin: value);
+  void setVibrationSweepMax(double value) =>
+      state = state.copyWith(vibrationSweepMax: value);
+  void setVibrationSingleHz(double value) =>
+      state = state.copyWith(vibrationSingleHz: value);
 
-  void updateVibMax(double value) =>
-      state = state.copyWith(vibMax: value);
+  void setHotLevel(int level) => state = state.copyWith(hotLevel: level);
+  void setColdLevel(int level) => state = state.copyWith(coldLevel: level);
+  void setHotPack(bool value) => state = state.copyWith(hotPack: value);
+  void setColdPack(bool value) => state = state.copyWith(coldPack: value);
 
-  void updateLightIntensity(double value) =>
-      state = state.copyWith(lightIntensity: value);
+  void setHotDrop(double value) => state = state.copyWith(hotDrop: value);
+  void setColdDrop(double value) => state = state.copyWith(coldDrop: value);
 
-  void updateCyclePause(double value) =>
-      state = state.copyWith(customCyclePause: value);
+  void setCycle1(bool value) => state = state.copyWith(cycle1Initiation: value);
+  void setCycle5(bool value) => state = state.copyWith(cycle5Completion: value);
 
-  void toggleOverride(bool value) =>
-      state = state.copyWith(overrideProtocolDefaults: value);
+  void setStartDelay(int seconds) => state = state.copyWith(startDelay: seconds);
+  void setFlipSettings(bool value) =>
+      state = state.copyWith(flipSettings: value);
+
+  void setVibMin(double value) => state = state.copyWith(vibMin: value);
+  void setVibMax(double value) => state = state.copyWith(vibMax: value);
 
   void loadFromJson(String jsonStr) =>
       state = AdvancedSettings.decode(jsonStr);

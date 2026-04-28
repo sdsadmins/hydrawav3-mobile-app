@@ -65,13 +65,54 @@ class DeviceListScreen extends ConsumerWidget {
                                     color: ThemeConstants.textSecondary)),
                           ],
                         ),
-                        Row(children: [
-                          _HeaderBtn(
+                        Row(
+                          children: [
+                            if (target.deviceIds.isNotEmpty)
+                              GestureDetector(
+                                onTap: () => context.go(RoutePaths.protocols),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: ThemeConstants.accent,
+                                    borderRadius: BorderRadius.circular(999),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: ThemeConstants.accent
+                                            .withValues(alpha: 0.22),
+                                        blurRadius: 14,
+                                        offset: const Offset(0, 6),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.check_rounded,
+                                          size: 18, color: Colors.white),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Done',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(width: 10),
+                            _HeaderBtn(
                               icon: Icons.add_rounded,
                               filled: true,
                               onTap: () =>
-                                  context.push(RoutePaths.deviceRegister)),
-                        ]),
+                                  context.push(RoutePaths.deviceRegister),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -80,115 +121,71 @@ class DeviceListScreen extends ConsumerWidget {
             ),
           ),
 
-          // Transport toggle + continue button
+          // Transport segmented toggle (UI only)
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             sliver: SliverToBoxAdapter(
               child: AnimatedEntrance(
                 index: 0,
-                child: GradientCard(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Transport',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: ThemeConstants.textSecondary,
-                        ),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: ThemeConstants.border),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.20),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
                       ),
-                      const SizedBox(height: 8),
-                      ToggleButtons(
-                        isSelected: [
-                          target.transport == SessionTransport.wifi,
-                          target.transport == SessionTransport.ble,
-                        ],
-                        onPressed: (idx) {
-                          final transport = idx == 0
-                              ? SessionTransport.wifi
-                              : SessionTransport.ble;
-                          ref
-                              .read(sessionTargetProvider.notifier)
-                              .setTransport(transport);
-                          // Start scan automatically when Bluetooth is selected
-                          if (idx == 1) {
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _SegmentBtn(
+                          active: target.transport == SessionTransport.ble,
+                          icon: Icons.bluetooth_rounded,
+                          label: 'Bluetooth',
+                          onTap: () {
+                            ref
+                                .read(sessionTargetProvider.notifier)
+                                .setTransport(SessionTransport.ble);
                             Future.delayed(const Duration(milliseconds: 100),
                                 () {
                               ref.read(startScanProvider)();
                             });
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(12),
-                        selectedColor: Colors.white,
-                        fillColor:
-                            ThemeConstants.accent.withValues(alpha: 0.18),
-                        color: ThemeConstants.textSecondary,
-                        constraints: const BoxConstraints(minHeight: 42),
-                        children: const [
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 14),
-                            child: Row(
-                              children: [
-                                Icon(Icons.wifi_rounded, size: 18),
-                                SizedBox(width: 8),
-                                Text('WiFi'),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 14),
-                            child: Row(
-                              children: [
-                                Icon(Icons.bluetooth_rounded, size: 18),
-                                SizedBox(width: 8),
-                                Text('Bluetooth'),
-                              ],
-                            ),
-                          ),
-                        ],
+                          },
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Text(
-                            '${target.deviceIds.length} selected',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: ThemeConstants.textSecondary,
-                            ),
-                          ),
-                          const Spacer(),
-                          GestureDetector(
-                            onTap: target.deviceIds.isEmpty
-                                ? null
-                                : () => context.go(RoutePaths.protocols),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: target.deviceIds.isEmpty
-                                    ? ThemeConstants.surfaceVariant
-                                    : ThemeConstants.accent,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Text(
-                                'Continue to Protocols',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: _SegmentBtn(
+                          active: target.transport == SessionTransport.wifi,
+                          icon: Icons.wifi_rounded,
+                          label: 'Wi‑Fi',
+                          onTap: () => ref
+                              .read(sessionTargetProvider.notifier)
+                              .setTransport(SessionTransport.wifi),
+                        ),
                       ),
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+
+          // Scan button (BLE only)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            sliver: SliverToBoxAdapter(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _ScanButton(
+                  visible: target.transport == SessionTransport.ble,
+                  onTap: () => ref.read(startScanProvider)(),
                 ),
               ),
             ),
@@ -203,7 +200,7 @@ class DeviceListScreen extends ConsumerWidget {
               sliver: SliverToBoxAdapter(
                 child: AnimatedEntrance(
                   index: 0,
-                  child: SectionHeader(title: 'WiFi Devices'),
+                  child: const SectionHeader(title: 'Connected'),
                 ),
               ),
             ),
@@ -249,6 +246,89 @@ class DeviceListScreen extends ConsumerWidget {
                       ),
                     );
                   }
+                  final selected =
+                      list.where((d) => target.deviceIds.contains(d.macAddress));
+                  if (selected.isEmpty) {
+                    return const SliverToBoxAdapter(
+                      child: _EmptyDashed(
+                        icon: Icons.wifi_rounded,
+                        title: 'No devices connected',
+                        subtitle: 'Select a Wi‑Fi device below to continue',
+                      ),
+                    );
+                  }
+                  return SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (ctx, i) {
+                        final d = selected.elementAt(i);
+                        return AnimatedEntrance(
+                          index: i + 1,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _ConnectedGradientCard(
+                              typeIcon: Icons.wifi_rounded,
+                              typeLabel: 'Wi‑Fi',
+                              name: d.name,
+                              subtitle: 'SN: ${d.macAddress}',
+                              batteryText: '--',
+                              primaryActionLabel: 'Disconnect',
+                              onPrimaryAction: () => ref
+                                  .read(sessionTargetProvider.notifier)
+                                  .toggleDevice(d.macAddress),
+                            ),
+                          ),
+                        );
+                      },
+                      childCount: selected.length,
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: const SectionHeader(title: 'Available Wi‑Fi Devices'),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              sliver: wifiAsync.when(
+                loading: () => const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                error: (e, _) => SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'Failed to load WiFi devices: $e',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: ThemeConstants.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
+                data: (list) {
+                  if (list.isEmpty) {
+                    return const SliverToBoxAdapter(
+                      child: _EmptyDashed(
+                        icon: Icons.wifi_rounded,
+                        title: 'No devices found',
+                        subtitle: 'Make sure your device is turned on',
+                      ),
+                    );
+                  }
                   return SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (ctx, i) {
@@ -259,9 +339,14 @@ class DeviceListScreen extends ConsumerWidget {
                           index: i + 1,
                           child: Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: _WifiDeviceCard(
-                              device: d,
-                              selected: selected,
+                            child: _AvailableDeviceRow(
+                              icon: Icons.wifi_rounded,
+                              name: d.name,
+                              metaLeft: 'Strong',
+                              metaRight: d.firmware != null
+                                  ? 'v${d.firmware}'
+                                  : 'v—',
+                              buttonLabel: selected ? 'Selected' : 'Select',
                               onTap: () => ref
                                   .read(sessionTargetProvider.notifier)
                                   .toggleDevice(d.macAddress),
@@ -279,42 +364,6 @@ class DeviceListScreen extends ConsumerWidget {
 
           // === BLUETOOTH DEVICES SECTION (only when Bluetooth selected) ===
           if (target.transport == SessionTransport.ble) ...[
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              sliver: SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SectionHeader(title: 'Bluetooth Devices'),
-                    const SizedBox(height: 12),
-                    // Scan button - always visible
-                    GestureDetector(
-                      onTap: () => ref.read(startScanProvider)(),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        decoration: BoxDecoration(
-                          color: ThemeConstants.accent,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.bluetooth_searching_rounded,
-                                color: Colors.white, size: 18),
-                            SizedBox(width: 8),
-                            Text('Scan for Devices',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             // BLE Device List - Connected and Available
             pairedDevices.when(
               data: (devices) {
@@ -340,30 +389,31 @@ class DeviceListScreen extends ConsumerWidget {
                         const SectionHeader(title: 'Connected')
                       ],
                       ...connectedDevices.map((r) {
-                        final selected =
-                            target.deviceIds.contains(r.device.remoteId.str);
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: _ConnectedDeviceCard(
+                          child: _ConnectedGradientCard(
+                            typeIcon: Icons.bluetooth_rounded,
+                            typeLabel: 'BLE',
                             name: r.device.platformName.isNotEmpty
                                 ? r.device.platformName
                                 : 'Unknown Device',
-                            macAddress: r.device.remoteId.str,
-                            selected: selected,
-                            onSelect: () => ref
-                                .read(sessionTargetProvider.notifier)
-                                .toggleDevice(r.device.remoteId.str),
-                            onDisconnect: () async {
+                            subtitle: 'SN: ${r.device.remoteId.str}',
+                            batteryText: '--',
+                            primaryActionLabel: 'Disconnect',
+                            onPrimaryAction: () async {
                               await ref
                                   .read(bleRepositoryProvider)
                                   .disconnectDevice(r.device.remoteId.str);
+                              ref
+                                  .read(sessionTargetProvider.notifier)
+                                  .ensureDeselected(r.device.remoteId.str);
                             },
                           ),
                         );
                       }).toList(),
                       if (connectedDevices.isNotEmpty)
                         const SizedBox(height: 8),
-                      const SectionHeader(title: 'Available'),
+                      const SectionHeader(title: 'Available Bluetooth Devices'),
                       // Scan results
                       scanResults.when(
                         data: (list) {
@@ -374,7 +424,20 @@ class DeviceListScreen extends ConsumerWidget {
                           for (final r in sorted) {
                             byId.putIfAbsent(r.device.remoteId.str, () => r);
                           }
-                          final deduped = byId.values.toList();
+                          final connectedIdSet = connectedDevices
+                              .map((r) => r.device.remoteId.str)
+                              .toSet();
+                          final deduped = byId.values
+                              .where((r) =>
+                                  !connectedIdSet.contains(r.device.remoteId.str))
+                              .toList();
+                          if (deduped.isEmpty) {
+                            return const _EmptyDashed(
+                              icon: Icons.bluetooth_rounded,
+                              title: 'No devices found',
+                              subtitle: 'Make sure your device is turned on',
+                            );
+                          }
                           return Column(
                             children: deduped.asMap().entries.map((entry) {
                               final i = entry.key;
@@ -387,32 +450,38 @@ class DeviceListScreen extends ConsumerWidget {
                                 index: i + 1,
                                 child: Padding(
                                   padding: const EdgeInsets.only(bottom: 10),
-                                  child: _AvailableBleDeviceCard(
+                                  child: _AvailableDeviceRow(
+                                    icon: Icons.bluetooth_rounded,
                                     name: name,
-                                    id: id,
-                                    rssi: r.rssi,
-                                    onConnect: () async {
+                                    metaLeft: 'Strong',
+                                    metaRight: 'v—',
+                                    buttonLabel: 'Connect',
+                                    onTap: () async {
                                       final messenger =
                                           ScaffoldMessenger.of(context);
                                       final ok = await ref
                                           .read(bleRepositoryProvider)
                                           .connectDevice(r.device);
 
-                                      // CRITICAL FIX: Allow database stream and connection state
-                                      // stream to propagate before showing snackbar and allowing UI rebuild.
-                                      // Without this delay, the device appears connected but the card
-                                      // doesn't appear in the "Connected" section immediately.
                                       if (ok) {
                                         await Future<void>.delayed(
                                           const Duration(milliseconds: 150),
                                         );
+                                        ref
+                                            .read(
+                                              sessionTargetProvider.notifier,
+                                            )
+                                            .ensureSelected(id);
                                       }
 
                                       if (!context.mounted) return;
                                       messenger.showSnackBar(SnackBar(
-                                          content: Text(ok
+                                        content: Text(
+                                          ok
                                               ? 'Connected to $name'
-                                              : 'Failed to connect to $name')));
+                                              : 'Failed to connect to $name',
+                                        ),
+                                      ));
                                     },
                                   ),
                                 ),
@@ -473,136 +542,264 @@ class DeviceListScreen extends ConsumerWidget {
   }
 }
 
-class _ConnectedDeviceCard extends StatelessWidget {
-  final String name;
-  final String macAddress;
-  final bool selected;
-  final VoidCallback onSelect;
-  final VoidCallback onDisconnect;
+class _SegmentBtn extends StatelessWidget {
+  final bool active;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
 
-  const _ConnectedDeviceCard({
-    required this.name,
-    required this.macAddress,
-    required this.selected,
-    required this.onSelect,
-    required this.onDisconnect,
+  const _SegmentBtn({
+    required this.active,
+    required this.icon,
+    required this.label,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GradientCard(
-      onTap: null,
-      showGlow: true,
-      padding: const EdgeInsets.all(16),
+    return GestureDetector(
+      onTap: onTap,
       child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              ThemeConstants.accent.withValues(alpha: 0.9),
-              ThemeConstants.accent.withValues(alpha: 0.7)
-            ],
-          ),
-          borderRadius: BorderRadius.circular(14),
+          color: active ? ThemeConstants.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: active
+              ? [
+                  BoxShadow(
+                    color: ThemeConstants.accent.withValues(alpha: 0.22),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  )
+                ]
+              : null,
         ),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Row(
-              children: [
-                const GlowIconBox(
-                    icon: Icons.bluetooth_connected_rounded,
-                    color: Colors.white),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name,
-                          style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                      const SizedBox(height: 2),
-                      Text('Device ID: $macAddress',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white70)),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(6)),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                          width: 6,
-                          height: 6,
-                          child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle))),
-                      SizedBox(width: 6),
-                      Text('Connected',
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white)),
-                    ],
-                  ),
-                ),
-              ],
+            Icon(icon, size: 18, color: active ? Colors.white : ThemeConstants.textSecondary),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: active ? Colors.white : ThemeConstants.textSecondary,
+              ),
             ),
-            const SizedBox(height: 14),
-            Row(
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ScanButton extends ConsumerWidget {
+  final bool visible;
+  final VoidCallback onTap;
+  const _ScanButton({required this.visible, required this.onTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!visible) return const SizedBox.shrink();
+    final scanning = ref.watch(isScanningProvider);
+    return GestureDetector(
+      onTap: scanning ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: scanning
+                ? ThemeConstants.accent.withValues(alpha: 0.45)
+                : ThemeConstants.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.refresh_rounded,
+              size: 16,
+              color: scanning ? ThemeConstants.accent : ThemeConstants.textTertiary,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              scanning ? 'Scanning...' : 'Scan for Devices',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scanning ? ThemeConstants.accent : ThemeConstants.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectedGradientCard extends StatelessWidget {
+  final IconData typeIcon;
+  final String typeLabel;
+  final String name;
+  final String subtitle;
+  final String batteryText;
+  final String primaryActionLabel;
+  final VoidCallback onPrimaryAction;
+
+  const _ConnectedGradientCard({
+    required this.typeIcon,
+    required this.typeLabel,
+    required this.name,
+    required this.subtitle,
+    required this.batteryText,
+    required this.primaryActionLabel,
+    required this.onPrimaryAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [ThemeConstants.accent, Color(0xFFE09060)],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        boxShadow: [
+          BoxShadow(
+            color: ThemeConstants.accent.withValues(alpha: 0.30),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -8,
+              right: -8,
+              child: Icon(
+                typeIcon,
+                size: 96,
+                color: Colors.white.withValues(alpha: 0.10),
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: onSelect,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? Colors.white.withValues(alpha: 0.28)
-                            : Colors.white.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: selected
-                                ? Colors.white.withValues(alpha: 0.4)
-                                : Colors.white.withValues(alpha: 0.15)),
-                      ),
-                      child: Center(
-                          child: Text(selected ? 'Selected' : 'Select Device',
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white))),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: onDisconnect,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.15))),
-                    child: const Text('Disconnect',
-                        style: TextStyle(
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(typeIcon, size: 18, color: Colors.white),
+                        const SizedBox(width: 8),
+                        Text(
+                          typeLabel,
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: Colors.white)),
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.10),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.battery_full,
+                              size: 14, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            batteryText,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
                   ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.82),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: onPrimaryAction,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.10),
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              primaryActionLabel,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.10),
+                        ),
+                      ),
+                      child: const Icon(Icons.settings_rounded,
+                          color: Colors.white, size: 20),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -613,74 +810,175 @@ class _ConnectedDeviceCard extends StatelessWidget {
   }
 }
 
-class _AvailableBleDeviceCard extends StatelessWidget {
+class _AvailableDeviceRow extends StatelessWidget {
+  final IconData icon;
   final String name;
-  final String id;
-  final int rssi;
-  final VoidCallback onConnect;
+  final String metaLeft;
+  final String metaRight;
+  final String buttonLabel;
+  final VoidCallback onTap;
 
-  const _AvailableBleDeviceCard({
+  const _AvailableDeviceRow({
+    required this.icon,
     required this.name,
-    required this.id,
-    required this.rssi,
-    required this.onConnect,
+    required this.metaLeft,
+    required this.metaRight,
+    required this.buttonLabel,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GradientCard(
-      onTap: onConnect,
-      showGlow: false,
+    return Container(
       padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       child: Row(
         children: [
-          const GlowIconBox(
-              icon: Icons.bluetooth_rounded, color: ThemeConstants.accent),
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: ThemeConstants.surfaceVariant,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: ThemeConstants.border),
+            ),
+            child: Icon(icon, color: ThemeConstants.textSecondary, size: 20),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(name,
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white)),
-                const SizedBox(height: 4),
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 6),
                 Row(
                   children: [
-                    Text(id,
-                        style: const TextStyle(
-                            fontSize: 12, color: ThemeConstants.textTertiary)),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                          color: ThemeConstants.surfaceVariant,
-                          borderRadius: BorderRadius.circular(4)),
-                      child: Text('RSSI $rssi',
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.network_wifi_rounded,
+                            size: 14, color: Colors.greenAccent),
+                        const SizedBox(width: 4),
+                        Text(
+                          metaLeft,
                           style: const TextStyle(
-                              fontSize: 10,
-                              color: ThemeConstants.textSecondary)),
+                            fontSize: 11,
+                            color: ThemeConstants.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('•',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: ThemeConstants.textTertiary)),
+                    const SizedBox(width: 8),
+                    Text(
+                      metaRight,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: ThemeConstants.textSecondary,
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-                color: ThemeConstants.accent,
-                borderRadius: BorderRadius.circular(10)),
-            child: const Text('Connect',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white)),
+          const SizedBox(width: 10),
+          GestureDetector(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: ThemeConstants.surfaceVariant,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: ThemeConstants.border),
+              ),
+              child: Text(
+                buttonLabel,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+            ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EmptyDashed extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _EmptyDashed({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 22),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surfaceVariant.withValues(alpha: 0.25),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: ThemeConstants.border.withValues(alpha: 0.8),
+            style: BorderStyle.solid,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 44, color: ThemeConstants.textTertiary),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: ThemeConstants.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12,
+                color: ThemeConstants.textTertiary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -729,65 +1027,14 @@ class _WifiDeviceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GradientCard(
+    // Kept for backward compatibility (no longer used in new UI).
+    return _AvailableDeviceRow(
+      icon: Icons.wifi_rounded,
+      name: device.name,
+      metaLeft: 'Strong',
+      metaRight: device.firmware != null ? 'v${device.firmware}' : 'v—',
+      buttonLabel: selected ? 'Selected' : 'Select',
       onTap: onTap,
-      showGlow: selected,
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          GlowIconBox(
-            icon: Icons.wifi_rounded,
-            color:
-                selected ? ThemeConstants.accent : ThemeConstants.textSecondary,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  device.name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  device.macAddress,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: selected
-                  ? ThemeConstants.accent.withValues(alpha: 0.16)
-                  : ThemeConstants.surfaceVariant,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: selected
-                    ? ThemeConstants.accent.withValues(alpha: 0.35)
-                    : ThemeConstants.border,
-              ),
-            ),
-            child: Text(
-              selected ? 'Selected' : 'Select',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: selected ? ThemeConstants.accent : Colors.white,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

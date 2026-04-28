@@ -10,6 +10,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
 import '../../ble/services/ble_connector.dart';
+import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../protocols/domain/protocol_model.dart';
 import '../domain/session_model.dart';
 
@@ -24,6 +25,8 @@ class SessionEngineState {
   final Protocol? protocol;
   final List<String> deviceIds;
   final SessionTransport transport;
+  final AdvancedSettings advancedSettings;
+  final String? delayedDeviceId;
   final String? error;
 
   const SessionEngineState({
@@ -32,6 +35,8 @@ class SessionEngineState {
     this.protocol,
     this.deviceIds = const [],
     this.transport = SessionTransport.ble,
+    this.advancedSettings = const AdvancedSettings(),
+    this.delayedDeviceId,
     this.error,
   });
 
@@ -41,6 +46,8 @@ class SessionEngineState {
     Protocol? protocol,
     List<String>? deviceIds,
     SessionTransport? transport,
+    AdvancedSettings? advancedSettings,
+    String? delayedDeviceId,
     String? error,
   }) {
     return SessionEngineState(
@@ -49,6 +56,8 @@ class SessionEngineState {
       protocol: protocol ?? this.protocol,
       deviceIds: deviceIds ?? this.deviceIds,
       transport: transport ?? this.transport,
+      advancedSettings: advancedSettings ?? this.advancedSettings,
+      delayedDeviceId: delayedDeviceId ?? this.delayedDeviceId,
       error: error,
     );
   }
@@ -95,6 +104,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       mac,
       utf8.encode(payloadFrame),
     );
+  }
+
+  Future<bool> _sendPlayCommand(String mac) async {
+    final connector = _ref.read(bleConnectorProvider);
+    final ok = await connector.writeToDevice(mac, [0x01]);
+    appLogger.i('Session: BLE raw PLAY attempt 1/1 for $mac → $ok');
+    return ok;
   }
 
   Future<void> _publishWifiPlayCmd(int playCmd) async {
@@ -146,6 +162,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     Protocol protocol,
     List<String> deviceIds, {
     SessionTransport transport = SessionTransport.ble,
+    AdvancedSettings advancedSettings = const AdvancedSettings(),
+    String? delayedDeviceId,
   }) {
     if (!_isActive) return; // Guard against updates after disposal
 
@@ -155,7 +173,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i('  Transport: $transport');
     appLogger.i('  Devices: $deviceIds');
     appLogger.i('  Cycles: ${protocol.cycles.length}');
-    appLogger.i('  Total Duration: ${protocol.totalDurationSeconds}s');
+    final computedTotalDurationSeconds = _computeFirmwareTotalDurationSeconds(
+      protocol,
+      advancedSettings,
+    );
+    appLogger.i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
+    appLogger.i(
+      '  Advanced: cycle1=${advancedSettings.cycle1Initiation}, '
+      'cycle5=${advancedSettings.cycle5Completion}, '
+      'led=${advancedSettings.lights}, '
+      'vibrationMode=${advancedSettings.vibrationMode}, '
+      'vibMin=${advancedSettings.vibMin}, vibMax=${advancedSettings.vibMax}, '
+      'sweepMin=${advancedSettings.vibrationSweepMin}, '
+      'sweepMax=${advancedSettings.vibrationSweepMax}, '
+      'singleHz=${advancedSettings.vibrationSingleHz}, '
+      'flip=${advancedSettings.flipSettings}',
+    );
     appLogger.i('═══════════════════════════════════════════════════');
 
     final selectedDeviceIds = List<String>.from(deviceIds);
@@ -166,8 +199,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         protocol: protocol,
         deviceIds: selectedDeviceIds,
         transport: transport,
+        advancedSettings: advancedSettings,
+        delayedDeviceId: delayedDeviceId,
         timer: TimerState(
-          totalDuration: protocol.totalDuration,
+          totalDuration: Duration(seconds: computedTotalDurationSeconds),
           totalCycles: protocol.cycles.length,
           lastVisualCycleIndex: protocol.cycles.isNotEmpty ? 0 : -1,
         ),
@@ -376,6 +411,23 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
       appLogger.i("✅ PAYLOAD SUCCESS FOR $mac");
 
+      // Give firmware a chance to acknowledge that it has parsed/applied
+      // the JSON config before we send PLAY. This keeps the web payload shape
+      // but makes the BLE start handshake more reliable on slower devices.
+      final connector = _ref.read(bleConnectorProvider);
+      final gotConfigAck = await connector.waitForConfigAck(
+        mac,
+        timeout: const Duration(milliseconds: 1800),
+      );
+      if (gotConfigAck) {
+        appLogger.i('Session: firmware config ACK observed for $mac');
+      } else {
+        appLogger.w(
+          'Session: no firmware config ACK for $mac, continuing after settle delay',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
+
       // Mirror web flow exactly for firmware compatibility:
       // config JSON -> fixed wait -> raw PLAY control byte.
       final prePlayDelay = const Duration(milliseconds: 2500);
@@ -388,7 +440,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await Future<void>.delayed(prePlayDelay);
       appLogger.i('Session: Sending raw PLAY command (0x01) to $mac');
       final playAnchor = DateTime.now();
-      final okRawPlay = await connector.writeToDevice(mac, [0x01]);
+      final okRawPlay = await _sendPlayCommand(mac);
       appLogger.i(
         'Session: BLE raw PLAY command result for $mac → $okRawPlay',
       );
@@ -462,36 +514,152 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     Protocol p, {
     required String transportId,
   }) {
+    final advancedSettings = state.advancedSettings;
+    final applyDelay = advancedSettings.startDelay > 0;
+    return _protocolToRs35Payload(
+      p,
+      mac: transportId,
+      advancedSettings: advancedSettings,
+      applyStartDelay: applyDelay,
+    );
+  }
+
+  Map<String, dynamic> _protocolToRs35Payload(
+    Protocol p, {
+    required String mac,
+    required AdvancedSettings advancedSettings,
+    required bool applyStartDelay,
+  }) {
     final cycles = p.cycles;
+
+    // Intensity mapping from web sender (0–11).
+    const hotMap = <int, int>{
+      0: 0,
+      1: 50,
+      2: 55,
+      3: 60,
+      4: 65,
+      5: 70,
+      6: 75,
+      7: 80,
+      8: 85,
+      9: 90,
+      10: 95,
+      11: 100,
+    };
+    const coldMap = <int, int>{
+      0: 0,
+      1: 150,
+      2: 160,
+      3: 170,
+      4: 180,
+      5: 190,
+      6: 200,
+      7: 210,
+      8: 220,
+      9: 230,
+      10: 240,
+      11: 250,
+    };
+
+    List<String> leftFuncs = cycles.map((c) => c.leftFunction).toList();
+    List<String> rightFuncs = cycles.map((c) => c.rightFunction).toList();
+
+    if (advancedSettings.flipSettings) {
+      String flip(String fn) {
+        if (fn.contains('HotRed')) return fn.replaceAll('HotRed', 'ColdBlue');
+        if (fn.contains('ColdBlue')) return fn.replaceAll('ColdBlue', 'HotRed');
+        return fn;
+      }
+
+      leftFuncs = leftFuncs.map(flip).toList();
+      rightFuncs = rightFuncs.map(flip).toList();
+    }
+
+    final hotPwm = hotMap[advancedSettings.hotLevel.clamp(0, 11)] ?? 70;
+    final coldPwm = coldMap[advancedSettings.coldLevel.clamp(0, 11)] ?? 190;
+    final pwmHot = advancedSettings.hotPack
+        ? cycles.map((_) => hotPwm).toList()
+        : cycles.map((c) => c.hotPwm.toInt()).toList();
+    final pwmCold = advancedSettings.coldPack
+        ? cycles.map((_) => coldPwm).toList()
+        : cycles.map((c) => c.coldPwm.toInt()).toList();
+
+    final vibMode = advancedSettings.vibrationMode;
+    final vibMin = switch (vibMode) {
+      'Off' => 0,
+      'Single' => advancedSettings.vibrationSingleHz.clamp(10, 230).toInt(),
+      'Sweep' => advancedSettings.vibrationSweepMin.toInt(),
+      _ => advancedSettings.vibMin.toInt(),
+    };
+    final vibMax = switch (vibMode) {
+      'Off' => 0,
+      'Single' => (advancedSettings.vibrationSingleHz.clamp(10, 230).toInt() + 10),
+      'Sweep' => advancedSettings.vibrationSweepMax.toInt(),
+      _ => advancedSettings.vibMax.toInt(),
+    };
+    final totalDuration =
+        _computeFirmwareTotalDurationSeconds(p, advancedSettings);
+
     return {
-      // Match WiFi payload field order (device firmware expects this order)
-      // In BLE mode web treats mac as optional/ignored by firmware.
-      'mac': '',
+      'mac': mac,
       'sessionCount': p.sessions,
       'sessionPause': p.sessionPause.toInt(),
-      'sDelay': 0,
-      'cycle1': p.cycle1 ? 1 : 0,
-      'cycle5': p.cycle5 ? 1 : 0,
+      'sDelay': applyStartDelay ? advancedSettings.startDelay : 0,
+      'cycle1': advancedSettings.cycle1Initiation ? 1 : 0,
+      'cycle5': advancedSettings.cycle5Completion ? 1 : 0,
       'edgeCycleDuration': p.edgecycleduration.toInt(),
       'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
       'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
-      // Web maps pause_seconds -> cyclePauses and cycle_pause -> pauseIntervals.
       'cyclePauses': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
       'pauseIntervals': cycles.map((c) => c.cyclePause.toInt()).toList(),
-      'leftFuncs': cycles.map((c) => c.leftFunction).toList(),
-      'rightFuncs': cycles.map((c) => c.rightFunction).toList(),
+      'leftFuncs': leftFuncs,
+      'rightFuncs': rightFuncs,
       'pwmValues': {
-        'hot': cycles.map((c) => c.hotPwm.toInt()).toList(),
-        'cold': cycles.map((c) => c.coldPwm.toInt()).toList(),
+        'hot': pwmHot,
+        'cold': pwmCold,
       },
       'playCmd': 1,
-      'led': 1,
-      'hotDrop': p.hotdrop.toInt(),
-      'coldDrop': p.colddrop.toInt(),
-      'vibMin': p.vibmin.toInt(),
-      'vibMax': p.vibmax.toInt(),
-      'totalDuration': p.totalDurationSeconds,
+      'led': advancedSettings.lights ? 1 : 0,
+      'hotDrop': advancedSettings.hotDrop.toInt(),
+      'coldDrop': advancedSettings.coldDrop.toInt(),
+      'vibMin': vibMin,
+      'vibMax': vibMax,
+      'totalDuration': totalDuration,
     };
+  }
+
+  int _computeFirmwareTotalDurationSeconds(
+    Protocol p,
+    AdvancedSettings advancedSettings,
+  ) {
+    final cycles = p.cycles;
+    if (cycles.length < 3) return p.totalDurationSeconds;
+
+    // Match web calculateFirmwareTotalDuration behavior.
+    final c2 = cycles[0];
+    final c3 = cycles[1];
+    final c4 = cycles[2];
+    int baseTimeline =
+        (c2.repetitions * ((c2.durationSeconds + c2.pauseSeconds).toInt())) +
+            c2.cyclePause.toInt() +
+            (c3.repetitions * ((c3.durationSeconds + c3.pauseSeconds).toInt())) +
+            c3.cyclePause.toInt() +
+            (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
+
+    if (p.sessions > 1) {
+      baseTimeline =
+          (baseTimeline * p.sessions) + (p.sessionPause.toInt() * (p.sessions - 1));
+    }
+
+    if (advancedSettings.cycle1Initiation) {
+      baseTimeline += p.edgecycleduration.toInt() + 30;
+    }
+    if (advancedSettings.cycle5Completion) {
+      baseTimeline += p.edgecycleduration.toInt() + 30;
+    }
+
+    return baseTimeline;
   }
 
   Future<void> pause() async {
@@ -586,7 +754,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _stopwatch.stop();
     _timer?.cancel();
     if (!_isActive) return;
-    state = state.copyWith(status: SessionStatus.stopped);
+    try {
+      state = state.copyWith(status: SessionStatus.stopped);
+    } catch (e) {
+      appLogger.d('Session: stop() state update ignored (notifier disposed)');
+    }
   }
 
   SessionRecord? getSessionRecord({
@@ -617,7 +789,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _startInProgress = false;
     _cycleIndex = -1;
     _repetition = 0;
-    state = const SessionEngineState();
+    try {
+      state = const SessionEngineState();
+    } catch (e) {
+      appLogger.d('Session: reset() state update ignored (notifier disposed)');
+    }
   }
 
   void _onTick(Timer timer) {
@@ -639,14 +815,23 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       _stopwatch.stop();
       if (!_isActive) return;
-      state = state.copyWith(
-        status: SessionStatus.stopped,
-        error: 'Session timer tick ignored — protocol is missing',
-      );
+      try {
+        state = state.copyWith(
+          status: SessionStatus.stopped,
+          error: 'Session timer tick ignored — protocol is missing',
+        );
+      } catch (e) {
+        appLogger.d(
+          'Session: protocol-missing tick state update ignored (notifier disposed)',
+        );
+      }
       return;
     }
 
-    if (elapsed >= protocol.totalDuration) {
+    // Use the same advanced-settings-aware duration that drives the UI timer.
+    // Using protocol.totalDuration can stop BLE early when cycle toggles/delay
+    // extend runtime beyond the template baseline.
+    if (elapsed >= state.timer.totalDuration) {
       _completeSession();
       return;
     }
@@ -756,14 +941,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     // Finally, update UI state
     if (!_isActive) return;
-    state = state.copyWith(
-      status: SessionStatus.completed,
-      timer: state.timer.copyWith(
-        elapsed: state.timer.totalDuration,
-        isRunning: false,
-      ),
-    );
-    appLogger.i('✅ SESSION COMPLETED: UI state updated, device stopped');
+    try {
+      state = state.copyWith(
+        status: SessionStatus.completed,
+        timer: state.timer.copyWith(
+          elapsed: state.timer.totalDuration,
+          isRunning: false,
+        ),
+      );
+      appLogger.i('✅ SESSION COMPLETED: UI state updated, device stopped');
+    } catch (e) {
+      appLogger.d(
+        'Session: completeSession state update ignored (notifier disposed)',
+      );
+    }
   }
 
   @override

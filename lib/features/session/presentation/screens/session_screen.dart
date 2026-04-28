@@ -11,6 +11,7 @@ import '../../../../core/network/dio_client.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../services/session_engine.dart';
@@ -27,6 +28,9 @@ class SessionScreen extends ConsumerStatefulWidget {
   /// Epoch ms when WiFi MQTT config last succeeded — aligns app timer with device.
   final int? sessionClockAnchorMs;
 
+  final AdvancedSettings advancedSettings;
+  final String? delayedDeviceId;
+
   const SessionScreen({
     super.key,
     required this.protocolId,
@@ -34,6 +38,8 @@ class SessionScreen extends ConsumerStatefulWidget {
     required this.deviceIds,
     this.transport = 'ble',
     this.sessionClockAnchorMs,
+    this.advancedSettings = const AdvancedSettings(),
+    this.delayedDeviceId,
   });
 
   @override
@@ -41,8 +47,8 @@ class SessionScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionScreenState extends ConsumerState<SessionScreen> {
-  bool _loadedOnce = false;
-  ProviderSubscription? _protocolSub;
+  bool _bootstrapStarted = false;
+  ProviderSubscription<SessionEngineState>? _engineSub;
 
   /// Backend pad labels from Node `GET sessions/active/:org` (Hydrawav3-Server).
   String? _backendMoon;
@@ -53,12 +59,34 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   void initState() {
     super.initState();
 
+    _engineSub = ref.listenManual<SessionEngineState>(
+      sessionEngineProvider,
+      (prev, next) {
+        if (!mounted) return;
+        final prevS = prev?.status;
+        final nextS = next.status;
+        final nowActive = nextS == SessionStatus.running ||
+            nextS == SessionStatus.paused;
+        final wasActive = prevS == SessionStatus.running ||
+            prevS == SessionStatus.paused;
+        if (nowActive && !wasActive) {
+          _startBackendPadPolling();
+        } else if (!nowActive && wasActive) {
+          // Avoid setState while route is being popped/unmounted.
+          _stopBackendPadPolling(fromDispose: true);
+        }
+      },
+    );
+
     Future<void> bootstrap() async {
       if (!mounted) return;
+      if (_bootstrapStarted) return;
+      _bootstrapStarted = true;
 
       final ctrl = ref.read(sessionEngineProvider.notifier);
 
       try {
+        if (!mounted) return;
         ctrl.prepareSession(
           deviceIds: widget.deviceIds,
           transport: widget.transport == 'wifi'
@@ -66,10 +94,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               : SessionTransport.ble,
         );
 
-        final Protocol protocol = widget.protocol ??
-            await ref.read(
-              protocolDetailProvider(widget.protocolId).future,
-            );
+        final Protocol protocol;
+        if (widget.protocol != null) {
+          protocol = widget.protocol!;
+        } else {
+          protocol = await ref.read(
+            protocolDetailProvider(widget.protocolId).future,
+          );
+        }
 
         if (!mounted) return;
 
@@ -79,6 +111,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           transport: widget.transport == 'wifi'
               ? SessionTransport.wifi
               : SessionTransport.ble,
+          advancedSettings: widget.advancedSettings,
+          delayedDeviceId: widget.delayedDeviceId,
         );
 
         if (!mounted) return;
@@ -104,8 +138,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   @override
   void dispose() {
-    _stopBackendPadPolling();
-    _protocolSub?.close();
+    _stopBackendPadPolling(fromDispose: true);
+    _engineSub?.close();
     // ⚠️ DO NOT use ref in dispose() - widget is already unmounted
     // Session engine cleanup happens automatically
     super.dispose();
@@ -161,10 +195,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         }
 
         if (!mounted) return;
-        setState(() {
-          _backendMoon = moon;
-          _backendSun = sun;
-        });
+        // Keep this update passive to avoid defunct setState races during
+        // route transitions; pads are a visual hint only.
+        _backendMoon = moon;
+        _backendSun = sun;
       } catch (e, st) {
         appLogger.d('Session pad poll: $e\n$st');
       }
@@ -174,36 +208,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _padPollTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
   }
 
-  void _stopBackendPadPolling() {
+  void _stopBackendPadPolling({bool fromDispose = false}) {
     _padPollTimer?.cancel();
     _padPollTimer = null;
-    if (mounted) {
-      setState(() {
-        _backendMoon = null;
-        _backendSun = null;
-      });
-    } else {
-      _backendMoon = null;
-      _backendSun = null;
-    }
+    _backendMoon = null;
+    _backendSun = null;
   }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<SessionEngineState>(sessionEngineProvider, (prev, next) {
-      final prevS = prev?.status;
-      final nextS = next.status;
-      final nowActive = nextS == SessionStatus.running ||
-          nextS == SessionStatus.paused;
-      final wasActive = prevS == SessionStatus.running ||
-          prevS == SessionStatus.paused;
-      if (nowActive && !wasActive) {
-        _startBackendPadPolling();
-      } else if (!nowActive && wasActive) {
-        _stopBackendPadPolling();
-      }
-    });
-
     final engine = ref.watch(
         sessionEngineProvider); // ✅ FIX: WATCH instead of READ so UI rebuilds on state changes
     final protocolAsync = widget.protocol != null

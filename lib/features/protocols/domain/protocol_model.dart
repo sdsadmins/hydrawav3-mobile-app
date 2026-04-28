@@ -50,7 +50,12 @@ class Protocol {
       vibmax: (data['vibmax'] as num?)?.toDouble() ?? 0,
       cycle1: data['cycle1'] as bool? ?? false,
       cycle5: data['cycle5'] as bool? ?? false,
-      edgecycleduration: (data['edgecycleduration'] as num?)?.toDouble() ?? 0,
+      // Backend/web have used multiple spellings over time.
+      // Web code also checks `edgeCycleDuration ?? edgecycleduration`.
+      edgecycleduration: (data['edgeCycleDuration'] as num?)?.toDouble() ??
+          (data['edge_cycle_duration'] as num?)?.toDouble() ??
+          (data['edgecycleduration'] as num?)?.toDouble() ??
+          0,
       sessionPause: (data['session_pause'] as num?)?.toDouble() ?? 0,
       description: data['description'] as String? ?? '',
       deviceId: _parseDeviceId(data),

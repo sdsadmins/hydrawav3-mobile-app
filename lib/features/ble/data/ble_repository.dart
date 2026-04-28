@@ -50,6 +50,8 @@ class BleRepository {
 
   Stream<BleNotification> get notifications => _connector.notifications;
 
+  Stream<Map<String, int>> get batteryLevels => _connector.batteryLevels;
+
   Future<bool> connectDevice(BluetoothDevice device) async {
     // Avoid scan activity while connecting. Some stacks/plugin behavior can
     // be timing-sensitive, and we don't need scan during connection.

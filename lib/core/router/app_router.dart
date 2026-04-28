@@ -14,6 +14,7 @@ import '../../features/history/presentation/screens/session_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
+import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
 import '../../features/settings/presentation/screens/change_password_screen.dart';
 import '../../features/settings/presentation/screens/profile_edit_screen.dart';
@@ -94,12 +95,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         final sessionClockAnchorMs = anchorRaw is int
             ? anchorRaw
             : (anchorRaw is num ? anchorRaw.toInt() : null);
+        final advancedSettings =
+            extra?['advancedSettings'] as AdvancedSettings? ?? const AdvancedSettings();
+        final delayedDeviceId = extra?['delayedDeviceId'] as String?;
         return SessionScreen(
           protocolId: extra?['protocolId'] as String? ?? '',
           protocol: extra?['protocol'] as Protocol?,
           deviceIds: extra?['deviceIds'] as List<String>? ?? [],
           transport: extra?['transport'] as String? ?? 'ble',
           sessionClockAnchorMs: sessionClockAnchorMs,
+          advancedSettings: advancedSettings,
+          delayedDeviceId: delayedDeviceId,
         );
       }),
       GoRoute(path: RoutePaths.deviceRegister, name: RouteNames.deviceRegister, builder: (c, s) => const DeviceRegisterScreen()),
@@ -138,7 +144,7 @@ class _AppShell extends StatelessWidget {
             height: 60,
             child: Row(
               children: [
-                _NavTab(icon: Icons.science_outlined, activeIcon: Icons.science_rounded, label: 'Protocols', active: idx == 0, onTap: () => context.go(RoutePaths.protocols)),
+                _NavTab(icon: Icons.home_outlined, activeIcon: Icons.home_rounded, label: 'Home', active: idx == 0, onTap: () => context.go(RoutePaths.protocols)),
                 _NavTab(icon: Icons.bluetooth_outlined, activeIcon: Icons.bluetooth_connected_rounded, label: 'Devices', active: idx == 1, onTap: () => context.go(RoutePaths.devices)),
                 _NavTab(icon: Icons.history_outlined, activeIcon: Icons.history_rounded, label: 'History', active: idx == 2, onTap: () => context.go(RoutePaths.history)),
                 _NavTab(icon: Icons.settings_outlined, activeIcon: Icons.settings_rounded, label: 'Settings', active: idx == 3, onTap: () => context.go(RoutePaths.settings)),

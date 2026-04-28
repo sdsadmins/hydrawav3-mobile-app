@@ -35,6 +35,7 @@ class BleConnector {
   final Map<String, BluetoothDevice> _connectedDevices = {};
   final Map<String, StreamSubscription> _connectionSubs = {};
   final Map<String, StreamSubscription> _notifySubs = {};
+  final Map<String, StreamSubscription> _batterySubs = {};
   final Map<String, BluetoothCharacteristic> _controlCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _jsonCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _writeCharacteristics = {};
@@ -43,7 +44,9 @@ class BleConnector {
   final _stateController =
       StreamController<Map<String, BleConnectionStatus>>.broadcast();
   final _notificationController = StreamController<BleNotification>.broadcast();
+  final _batteryController = StreamController<Map<String, int>>.broadcast();
   final Map<String, BleConnectionStatus> _deviceStates = {};
+  final Map<String, int> _batteryLevels = {};
   final Map<String, int> _reconnectAttempts = {};
   final Set<String> _manualDisconnects = {};
   final Map<String, Future<bool>> _connectInFlight = {};
@@ -53,6 +56,8 @@ class BleConnector {
       _stateController.stream;
 
   Stream<BleNotification> get notifications => _notificationController.stream;
+
+  Stream<Map<String, int>> get batteryLevels => _batteryController.stream;
 
   Map<String, BleConnectionStatus> get currentStates =>
       Map.unmodifiable(_deviceStates);
@@ -179,6 +184,10 @@ class BleConnector {
       final services = await device.discoverServices();
       appLogger.i("🔥 SERVICES COUNT = ${services.length}");
 
+      // Best-effort: read/subscribe standard Battery Level (0x180F / 0x2A19)
+      // so UI can show % next to connected devices.
+      await _setupBatteryLevel(deviceId, services);
+
       // In practice, some Android stacks / plugins may turn on notifications for
       // Bluetooth SIG system characteristics (e.g. Service Changed 0x2A05)
       // during connect / CCCD setup.
@@ -230,6 +239,10 @@ class BleConnector {
           _notifyCharacteristics.remove(deviceId);
           _notifySubs[deviceId]?.cancel();
           _notifySubs.remove(deviceId);
+          _batterySubs[deviceId]?.cancel();
+          _batterySubs.remove(deviceId);
+          _batteryLevels.remove(deviceId);
+          _batteryController.add(Map.from(_batteryLevels));
           _connectedDevices.remove(deviceId);
           _gattInfoByDevice.remove(deviceId);
           _firmwareSessionIdByDevice.remove(deviceId);
@@ -354,6 +367,8 @@ class BleConnector {
       _connectionSubs.remove(deviceId);
       await _notifySubs[deviceId]?.cancel();
       _notifySubs.remove(deviceId);
+      await _batterySubs[deviceId]?.cancel();
+      _batterySubs.remove(deviceId);
       await device.disconnect();
       _connectedDevices.remove(deviceId);
       _controlCharacteristics.remove(deviceId);
@@ -362,6 +377,8 @@ class BleConnector {
       _notifyCharacteristics.remove(deviceId);
       _gattInfoByDevice.remove(deviceId);
       _firmwareSessionIdByDevice.remove(deviceId);
+      _batteryLevels.remove(deviceId);
+      _batteryController.add(Map.from(_batteryLevels));
       _updateState(deviceId, BleConnectionStatus.disconnected);
       appLogger.i('BLE: Disconnected from $deviceId');
     }
@@ -419,6 +436,7 @@ class BleConnector {
     List<int> data,
     BluetoothCharacteristic? characteristic, {
     required String channelName,
+    bool? withoutResponse,
   }) async {
     if (characteristic == null) {
       appLogger.e('BLE: No $channelName characteristic for $deviceId');
@@ -433,16 +451,18 @@ class BleConnector {
     try {
       // Match web BLE sender pacing/chunking as closely as possible.
       const chunkSize = 180;
+      final effectiveWithoutResponse = withoutResponse ??
+          (characteristic.properties.writeWithoutResponse &&
+              !characteristic.properties.write);
 
       for (int i = 0; i < data.length; i += chunkSize) {
         final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
 
         final chunk = data.sublist(i, end);
 
-        // 🔥 FORCE RELIABLE MODE (WITH RESPONSE - device doesn't support no-response)
         await characteristic.write(
           chunk,
-          withoutResponse: false,
+          withoutResponse: effectiveWithoutResponse,
         );
 
         // Match web delay between chunks
@@ -464,11 +484,15 @@ class BleConnector {
   /// Write control bytes (PLAY/PAUSE/STOP/RESUME) to control characteristic.
   Future<bool> writeToDevice(String deviceId, List<int> data) async {
     final control = _controlCharacteristics[deviceId] ?? _writeCharacteristics[deviceId];
+    final preferWithoutResponse =
+        (control?.properties.writeWithoutResponse ?? false) &&
+            data.length <= 20;
     return _writeInChunks(
       deviceId,
       data,
       control,
       channelName: 'control',
+      withoutResponse: preferWithoutResponse ? true : null,
     );
   }
 
@@ -764,7 +788,77 @@ class BleConnector {
     for (final sub in _notifySubs.values) {
       sub.cancel();
     }
+    for (final sub in _batterySubs.values) {
+      sub.cancel();
+    }
     _stateController.close();
     _notificationController.close();
+    _batteryController.close();
+  }
+}
+
+extension on BleConnector {
+  static const String _batteryServiceUuid16 = '180f';
+  static const String _batteryLevelCharUuid16 = '2a19';
+
+  String _norm(String uuid) => uuid.toLowerCase().replaceAll('-', '');
+
+  Future<void> _setupBatteryLevel(
+    String deviceId,
+    List<BluetoothService> services,
+  ) async {
+    try {
+      BluetoothCharacteristic? batteryChar;
+
+      for (final s in services) {
+        final su = _norm(s.uuid.str);
+        if (!su.endsWith(_batteryServiceUuid16)) continue;
+        for (final c in s.characteristics) {
+          final cu = _norm(c.uuid.str);
+          if (cu.endsWith(_batteryLevelCharUuid16)) {
+            batteryChar = c;
+            break;
+          }
+        }
+        if (batteryChar != null) break;
+      }
+
+      if (batteryChar == null) return;
+
+      Future<void> setLevelFrom(List<int> v) async {
+        if (v.isEmpty) return;
+        final level = v.first.clamp(0, 100);
+        _batteryLevels[deviceId] = level;
+        _batteryController.add(Map.from(_batteryLevels));
+      }
+
+      // Initial read (best-effort)
+      if (batteryChar.properties.read) {
+        try {
+          final v = await batteryChar.read();
+          await setLevelFrom(v);
+        } catch (_) {
+          // Ignore read failure
+        }
+      }
+
+      // Subscribe if notifiable/indicatable
+      final canNotify =
+          batteryChar.properties.notify || batteryChar.properties.indicate;
+      if (!canNotify) return;
+
+      try {
+        await batteryChar.setNotifyValue(true);
+      } catch (_) {
+        // Ignore CCCD issues
+      }
+
+      await _batterySubs[deviceId]?.cancel();
+      _batterySubs[deviceId] = batteryChar.onValueReceived.listen((v) {
+        setLevelFrom(v);
+      });
+    } catch (_) {
+      // Best-effort only
+    }
   }
 }

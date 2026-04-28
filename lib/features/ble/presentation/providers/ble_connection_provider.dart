@@ -8,6 +8,10 @@ final bleConnectionStatesProvider =
   return ref.read(bleRepositoryProvider).connectionStates;
 });
 
+final bleBatteryLevelsProvider = StreamProvider<Map<String, int>>((ref) {
+  return ref.read(bleRepositoryProvider).batteryLevels;
+});
+
 final connectedDeviceIdsProvider = Provider<List<String>>((ref) {
   return ref.read(bleRepositoryProvider).connectedDeviceIds;
 });
