@@ -97,6 +97,17 @@ final routerProvider = Provider<GoRouter>((ref) {
             : (anchorRaw is num ? anchorRaw.toInt() : null);
         final advancedSettings =
             extra?['advancedSettings'] as AdvancedSettings? ?? const AdvancedSettings();
+        final advancedSettingsByDeviceRaw =
+            extra?['advancedSettingsByDevice'] as Map?;
+        final advancedSettingsByDevice = <String, AdvancedSettings>{};
+        if (advancedSettingsByDeviceRaw != null) {
+          for (final entry in advancedSettingsByDeviceRaw.entries) {
+            final key = entry.key?.toString();
+            final value = entry.value;
+            if (key == null || value is! AdvancedSettings) continue;
+            advancedSettingsByDevice[key] = value;
+          }
+        }
         final delayedDeviceId = extra?['delayedDeviceId'] as String?;
         return SessionScreen(
           protocolId: extra?['protocolId'] as String? ?? '',
@@ -105,6 +116,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           transport: extra?['transport'] as String? ?? 'ble',
           sessionClockAnchorMs: sessionClockAnchorMs,
           advancedSettings: advancedSettings,
+          advancedSettingsByDevice: advancedSettingsByDevice,
           delayedDeviceId: delayedDeviceId,
         );
       }),

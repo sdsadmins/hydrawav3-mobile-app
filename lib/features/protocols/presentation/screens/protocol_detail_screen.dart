@@ -40,6 +40,8 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
   bool _showAdvanced = false;
   bool _showSavePreset = false;
   AdvancedSettings _settings = const AdvancedSettings();
+  final Map<String, AdvancedSettings> _settingsByDevice = {};
+  String? _activeSettingsDeviceId;
   String? _delayedDeviceId;
   String? _seededProtocolId;
 
@@ -111,6 +113,8 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
       startDelay: 0,
       flipSettings: false,
     );
+    _settingsByDevice.clear();
+    _activeSettingsDeviceId = null;
     _delayedDeviceId = null;
     _seededProtocolId = p.id;
   }
@@ -138,6 +142,25 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
             onRetry: () =>
                 ref.invalidate(protocolDetailProvider(widget.protocolId))),
         data: (p) {
+          final selectedTargetIds = target.deviceIds;
+          if (selectedTargetIds.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              var changed = false;
+              for (final id in selectedTargetIds) {
+                if (!_settingsByDevice.containsKey(id)) {
+                  _settingsByDevice[id] = _settings;
+                  changed = true;
+                }
+              }
+              if (_activeSettingsDeviceId == null ||
+                  !selectedTargetIds.contains(_activeSettingsDeviceId)) {
+                _activeSettingsDeviceId = selectedTargetIds.first;
+                changed = true;
+              }
+              if (changed) setState(() {});
+            });
+          }
           if (_seededProtocolId != p.id) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
@@ -315,18 +338,85 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                           ? const SizedBox.shrink()
                           : Padding(
                               padding: const EdgeInsets.only(top: 14),
-                              child: _AdvancedSettingsPanel(
-                                protocolId: p.id,
-                                selectedDeviceIds: target.deviceIds,
-                                settings: _settings,
-                                delayedDeviceId: _delayedDeviceId,
-                                showSavePreset: _showSavePreset,
-                                onChangeSettings: (s) =>
-                                    setState(() => _settings = s),
-                                onToggleSavePreset: () => setState(() =>
-                                    _showSavePreset = !_showSavePreset),
-                                onChangeDelayedDeviceId: (id) => setState(
-                                    () => _delayedDeviceId = id),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (target.deviceIds.length > 1) ...[
+                                    const Text(
+                                      'Editing Settings For Device',
+                                      style: TextStyle(
+                                        color: ThemeConstants.textSecondary,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: target.deviceIds.map((id) {
+                                        final active = id == _activeSettingsDeviceId;
+                                        return InkWell(
+                                          onTap: () => setState(
+                                            () => _activeSettingsDeviceId = id,
+                                          ),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: active
+                                                  ? ThemeConstants.accent
+                                                      .withValues(alpha: 0.18)
+                                                  : ThemeConstants.surfaceVariant,
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              border: Border.all(
+                                                color: active
+                                                    ? ThemeConstants.accent
+                                                    : ThemeConstants.border,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              id,
+                                              style: TextStyle(
+                                                color: active
+                                                    ? ThemeConstants.accent
+                                                    : ThemeConstants.textSecondary,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      }).toList(),
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  _AdvancedSettingsPanel(
+                                    protocolId: p.id,
+                                    selectedDeviceIds: target.deviceIds,
+                                    settings: _activeSettingsDeviceId != null
+                                        ? (_settingsByDevice[_activeSettingsDeviceId!] ??
+                                            _settings)
+                                        : _settings,
+                                    delayedDeviceId: _delayedDeviceId,
+                                    showSavePreset: _showSavePreset,
+                                    onChangeSettings: (s) => setState(() {
+                                      _settings = s;
+                                      if (_activeSettingsDeviceId != null) {
+                                        _settingsByDevice[_activeSettingsDeviceId!] = s;
+                                      }
+                                    }),
+                                    onToggleSavePreset: () => setState(
+                                      () => _showSavePreset = !_showSavePreset,
+                                    ),
+                                    onChangeDelayedDeviceId: (id) => setState(
+                                      () => _delayedDeviceId = id,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                     ),
@@ -411,12 +501,14 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         try {
                           final dio = ref.read(djangoDioProvider);
                           for (final mac in target.deviceIds) {
+                            final perDeviceSettings =
+                                _settingsByDevice[mac] ?? _settings;
                             final payloadObj =
                                 _protocolToWifiPayload(
                               p,
                               mac: mac,
-                              advancedSettings: _settings,
-                              applyStartDelay: _settings.startDelay > 0,
+                              advancedSettings: perDeviceSettings,
+                              applyStartDelay: perDeviceSettings.startDelay > 0,
                             );
                             final payloadStr = jsonEncode(payloadObj);
                             appLogger.i(
@@ -453,6 +545,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                             'transport': 'wifi',
                             'sessionClockAnchorMs': sessionClockAnchorMs,
                             'advancedSettings': _settings,
+                            'advancedSettingsByDevice': {
+                              for (final id in target.deviceIds)
+                                id: _settingsByDevice[id] ?? _settings,
+                            },
                             'delayedDeviceId': _delayedDeviceId,
                           },
                         );
@@ -497,6 +593,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                           'deviceIds': target.deviceIds,
                           'transport': 'ble',
                           'advancedSettings': _settings,
+                          'advancedSettingsByDevice': {
+                            for (final id in target.deviceIds)
+                              id: _settingsByDevice[id] ?? _settings,
+                          },
                           'delayedDeviceId': _delayedDeviceId,
                         },
                       );
@@ -573,6 +673,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                           'deviceIds': selected,
                           'transport': 'ble',
                           'advancedSettings': _settings,
+                          'advancedSettingsByDevice': {
+                            for (final id in selected)
+                              id: _settingsByDevice[id] ?? _settings,
+                          },
                           'delayedDeviceId': _delayedDeviceId,
                         },
                       );
@@ -593,12 +697,14 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         // So we publish one request per device:
                         // { topic: "...", payload: "{\"mac\":\"...\", ...}" }
                         for (final d in selectedWifi) {
+                          final perDeviceSettings =
+                              _settingsByDevice[d.macAddress] ?? _settings;
                           final payloadObj =
                               _protocolToWifiPayload(
                             p,
                             mac: d.macAddress,
-                            advancedSettings: _settings,
-                            applyStartDelay: _settings.startDelay > 0,
+                            advancedSettings: perDeviceSettings,
+                            applyStartDelay: perDeviceSettings.startDelay > 0,
                           );
                           final payloadStr = jsonEncode(payloadObj);
                           appLogger.i(
@@ -655,6 +761,11 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                           'transport': 'wifi',
                           'sessionClockAnchorMs': sessionClockAnchorMs,
                           'advancedSettings': _settings,
+                          'advancedSettingsByDevice': {
+                            for (final id
+                                in selectedWifi.map((d) => d.macAddress))
+                              id: _settingsByDevice[id] ?? _settings,
+                          },
                           'delayedDeviceId': _delayedDeviceId,
                         },
                       );

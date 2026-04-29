@@ -26,6 +26,9 @@ class SessionEngineState {
   final List<String> deviceIds;
   final SessionTransport transport;
   final AdvancedSettings advancedSettings;
+  final Map<String, AdvancedSettings> advancedSettingsByDevice;
+  final Map<String, TimerState> deviceTimers;
+  final Map<String, SessionStatus> deviceStatuses;
   final String? delayedDeviceId;
   final String? error;
 
@@ -36,6 +39,9 @@ class SessionEngineState {
     this.deviceIds = const [],
     this.transport = SessionTransport.ble,
     this.advancedSettings = const AdvancedSettings(),
+    this.advancedSettingsByDevice = const {},
+    this.deviceTimers = const {},
+    this.deviceStatuses = const {},
     this.delayedDeviceId,
     this.error,
   });
@@ -47,6 +53,9 @@ class SessionEngineState {
     List<String>? deviceIds,
     SessionTransport? transport,
     AdvancedSettings? advancedSettings,
+    Map<String, AdvancedSettings>? advancedSettingsByDevice,
+    Map<String, TimerState>? deviceTimers,
+    Map<String, SessionStatus>? deviceStatuses,
     String? delayedDeviceId,
     String? error,
   }) {
@@ -57,6 +66,10 @@ class SessionEngineState {
       deviceIds: deviceIds ?? this.deviceIds,
       transport: transport ?? this.transport,
       advancedSettings: advancedSettings ?? this.advancedSettings,
+      advancedSettingsByDevice:
+          advancedSettingsByDevice ?? this.advancedSettingsByDevice,
+      deviceTimers: deviceTimers ?? this.deviceTimers,
+      deviceStatuses: deviceStatuses ?? this.deviceStatuses,
       delayedDeviceId: delayedDeviceId ?? this.delayedDeviceId,
       error: error,
     );
@@ -70,15 +83,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Duration _sessionClockOffset = Duration.zero;
   DateTime? _firstBlePlayAnchor;
   bool _startInProgress = false;
+  final Map<String, Stopwatch> _deviceStopwatches = {};
   int _cycleIndex = 0;
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
+  Future<void> _stateUpdateQueue = Future.value();
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
   static const int _bleStopByte = 0x03;
   static const String _debugLightProtocolId = 'light-on';
 
   SessionEngine(this._ref) : super(const SessionEngineState());
+
+  Future<void> _enqueueStateUpdate(void Function() fn) {
+    _stateUpdateQueue = _stateUpdateQueue.then((_) async {
+      if (!_isActive) return;
+      fn();
+    });
+    return _stateUpdateQueue;
+  }
 
   /// Adds [DateTime.now() - anchor] to the running timer so UI matches hardware
   /// when navigation / setup finishes after the device already started.
@@ -141,6 +164,32 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
   }
 
+  Future<void> _publishWifiPlayCmdToMac(String mac, int playCmd) async {
+    if (mac.isEmpty) return;
+    try {
+      final dio = _ref.read(djangoDioProvider);
+      final payloadStr = jsonEncode({'mac': mac, 'playCmd': playCmd});
+      appLogger.i(
+        'WiFi: Publishing playCmd=$playCmd (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
+      );
+      await dio.post(
+        ApiEndpoints.mqttPublish,
+        data: {
+          'topic': 'HydraWav3Pro/config',
+          'payload': payloadStr,
+        },
+      );
+    } on DioException catch (e) {
+      appLogger.e(
+        'WiFi: playCmd publish failed (cmd=$playCmd, mac=$mac, status=${e.response?.statusCode}, message=${e.message})',
+      );
+    } catch (e) {
+      appLogger.e(
+        'WiFi: playCmd publish failed (cmd=$playCmd, mac=$mac): $e',
+      );
+    }
+  }
+
   /// Set transport/devices before protocol loads.
   /// This prevents accidental BLE-start attempts while protocol is still loading.
   void prepareSession({
@@ -163,6 +212,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     List<String> deviceIds, {
     SessionTransport transport = SessionTransport.ble,
     AdvancedSettings advancedSettings = const AdvancedSettings(),
+    Map<String, AdvancedSettings>? advancedSettingsByDevice,
     String? delayedDeviceId,
   }) {
     if (!_isActive) return; // Guard against updates after disposal
@@ -173,6 +223,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i('  Transport: $transport');
     appLogger.i('  Devices: $deviceIds');
     appLogger.i('  Cycles: ${protocol.cycles.length}');
+    final settingsByDevice = <String, AdvancedSettings>{
+      for (final id in deviceIds)
+        id: advancedSettingsByDevice?[id] ?? advancedSettings,
+    };
     final computedTotalDurationSeconds = _computeFirmwareTotalDurationSeconds(
       protocol,
       advancedSettings,
@@ -192,6 +246,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i('═══════════════════════════════════════════════════');
 
     final selectedDeviceIds = List<String>.from(deviceIds);
+    final deviceTimers = <String, TimerState>{
+      for (final id in selectedDeviceIds)
+        id: TimerState(
+          totalDuration: Duration(
+            seconds: _computeFirmwareTotalDurationSeconds(
+              protocol,
+              settingsByDevice[id] ?? advancedSettings,
+            ),
+          ),
+          totalCycles: protocol.cycles.length,
+          lastVisualCycleIndex: protocol.cycles.isNotEmpty ? 0 : -1,
+        ),
+    };
+    final deviceStatuses = <String, SessionStatus>{
+      for (final id in selectedDeviceIds) id: SessionStatus.idle,
+    };
 
     try {
       state = SessionEngineState(
@@ -200,6 +270,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         deviceIds: selectedDeviceIds,
         transport: transport,
         advancedSettings: advancedSettings,
+        advancedSettingsByDevice: settingsByDevice,
+        deviceTimers: deviceTimers,
+        deviceStatuses: deviceStatuses,
         delayedDeviceId: delayedDeviceId,
         timer: TimerState(
           totalDuration: Duration(seconds: computedTotalDurationSeconds),
@@ -216,6 +289,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _sessionClockOffset = Duration.zero;
     _firstBlePlayAnchor = null;
     _startInProgress = false;
+    _deviceStopwatches
+      ..clear()
+      ..addEntries(selectedDeviceIds.map((e) => MapEntry(e, Stopwatch())));
   }
 
   Future<void> start() async {
@@ -250,6 +326,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       if (state.transport == SessionTransport.wifi) {
         appLogger.i(
           'Session: Starting WiFi session timer (devices=${state.deviceIds.length})',
+        );
+        final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+        for (final id in state.deviceIds) {
+          statuses[id] = SessionStatus.running;
+          _deviceStopwatches[id]?.start();
+        }
+        state = state.copyWith(
+          deviceStatuses: statuses,
+          status: _deriveOverallStatus(statuses),
         );
         _beginRuntimeTimer();
         return;
@@ -360,128 +445,137 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       // so elapsed time tracks physical device runtime.
       appLogger.i('Session: Starting BLE send sequence (timer starts after PLAY)');
 
-      // Send protocol JSON to each connected device over BLE (RS232 bridge).
-      final failed = <String>[];
-      final bool singleBleDevice = actuallyConnectedIds.length == 1;
-      var bleTimerStarted = false;
+      // Send protocol JSON to all connected devices over BLE (RS232 bridge)
+      // first, then do ONE common delay, then send PLAY to all devices together.
+      // This matches the web start flow and avoids per-device timing skew.
       _firstBlePlayAnchor = null;
-      for (final mac in actuallyConnectedIds) {
-      final legacyShape = _protocolToRs232Json(
-        protocol,
-        transportId: mac,
-      );
-      if (protocol.cycles.isNotEmpty) {
-        final c0 = protocol.cycles.first;
-        appLogger.i(
-          'Session: protocol first-cycle '
-          '(dur=${c0.durationSeconds}, rep=${c0.repetitions}, hot=${c0.hotPwm}, cold=${c0.coldPwm}, left=${c0.leftFunction}, right=${c0.rightFunction})',
-        );
-      }
 
-      // Keep BLE payload identical to the web sender:
-      // flattened RS35 fields (sessionCount/cycleRepetitions/pwmValues/...).
-      final protocolFrame = jsonEncode(legacyShape);
+      final failed = <String>[];
 
-      // Log the EXACT request we are sending over BLE.
-      // Escape newlines/carriage returns so framing is visible in logs.
-      final escapedFrame =
-          protocolFrame.replaceAll('\r', r'\r').replaceAll('\n', r'\n');
-      appLogger.i(
-        'Session: BLE request (device=$mac, mac field=$mac): '
-        '$escapedFrame',
-      );
+      // STEP 1: payload to all devices (concurrently)
+      final payloadResults = await Future.wait(
+        actuallyConnectedIds.map((mac) async {
+          final legacyShape = _protocolToRs232Json(
+            protocol,
+            transportId: mac,
+          );
 
-      appLogger.i(
-        'Session: Sending protocol to $mac '
-        '(mac key=$mac, ${protocolFrame.length} bytes, shape=web-rs35-flat)',
-      );
-      appLogger.i('📱 BLE Payload Details for $mac:');
-      appLogger.i('   - cycles: ${protocol.cycles.length}');
-      appLogger.i('   - total duration: ${protocol.totalDurationSeconds}s');
-      appLogger.i('   - payload size: ${protocolFrame.length} bytes');
-      appLogger.i("🔥 CALLING BLE PAYLOAD NOW");
-      final okProtocol = await _sendLargePayload(mac, protocolFrame);
-      appLogger
-          .i("🔥 BLE PAYLOAD RESULT: okProtocol=$okProtocol for device=$mac");
+          if (protocol.cycles.isNotEmpty) {
+            final c0 = protocol.cycles.first;
+            appLogger.i(
+              'Session: protocol first-cycle '
+              '(dur=${c0.durationSeconds}, rep=${c0.repetitions}, hot=${c0.hotPwm}, cold=${c0.coldPwm}, left=${c0.leftFunction}, right=${c0.rightFunction})',
+            );
+          }
 
-      if (!okProtocol) {
-        appLogger.e("🔥 PAYLOAD FAILED FOR $mac - ADDING TO FAILED LIST");
-        failed.add(mac);
-        continue;
-      }
-      appLogger.i("✅ PAYLOAD SUCCESS FOR $mac");
+          final protocolFrame = jsonEncode(legacyShape);
+          final escapedFrame =
+              protocolFrame.replaceAll('\r', r'\r').replaceAll('\n', r'\n');
+          appLogger.i(
+            'Session: BLE request (device=$mac, mac field=$mac): '
+            '$escapedFrame',
+          );
 
-      // Give firmware a chance to acknowledge that it has parsed/applied
-      // the JSON config before we send PLAY. This keeps the web payload shape
-      // but makes the BLE start handshake more reliable on slower devices.
-      final connector = _ref.read(bleConnectorProvider);
-      final gotConfigAck = await connector.waitForConfigAck(
-        mac,
-        timeout: const Duration(milliseconds: 1800),
-      );
-      if (gotConfigAck) {
-        appLogger.i('Session: firmware config ACK observed for $mac');
-      } else {
-        appLogger.w(
-          'Session: no firmware config ACK for $mac, continuing after settle delay',
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 700));
-      }
+          appLogger.i(
+            'Session: Sending protocol to $mac '
+            '(mac key=$mac, ${protocolFrame.length} bytes, shape=web-rs35-flat)',
+          );
+          appLogger.i('📱 BLE Payload Details for $mac:');
+          appLogger.i('   - cycles: ${protocol.cycles.length}');
+          appLogger.i(
+              '   - total duration: ${protocol.totalDurationSeconds}s');
+          appLogger.i('   - payload size: ${protocolFrame.length} bytes');
+          appLogger.i("🔥 CALLING BLE PAYLOAD NOW");
 
-      // Mirror web flow exactly for firmware compatibility:
-      // config JSON -> fixed wait -> raw PLAY control byte.
-      final prePlayDelay = const Duration(milliseconds: 2500);
-      appLogger.i(
-        'Session: web-parity pre-PLAY delay=${prePlayDelay.inMilliseconds}ms for $mac',
+          final okProtocol = await _sendLargePayload(mac, protocolFrame);
+          appLogger.i(
+            "🔥 BLE PAYLOAD RESULT: okProtocol=$okProtocol for device=$mac",
+          );
+
+          return MapEntry(mac, okProtocol);
+        }),
       );
 
-      // The firmware expects a separate raw PLAY trigger after the JSON config
-      // has been written. This mirrors the JS flow: config → wait → 0x01.
-      await Future<void>.delayed(prePlayDelay);
-      appLogger.i('Session: Sending raw PLAY command (0x01) to $mac');
-      final playAnchor = DateTime.now();
-      final okRawPlay = await _sendPlayCommand(mac);
-      appLogger.i(
-        'Session: BLE raw PLAY command result for $mac → $okRawPlay',
-      );
-      if (okRawPlay) {
-        _firstBlePlayAnchor ??= playAnchor;
-      }
-      if (!okRawPlay) {
-        failed.add(mac);
-      } else if (singleBleDevice) {
-        // Single-device: start UI clock as soon as PLAY succeeds; offset
-        // catches BLE write latency so elapsed tracks the machine.
-        bleTimerStarted = true;
-        if (_firstBlePlayAnchor != null) {
-          applySessionClockOffsetFromWallAnchor(_firstBlePlayAnchor!);
-        }
-        _beginRuntimeTimer();
-      }
+      final payloadSucceeded = payloadResults
+          .where((e) => e.value == true)
+          .map((e) => e.key)
+          .toList();
+      final payloadFailed = payloadResults
+          .where((e) => e.value == false)
+          .map((e) => e.key)
+          .toList();
 
-      await Future<void>.delayed(
-          const Duration(milliseconds: 300)); // Gap between devices
-      }
-
+      failed.addAll(payloadFailed);
       if (failed.isNotEmpty) {
+        // Abort start if any device never received config.
         _stopwatch.stop();
         _timer?.cancel();
         _timer = null;
         if (!_isActive) return;
         state = state.copyWith(
           status: SessionStatus.stopped,
-          error: 'Failed to send protocol to: ${failed.join(', ')}',
+          error: 'Failed to send protocol payload to: ${failed.join(', ')}',
         );
-        appLogger.w('Session: Start aborted — protocol send failed');
         return;
       }
 
-      if (!bleTimerStarted) {
-        if (_firstBlePlayAnchor != null) {
-          applySessionClockOffsetFromWallAnchor(_firstBlePlayAnchor!);
-        }
-        _beginRuntimeTimer();
+      // STEP 2: one common delay (matches web)
+      const prePlayDelay = Duration(milliseconds: 2500);
+      await Future<void>.delayed(prePlayDelay);
+
+      // STEP 3: PLAY to all devices together (concurrently)
+      final commonPlayAnchor = DateTime.now();
+      final playResults = await Future.wait(
+        payloadSucceeded.map((mac) async {
+          appLogger.i('Session: Sending raw PLAY command (0x01) to $mac');
+          final okRawPlay = await _sendPlayCommand(mac);
+          appLogger.i(
+            'Session: BLE raw PLAY command result for $mac → $okRawPlay',
+          );
+          return MapEntry(mac, MapEntry(okRawPlay, commonPlayAnchor));
+        }),
+      );
+
+      final playFailed = playResults
+          .where((e) => (e.value.key) == false)
+          .map((e) => e.key)
+          .toList();
+      failed.addAll(playFailed);
+
+      if (failed.isNotEmpty) {
+        _stopwatch.stop();
+        _timer?.cancel();
+        _timer = null;
+        if (!_isActive) return;
+        // Stop whatever did start.
+        unawaited(_completeDevices(payloadSucceeded));
+        state = state.copyWith(
+          status: SessionStatus.stopped,
+          error: 'Failed to send PLAY to: ${failed.join(', ')}',
+        );
+        return;
       }
+
+      // STEP 4: start per-device timers/status after PLAY succeeds for all
+      await _enqueueStateUpdate(() {
+        final timers = Map<String, TimerState>.from(state.deviceTimers);
+        final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+        for (final mac in payloadSucceeded) {
+          _deviceStopwatches[mac]?.start();
+          timers[mac] = (timers[mac] ?? const TimerState()).copyWith(
+            isRunning: true,
+          );
+          statuses[mac] = SessionStatus.running;
+          _firstBlePlayAnchor = commonPlayAnchor;
+        }
+        state = state.copyWith(
+          deviceTimers: timers,
+          deviceStatuses: statuses,
+          status: _deriveOverallStatus(statuses),
+        );
+      });
+
+      _beginRuntimeTimer();
     } finally {
       _startInProgress = false;
     }
@@ -493,7 +587,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
     if (!_isActive) return;
     try {
-      state = state.copyWith(status: SessionStatus.running, error: null);
+      state = state.copyWith(
+        status: _deriveOverallStatus(state.deviceStatuses),
+        error: null,
+      );
     } catch (e) {
       appLogger.d('Session: timer start state update ignored (notifier disposed)');
       return;
@@ -514,7 +611,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     Protocol p, {
     required String transportId,
   }) {
-    final advancedSettings = state.advancedSettings;
+    final advancedSettings =
+        state.advancedSettingsByDevice[transportId] ?? state.advancedSettings;
     final applyDelay = advancedSettings.startDelay > 0;
     return _protocolToRs35Payload(
       p,
@@ -683,12 +781,18 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
     }
 
-    _stopwatch.stop();
-    _timer?.cancel();
-    _timer = null;
-
+    for (final id in state.deviceIds) {
+      _deviceStopwatches[id]?.stop();
+    }
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+    for (final id in state.deviceIds) {
+      if (statuses[id] == SessionStatus.running) statuses[id] = SessionStatus.paused;
+    }
     try {
-      state = state.copyWith(status: SessionStatus.paused);
+      state = state.copyWith(
+        deviceStatuses: statuses,
+        status: _deriveOverallStatus(statuses),
+      );
       appLogger.i('🔥 PAUSE: State updated to paused');
     } catch (e) {
       appLogger.d('Session: pause() state update ignored (notifier disposed)');
@@ -726,7 +830,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
     }
 
-    _stopwatch.start();
+    for (final id in state.deviceIds) {
+      if (state.deviceStatuses[id] == SessionStatus.paused) {
+        _deviceStopwatches[id]?.start();
+      }
+    }
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+    for (final id in state.deviceIds) {
+      if (statuses[id] == SessionStatus.paused) statuses[id] = SessionStatus.running;
+    }
+    state = state.copyWith(
+      deviceStatuses: statuses,
+      status: _deriveOverallStatus(statuses),
+    );
+    _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
     _syncDisplayedTimerFromStopwatch();
     appLogger.i('🔄 RESUME: Timer restarted on app side');
@@ -753,12 +870,81 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     _stopwatch.stop();
     _timer?.cancel();
+    for (final id in state.deviceIds) {
+      _deviceStopwatches[id]?.stop();
+    }
     if (!_isActive) return;
     try {
-      state = state.copyWith(status: SessionStatus.stopped);
+      final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+      for (final id in state.deviceIds) {
+        statuses[id] = SessionStatus.stopped;
+      }
+      state = state.copyWith(
+        deviceStatuses: statuses,
+        status: SessionStatus.stopped,
+      );
     } catch (e) {
       appLogger.d('Session: stop() state update ignored (notifier disposed)');
     }
+  }
+
+  Future<void> pauseDevice(String deviceId) async {
+    if (state.deviceStatuses[deviceId] != SessionStatus.running) return;
+    if (state.transport == SessionTransport.wifi) {
+      await _publishWifiPlayCmdToMac(deviceId, 3);
+    } else {
+      final connector = _ref.read(bleConnectorProvider);
+      await connector.writeToDevice(deviceId, [_blePauseByte]);
+    }
+    _deviceStopwatches[deviceId]?.stop();
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = SessionStatus.paused;
+    state = state.copyWith(
+      deviceStatuses: statuses,
+      status: _deriveOverallStatus(statuses),
+    );
+  }
+
+  Future<void> resumeDevice(String deviceId) async {
+    if (state.deviceStatuses[deviceId] != SessionStatus.paused) return;
+    if (state.transport == SessionTransport.wifi) {
+      await _publishWifiPlayCmdToMac(deviceId, 4);
+    } else {
+      final connector = _ref.read(bleConnectorProvider);
+      await connector.writeToDevice(deviceId, [_bleResumeByte]);
+    }
+    _deviceStopwatches[deviceId]?.start();
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = SessionStatus.running;
+    state = state.copyWith(
+      deviceStatuses: statuses,
+      status: _deriveOverallStatus(statuses),
+    );
+    if (_timer == null) {
+      _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+    }
+  }
+
+  Future<void> stopDevice(String deviceId) async {
+    if (state.transport == SessionTransport.wifi) {
+      await _publishWifiPlayCmdToMac(deviceId, 2);
+    } else {
+      final connector = _ref.read(bleConnectorProvider);
+      await connector.writeToDevice(deviceId, [_bleStopByte]);
+    }
+    _deviceStopwatches[deviceId]?.stop();
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = SessionStatus.stopped;
+    if (statuses.values.every(
+      (s) => s == SessionStatus.stopped || s == SessionStatus.completed,
+    )) {
+      _timer?.cancel();
+      _timer = null;
+    }
+    state = state.copyWith(
+      deviceStatuses: statuses,
+      status: _deriveOverallStatus(statuses),
+    );
   }
 
   SessionRecord? getSessionRecord({
@@ -828,12 +1014,36 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return;
     }
 
-    // Use the same advanced-settings-aware duration that drives the UI timer.
-    // Using protocol.totalDuration can stop BLE early when cycle toggles/delay
-    // extend runtime beyond the template baseline.
-    if (elapsed >= state.timer.totalDuration) {
-      _completeSession();
-      return;
+    final updatedTimers = Map<String, TimerState>.from(state.deviceTimers);
+    final updatedStatuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+    final completedDevices = <String>[];
+
+    for (final id in state.deviceIds) {
+      final status = updatedStatuses[id] ?? SessionStatus.idle;
+      final sw = _deviceStopwatches[id];
+      final timerState = updatedTimers[id];
+      if (sw == null || timerState == null) continue;
+      if (status == SessionStatus.running) {
+        final devElapsed = sw.elapsed;
+        if (devElapsed >= timerState.totalDuration) {
+          completedDevices.add(id);
+          updatedStatuses[id] = SessionStatus.completed;
+          updatedTimers[id] = timerState.copyWith(
+            elapsed: timerState.totalDuration,
+            isRunning: false,
+          );
+          sw.stop();
+        } else {
+          updatedTimers[id] = timerState.copyWith(
+            elapsed: devElapsed,
+            isRunning: true,
+          );
+        }
+      }
+    }
+
+    if (completedDevices.isNotEmpty) {
+      unawaited(_completeDevices(completedDevices));
     }
 
     _calculateCurrentPosition(elapsed);
@@ -859,8 +1069,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           currentCycleIndex: _cycleIndex,
           currentRepetition: _repetition,
           lastVisualCycleIndex: newVisual,
-          isRunning: true,
+          isRunning: state.status == SessionStatus.running,
         ),
+        deviceTimers: updatedTimers,
+        deviceStatuses: updatedStatuses,
+        status: _deriveOverallStatus(updatedStatuses),
       );
     } catch (e) {
       appLogger.d('Session: tick state update ignored (notifier disposed)');
@@ -955,6 +1168,38 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         'Session: completeSession state update ignored (notifier disposed)',
       );
     }
+  }
+
+  Future<void> _completeDevices(List<String> deviceIds) async {
+    if (deviceIds.isEmpty) return;
+    if (state.transport == SessionTransport.wifi) {
+      await Future.wait(
+        deviceIds.map((mac) => _publishWifiPlayCmdToMac(mac, 2)),
+      );
+    } else {
+      final connector = _ref.read(bleConnectorProvider);
+      for (final id in deviceIds) {
+        await connector.writeToDevice(id, [_bleStopByte]);
+      }
+    }
+  }
+
+  SessionStatus _deriveOverallStatus(Map<String, SessionStatus> statuses) {
+    if (statuses.values.any((s) => s == SessionStatus.running)) {
+      return SessionStatus.running;
+    }
+    if (statuses.values.any((s) => s == SessionStatus.paused)) {
+      return SessionStatus.paused;
+    }
+    if (statuses.isNotEmpty &&
+        statuses.values.every(
+          (s) => s == SessionStatus.completed || s == SessionStatus.stopped,
+        )) {
+      return statuses.values.any((s) => s == SessionStatus.completed)
+          ? SessionStatus.completed
+          : SessionStatus.stopped;
+    }
+    return SessionStatus.idle;
   }
 
   @override
