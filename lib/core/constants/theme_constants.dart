@@ -7,8 +7,8 @@ class ThemeConstants {
   static const Color background = Color(0xFF1A2332);
   static const Color surface = Color(0xFF212D3B);
   static const Color surfaceVariant = Color(0xFF2A3A4A);
-  static const Color accent = Color(0xFFD97A3A);
-  static const Color accentLight = Color(0xFFE89B5E);
+  static const Color accent = Color(0xFFA6785F);
+  static const Color accentLight = Color(0xFFD6B39D);
 
   // Text
   static const Color textPrimary = Color(0xFFFFFFFF);

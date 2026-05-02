@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../ble/data/ble_repository.dart';
@@ -19,6 +20,10 @@ final pairedDevicesProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
 });
 
+final _bleConnectingIdsProvider = StateProvider<Set<String>>((ref) {
+  return <String>{};
+});
+
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
@@ -27,6 +32,7 @@ class DeviceListScreen extends ConsumerWidget {
     final pairedDevices = ref.watch(pairedDevicesProvider);
     final target = ref.watch(sessionTargetProvider);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
+    final connectingIds = ref.watch(_bleConnectingIdsProvider);
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: CustomScrollView(
@@ -446,6 +452,19 @@ class DeviceListScreen extends ConsumerWidget {
                                   ? r.device.platformName
                                   : 'Unknown';
                               final id = r.device.remoteId.str;
+                              final strictEnabled =
+                                  BleConstants.strictHydraGattProfile &&
+                                      BleConstants.preferredServiceUuid != null;
+                              final targetService = strictEnabled
+                                  ? BleConstants.normalizeUuid(
+                                      BleConstants.preferredServiceUuid!,
+                                    )
+                                  : null;
+                              final advertisedServices = r
+                                  .advertisementData.serviceUuids
+                                  .map((u) => BleConstants.normalizeUuid(u.str));
+                              final uuidAllowed = !strictEnabled ||
+                                  advertisedServices.contains(targetService);
                               return AnimatedEntrance(
                                 index: i + 1,
                                 child: Padding(
@@ -455,33 +474,66 @@ class DeviceListScreen extends ConsumerWidget {
                                     name: name,
                                     metaLeft: 'Strong',
                                     metaRight: 'v—',
-                                    buttonLabel: 'Connect',
+                                    buttonLabel: connectingIds.contains(id)
+                                        ? 'Connecting...'
+                                        : 'Connect',
+                                    isLoading: connectingIds.contains(id),
                                     onTap: () async {
+                                      if (connectingIds.contains(id)) return;
+                                      if (!uuidAllowed) {
+                                        final expectedUuid =
+                                            BleConstants.preferredServiceUuid;
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              expectedUuid == null
+                                                  ? 'Cannot connect: this device does not match the required Hydrawav profile.'
+                                                  : 'Cannot connect: this device does not advertise the required Hydrawav service.',
+                                            ),
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      ref
+                                          .read(_bleConnectingIdsProvider.notifier)
+                                          .state = {...connectingIds, id};
                                       final messenger =
                                           ScaffoldMessenger.of(context);
-                                      final ok = await ref
-                                          .read(bleRepositoryProvider)
-                                          .connectDevice(r.device);
+                                      try {
+                                        final ok = await ref
+                                            .read(bleRepositoryProvider)
+                                            .connectDevice(r.device);
 
-                                      if (ok) {
-                                        await Future<void>.delayed(
-                                          const Duration(milliseconds: 150),
-                                        );
+                                        if (ok) {
+                                          await Future<void>.delayed(
+                                            const Duration(milliseconds: 150),
+                                          );
+                                          ref
+                                              .read(
+                                                sessionTargetProvider.notifier,
+                                              )
+                                              .ensureSelected(id);
+                                        }
+
+                                        if (!context.mounted) return;
+                                        messenger.showSnackBar(SnackBar(
+                                          content: Text(
+                                            ok
+                                                ? 'Connected to $name'
+                                                : 'Failed to connect to $name',
+                                          ),
+                                        ));
+                                      } finally {
+                                        final current =
+                                            ref.read(_bleConnectingIdsProvider);
                                         ref
                                             .read(
-                                              sessionTargetProvider.notifier,
-                                            )
-                                            .ensureSelected(id);
+                                                _bleConnectingIdsProvider.notifier)
+                                            .state = {
+                                          ...current
+                                        }..remove(id);
                                       }
-
-                                      if (!context.mounted) return;
-                                      messenger.showSnackBar(SnackBar(
-                                        content: Text(
-                                          ok
-                                              ? 'Connected to $name'
-                                              : 'Failed to connect to $name',
-                                        ),
-                                      ));
                                     },
                                   ),
                                 ),
@@ -816,6 +868,7 @@ class _AvailableDeviceRow extends StatelessWidget {
   final String metaLeft;
   final String metaRight;
   final String buttonLabel;
+  final bool isLoading;
   final VoidCallback onTap;
 
   const _AvailableDeviceRow({
@@ -824,6 +877,7 @@ class _AvailableDeviceRow extends StatelessWidget {
     required this.metaLeft,
     required this.metaRight,
     required this.buttonLabel,
+    this.isLoading = false,
     required this.onTap,
   });
 
@@ -908,7 +962,7 @@ class _AvailableDeviceRow extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           GestureDetector(
-            onTap: onTap,
+            onTap: isLoading ? null : onTap,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
@@ -916,15 +970,21 @@ class _AvailableDeviceRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: ThemeConstants.border),
               ),
-              child: Text(
-                buttonLabel,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
+              child: isLoading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(
+                      buttonLabel,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
               ),
-            ),
           ),
         ],
       ),

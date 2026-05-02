@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
@@ -40,6 +41,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             rememberMe: _remember,
           ),
         );
+  }
+
+  Future<void> _openOnboarding() async {
+    final uri = Uri.parse('https://hydrawav3.app/onboarding.html');
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open onboarding page.')),
+      );
+    }
   }
 
   @override
@@ -85,23 +96,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     AnimatedEntrance(
                       child: Column(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: ThemeConstants.accent.withValues(alpha: 0.1),
-                            ),
-                            child: const Icon(Icons.waves_rounded,
-                                size: 36, color: ThemeConstants.accent),
-                          ),
-                          const SizedBox(height: 20),
-                          const Text(
-                            'HYDRAWAV3',
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                          Image.asset(
+                            'assets/images/White_Hydrawav3_Logo.png',
+                            height: 86,
+                            fit: BoxFit.contain,
                           ),
                         ],
                       ),
@@ -158,10 +156,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               SizedBox(
                                 width: double.infinity,
                                 child: _GradientCTA(
-                                  label: 'Sign In',
-                                  icon: Icons.arrow_forward_rounded,
+                                  label: 'Login',
                                   isLoading: auth.isLoading,
                                   onTap: _login,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              GestureDetector(
+                                onTap: _openOnboarding,
+                                child: const Text.rich(
+                                  TextSpan(
+                                    text: "Don't have an account? ",
+                                    style: TextStyle(
+                                      color: ThemeConstants.textSecondary,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    children: [
+                                      TextSpan(
+                                        text: 'Create New Account',
+                                        style: TextStyle(
+                                          color: ThemeConstants.accent,
+                                          decoration: TextDecoration.underline,
+                                          decorationColor: ThemeConstants.accent,
+                                          decorationThickness: 2,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],
@@ -182,13 +205,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
 class _GradientCTA extends StatelessWidget {
   final String label;
-  final IconData icon;
+
   final bool isLoading;
   final VoidCallback onTap;
 
   const _GradientCTA({
     required this.label,
-    required this.icon,
+
     this.isLoading = false,
     required this.onTap,
   });
@@ -214,7 +237,6 @@ class _GradientCTA extends StatelessWidget {
                     Text(label,
                         style: const TextStyle(color: Colors.white)),
                     const SizedBox(width: 8),
-                    Icon(icon, color: Colors.white),
                   ],
                 ),
         ),

@@ -18,6 +18,7 @@ static const selectOrganization = 'selectOrganization';
 
   // Session
   static const String session = 'session';
+  static const String sessionSetup = 'session-setup';
 
   // Device sub-routes
   static const String deviceRegister = 'device-register';
@@ -54,6 +55,7 @@ class RoutePaths {
   // Sub-routes
   static const String protocolDetail = '/protocols/:id';
   static const String session = '/session';
+  static const String sessionSetup = '/session-setup';
   static const String deviceRegister = '/devices/register';
   static const String deviceDetail = '/devices/:id';
   static const String sessionDetail = '/history/:id';

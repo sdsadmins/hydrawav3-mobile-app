@@ -119,32 +119,6 @@ class BleScanner {
             appLogger.d('BLE: Sample: $sample');
           }
 
-          if (BleConstants.strictHydraGattProfile &&
-              BleConstants.preferredServiceUuid != null) {
-            final target = BleConstants.normalizeUuid(
-              BleConstants.preferredServiceUuid!,
-            );
-
-            final filtered = results.where((r) {
-              final advertised = r.advertisementData.serviceUuids;
-              for (final u in advertised) {
-                final s = BleConstants.normalizeUuid(u.str);
-                if (s == target) return true;
-              }
-              return false;
-            }).toList();
-
-            if (filtered.isNotEmpty) {
-              appLogger.i(
-                'BLE: Strict scan matched ${filtered.length} device(s) '
-                'advertising service=$target',
-              );
-            }
-
-            _resultsController.add(filtered);
-            return;
-          }
-
           _resultsController.add(results);
         },
         onError: (error) {
@@ -196,23 +170,12 @@ class BleScanner {
 
     final sub = FlutterBluePlus.onScanResults.listen((scanResults) {
       for (final r in scanResults) {
-        if (BleConstants.strictHydraGattProfile &&
-            BleConstants.preferredServiceUuid != null) {
-          final target =
-              BleConstants.normalizeUuid(BleConstants.preferredServiceUuid!);
-          final advertised = r.advertisementData.serviceUuids;
-          final matches = advertised.any(
-            (u) => BleConstants.normalizeUuid(u.str) == target,
-          );
-          if (!matches) continue;
-        } else {
-          final name = r.device.platformName;
-          if (name.isEmpty ||
-              !name.toLowerCase().startsWith(
-                    BleConstants.deviceNamePrefix.toLowerCase(),
-                  )) {
-            continue;
-          }
+        final name = r.device.platformName;
+        if (name.isEmpty ||
+            !name.toLowerCase().startsWith(
+                  BleConstants.deviceNamePrefix.toLowerCase(),
+                )) {
+          continue;
         }
 
         // Avoid duplicates

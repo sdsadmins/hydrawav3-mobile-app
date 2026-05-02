@@ -16,6 +16,7 @@ import '../../features/protocols/presentation/screens/protocol_list_screen.dart'
 import '../../features/protocols/domain/protocol_model.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
+import '../../features/session/presentation/screens/session_setup_screen.dart';
 import '../../features/settings/presentation/screens/change_password_screen.dart';
 import '../../features/settings/presentation/screens/profile_edit_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
@@ -89,6 +90,19 @@ final routerProvider = Provider<GoRouter>((ref) {
         ],
       ),
       GoRoute(path: RoutePaths.protocolDetail, name: RouteNames.protocolDetail, builder: (c, s) => ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
+      GoRoute(
+        path: RoutePaths.sessionSetup,
+        name: RouteNames.sessionSetup,
+        builder: (c, s) {
+          final extra = s.extra as Map<String, dynamic>?;
+          final deviceIds = extra?['deviceIds'] as List<String>? ?? const <String>[];
+          final transport = extra?['transport'] as String? ?? 'ble';
+          return SessionSetupScreen(
+            deviceIds: deviceIds,
+            transport: transport,
+          );
+        },
+      ),
       GoRoute(path: RoutePaths.session, name: RouteNames.session, builder: (c, s) {
         final extra = s.extra as Map<String, dynamic>?;
         final anchorRaw = extra?['sessionClockAnchorMs'];
@@ -109,6 +123,20 @@ final routerProvider = Provider<GoRouter>((ref) {
           }
         }
         final delayedDeviceId = extra?['delayedDeviceId'] as String?;
+        final skipEngineBootstrap = extra?['skipEngineBootstrap'] as bool? ?? false;
+        final wifiConfigAlreadyPublished = extra?['wifiConfigAlreadyPublished'] as bool? ?? false;
+        final protocolByDeviceIdRaw = extra?['protocolByDeviceId'] as Map?;
+        final protocolByDeviceId = <String, String>{};
+        if (protocolByDeviceIdRaw != null) {
+          for (final entry in protocolByDeviceIdRaw.entries) {
+            final key = entry.key.toString();
+            final value = entry.value;
+            if (value == null) continue;
+            final pid = value.toString();
+            if (key.isEmpty || pid.isEmpty) continue;
+            protocolByDeviceId[key] = pid;
+          }
+        }
         return SessionScreen(
           protocolId: extra?['protocolId'] as String? ?? '',
           protocol: extra?['protocol'] as Protocol?,
@@ -117,7 +145,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           sessionClockAnchorMs: sessionClockAnchorMs,
           advancedSettings: advancedSettings,
           advancedSettingsByDevice: advancedSettingsByDevice,
+          protocolByDeviceId: protocolByDeviceId,
           delayedDeviceId: delayedDeviceId,
+          skipEngineBootstrap: skipEngineBootstrap,
+          wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
         );
       }),
       GoRoute(path: RoutePaths.deviceRegister, name: RouteNames.deviceRegister, builder: (c, s) => const DeviceRegisterScreen()),

@@ -23,6 +23,8 @@ class SessionScreen extends ConsumerStatefulWidget {
   final String protocolId;
   final Protocol? protocol;
   final List<String> deviceIds;
+  final Map<String, String> protocolByDeviceId;
+  final bool skipEngineBootstrap;
 
   /// 'ble' or 'wifi'
   final String transport;
@@ -33,17 +35,21 @@ class SessionScreen extends ConsumerStatefulWidget {
   final AdvancedSettings advancedSettings;
   final Map<String, AdvancedSettings> advancedSettingsByDevice;
   final String? delayedDeviceId;
+  final bool wifiConfigAlreadyPublished;
 
   const SessionScreen({
     super.key,
     required this.protocolId,
     this.protocol,
     required this.deviceIds,
+    this.protocolByDeviceId = const {},
     this.transport = 'ble',
     this.sessionClockAnchorMs,
     this.advancedSettings = const AdvancedSettings(),
     this.advancedSettingsByDevice = const {},
     this.delayedDeviceId,
+    this.skipEngineBootstrap = false,
+    this.wifiConfigAlreadyPublished = false,
   });
 
   @override
@@ -54,6 +60,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
   ProviderSubscription<SessionEngineState>? _engineSub;
+  bool _startingSession = false;
 
   /// Backend pad labels from Node `GET sessions/active/:org` (Hydrawav3-Server).
   String? _backendMoon;
@@ -94,6 +101,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       if (!mounted) return;
       if (_bootstrapStarted) return;
       _bootstrapStarted = true;
+      if (widget.skipEngineBootstrap) return;
 
       final ctrl = ref.read(sessionEngineProvider.notifier);
 
@@ -106,19 +114,36 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               : SessionTransport.ble,
         );
 
-        final Protocol protocol;
-        if (widget.protocol != null) {
-          protocol = widget.protocol!;
-        } else {
-          protocol = await ref.read(
-            protocolDetailProvider(widget.protocolId).future,
-          );
-        }
+        final Protocol commonProtocol = widget.protocol ??
+            await ref.read(
+              protocolDetailProvider(widget.protocolId).future,
+            );
 
         if (!mounted) return;
 
+        // Resolve the selected protocol per device (no fallback: every device must have one).
+        if (widget.protocolByDeviceId.isEmpty) {
+          throw StateError('Missing protocolByDeviceId: per-device protocol is required.');
+        }
+
+        final Map<String, Protocol> protocolByDevice = {};
+        await Future.wait(widget.deviceIds.map((id) async {
+          final pid = widget.protocolByDeviceId[id];
+          if (pid == null) {
+            throw StateError('No protocol selected for device: $id');
+          }
+          final proto = pid == commonProtocol.id
+              ? commonProtocol
+              : await ref.read(protocolDetailProvider(pid).future);
+          protocolByDevice[id] = proto;
+        }));
+
+        if (protocolByDevice.length != widget.deviceIds.length) {
+          throw StateError('protocolByDevice resolution incomplete.');
+        }
+
         ctrl.loadSession(
-          protocol,
+          commonProtocol,
           widget.deviceIds,
           transport: widget.transport == 'wifi'
               ? SessionTransport.wifi
@@ -126,12 +151,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           advancedSettings: widget.advancedSettings,
           advancedSettingsByDevice: widget.advancedSettingsByDevice,
           delayedDeviceId: widget.delayedDeviceId,
+          protocolByDevice: protocolByDevice,
+          wifiConfigAlreadyPublished: widget.wifiConfigAlreadyPublished,
         );
 
         if (!mounted) return;
         if (widget.transport == 'wifi') {
           final ms = widget.sessionClockAnchorMs;
-          if (ms != null) {
+          if (widget.wifiConfigAlreadyPublished && ms != null) {
             ctrl.applySessionClockOffsetFromWallAnchor(
               DateTime.fromMillisecondsSinceEpoch(ms),
             );
@@ -315,15 +342,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
-        title: const Text('Session'),
+        title: Text('Session(${widget.deviceIds.length} Devices)'),
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
-          onPressed: () {
+          onPressed: () async {
             if (status == SessionStatus.running ||
                 status == SessionStatus.paused) {
-              ctrl.stop();
+              await ctrl.stop();
             }
             ctrl.reset();
+            if (!mounted) return;
             context.pop();
           },
         ),
@@ -332,33 +360,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           children: [
-              // Protocol name
-              protocolAsync.when(
-                data: (p) => Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                      color: ThemeConstants.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: ThemeConstants.border)),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.science_rounded,
-                          color: ThemeConstants.accent, size: 18),
-                      const SizedBox(width: 8),
-                      Text(p.templateName,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15)),
-                    ],
-                  ),
-                ),
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 8),
               if (status == SessionStatus.idle) ...[
                 _buildControls(status, ctrl),
                 const SizedBox(height: 24),
@@ -371,12 +373,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                         setState(() => _activeDevicePage = idx),
                     itemBuilder: (context, index) {
                       final id = orderedDeviceIds[index];
-                      final deviceTimer = engine.deviceTimers[id] ?? timer;
-                      final deviceStatus =
-                          engine.deviceStatuses[id] ?? status;
+                      final deviceTimer = engine.deviceTimers[id]!;
+                      final deviceStatus = engine.deviceStatuses[id]!;
+                      final perDeviceProtocolName =
+                          engine.protocolByDevice[id]?.templateName ??
+                              protocol?.templateName ??
+                              '';
                       return _buildDeviceSessionCard(
                         id: id,
                         label: _deviceLabel(id),
+                        protocolName: perDeviceProtocolName,
                         timer: deviceTimer,
                         status: deviceStatus,
                         totalCycles: timer.totalCycles,
@@ -411,10 +417,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   ),
                 ],
                 const SizedBox(height: 18),
-                _buildControls(status, ctrl),
                 const SizedBox(height: 24),
               ] else ...[
-                _buildControls(status, ctrl),
                 const SizedBox(height: 24),
               ],
 
@@ -459,6 +463,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   Widget _buildDeviceSessionCard({
     required String id,
     required String label,
+    required String protocolName,
     required TimerState timer,
     required SessionStatus status,
     required int totalCycles,
@@ -487,7 +492,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               fontSize: 13,
             ),
           ),
-          const SizedBox(height: 14),
+          if (protocolName.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              protocolName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: ThemeConstants.textSecondary,
+                fontWeight: FontWeight.w500,
+                fontSize: 11,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
           Container(
             decoration: status == SessionStatus.running
                 ? BoxDecoration(
@@ -646,45 +664,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           width: double.infinity,
           child: ElevatedButton(
             // WiFi sessions auto-start once protocol loads; don't allow manual start.
-            onPressed: widget.transport == 'wifi' ? null : () => ctrl.start(),
-            child: Text(
-                widget.transport == 'wifi' ? 'Starting…' : 'Start Session'),
+            onPressed: widget.transport == 'wifi' || _startingSession
+                ? null
+                : () async {
+                    setState(() => _startingSession = true);
+                    try {
+                      await ctrl.start();
+                    } finally {
+                      if (mounted) {
+                        setState(() => _startingSession = false);
+                      }
+                    }
+                  },
+            child: _startingSession
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(widget.transport == 'wifi' ? 'Starting…' : 'Start Session'),
           ),
         ),
-      SessionStatus.running => Row(children: [
-          Expanded(
-              child: SizedBox(
-                  height: 52,
-                  child: OutlinedButton(
-                      onPressed: () => ctrl.pause(),
-                      child: const Text('Pause')))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: SizedBox(
-                  height: 52,
-                  child: ElevatedButton(
-                      onPressed: () => ctrl.stop(),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: ThemeConstants.error),
-                      child: const Text('Stop')))),
-        ]),
-      SessionStatus.paused => Row(children: [
-          Expanded(
-              child: SizedBox(
-                  height: 52,
-                  child: ElevatedButton(
-                      onPressed: () => ctrl.resume(),
-                      child: const Text('Resume')))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: SizedBox(
-                  height: 52,
-                  child: ElevatedButton(
-                      onPressed: () => ctrl.stop(),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: ThemeConstants.error),
-                      child: const Text('Stop')))),
-        ]),
+      SessionStatus.running => const SizedBox.shrink(),
+      SessionStatus.paused => const SizedBox.shrink(),
       SessionStatus.stopped || SessionStatus.completed => SizedBox(
           height: 52,
           width: double.infinity,

@@ -43,6 +43,44 @@ class ProtocolListScreen extends ConsumerWidget {
     final batteryAsync = ref.watch(bleBatteryLevelsProvider);
     final target = ref.watch(sessionTargetProvider);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
+    bool isWifiConnectedStatus(String? s) {
+      final v = (s ?? '').trim().toLowerCase();
+      if (v.isEmpty) return true; // backend often omits status
+      if (v == '1' || v == 'true' || v == 'yes') return true;
+      if (v.contains('connect')) return true;
+      if (v.contains('online')) return true;
+      if (v.contains('active')) return true;
+      if (v.contains('ready')) return true;
+      if (v.contains('up')) return true;
+      if (v.contains('ok')) return true;
+      if (v.contains('running')) return true;
+      return false;
+    }
+
+    final List<String> setupDeviceIds = () {
+      if (target.transport == SessionTransport.ble) {
+        // If the user hasn't picked explicit BLE targets yet, treat all currently
+        // connected BLE devices as setup targets (matches the banner list).
+        if (target.deviceIds.isEmpty) {
+          return connectedIds;
+        }
+        return target.deviceIds.where((id) => connectedIds.contains(id)).toList();
+      }
+
+      // WiFi: if the user hasn't picked explicit targets, keep empty.
+      if (target.deviceIds.isEmpty) return const <String>[];
+      return wifiAsync.maybeWhen(
+        data: (list) => list
+            .where((d) =>
+                target.deviceIds.contains(d.macAddress) &&
+                isWifiConnectedStatus(d.status))
+            .map((d) => d.macAddress)
+            .toList(),
+        orElse: () => const <String>[],
+      );
+    }();
+
+    final canContinue = setupDeviceIds.isNotEmpty;
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -136,6 +174,16 @@ class ProtocolListScreen extends ConsumerWidget {
                   sessionTarget: target,
                   wifiDevicesAsync: wifiAsync,
                   onConnectTap: () => context.go(RoutePaths.devices),
+                  canContinue: canContinue,
+                  onContinueTap: () {
+                    context.push(
+                      RoutePaths.sessionSetup,
+                      extra: {
+                        'deviceIds': setupDeviceIds,
+                        'transport': target.transport == SessionTransport.ble ? 'ble' : 'wifi',
+                      },
+                    );
+                  },
                 ),
               ),
             ),
@@ -204,6 +252,8 @@ class _ActiveDevicesCard extends StatelessWidget {
   final SessionTargetState sessionTarget;
   final AsyncValue<List<DeviceInfo>> wifiDevicesAsync;
   final VoidCallback onConnectTap;
+  final bool canContinue;
+  final VoidCallback onContinueTap;
 
   const _ActiveDevicesCard({
     required this.connectedBleDeviceIds,
@@ -212,6 +262,8 @@ class _ActiveDevicesCard extends StatelessWidget {
     required this.sessionTarget,
     required this.wifiDevicesAsync,
     required this.onConnectTap,
+    required this.canContinue,
+    required this.onContinueTap,
   });
 
   @override
@@ -367,6 +419,16 @@ class _ActiveDevicesCard extends StatelessWidget {
                   wifiDevicesAsync: wifiDevicesAsync,
                   batteryLevelsAsync: batteryLevelsAsync,
                 ),
+                if (canContinue) ...[
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: onContinueTap,
+                      child: const Text('Continue Setup'),
+                    ),
+                  ),
+                ],
               ],
             ],
           ),
@@ -672,7 +734,7 @@ class _ProtocolCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GradientCard(
-      onTap: () => context.push('/protocols/${protocol.id}'),
+      //onTap: () => context.push('/protocols/${protocol.id}'),
       showGlow: true,
       padding: const EdgeInsets.all(18),
       child: Column(

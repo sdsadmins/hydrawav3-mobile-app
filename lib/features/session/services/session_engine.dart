@@ -23,8 +23,10 @@ class SessionEngineState {
   final SessionStatus status;
   final TimerState timer;
   final Protocol? protocol;
+  final Map<String, Protocol> protocolByDevice;
   final List<String> deviceIds;
   final SessionTransport transport;
+  final bool wifiConfigAlreadyPublished;
   final AdvancedSettings advancedSettings;
   final Map<String, AdvancedSettings> advancedSettingsByDevice;
   final Map<String, TimerState> deviceTimers;
@@ -36,8 +38,10 @@ class SessionEngineState {
     this.status = SessionStatus.idle,
     this.timer = const TimerState(),
     this.protocol,
+    this.protocolByDevice = const {},
     this.deviceIds = const [],
     this.transport = SessionTransport.ble,
+    this.wifiConfigAlreadyPublished = false,
     this.advancedSettings = const AdvancedSettings(),
     this.advancedSettingsByDevice = const {},
     this.deviceTimers = const {},
@@ -50,8 +54,10 @@ class SessionEngineState {
     SessionStatus? status,
     TimerState? timer,
     Protocol? protocol,
+    Map<String, Protocol>? protocolByDevice,
     List<String>? deviceIds,
     SessionTransport? transport,
+    bool? wifiConfigAlreadyPublished,
     AdvancedSettings? advancedSettings,
     Map<String, AdvancedSettings>? advancedSettingsByDevice,
     Map<String, TimerState>? deviceTimers,
@@ -63,8 +69,11 @@ class SessionEngineState {
       status: status ?? this.status,
       timer: timer ?? this.timer,
       protocol: protocol ?? this.protocol,
+      protocolByDevice: protocolByDevice ?? this.protocolByDevice,
       deviceIds: deviceIds ?? this.deviceIds,
       transport: transport ?? this.transport,
+      wifiConfigAlreadyPublished:
+          wifiConfigAlreadyPublished ?? this.wifiConfigAlreadyPublished,
       advancedSettings: advancedSettings ?? this.advancedSettings,
       advancedSettingsByDevice:
           advancedSettingsByDevice ?? this.advancedSettingsByDevice,
@@ -213,6 +222,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     SessionTransport transport = SessionTransport.ble,
     AdvancedSettings advancedSettings = const AdvancedSettings(),
     Map<String, AdvancedSettings>? advancedSettingsByDevice,
+    Map<String, Protocol>? protocolByDevice,
+    bool wifiConfigAlreadyPublished = false,
     String? delayedDeviceId,
   }) {
     if (!_isActive) return; // Guard against updates after disposal
@@ -227,6 +238,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       for (final id in deviceIds)
         id: advancedSettingsByDevice?[id] ?? advancedSettings,
     };
+
+    if (protocolByDevice == null) {
+      state = state.copyWith(
+        status: SessionStatus.stopped,
+        error: 'No protocol selected per device (protocolByDevice missing).',
+      );
+      return;
+    }
+
+    final resolvedProtocolByDevice = <String, Protocol>{};
+    for (final id in deviceIds) {
+      final proto = protocolByDevice[id];
+      if (proto == null) {
+        state = state.copyWith(
+          status: SessionStatus.stopped,
+          error: 'No protocol selected for device: $id',
+        );
+        return;
+      }
+      resolvedProtocolByDevice[id] = proto;
+    }
     final computedTotalDurationSeconds = _computeFirmwareTotalDurationSeconds(
       protocol,
       advancedSettings,
@@ -251,12 +283,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         id: TimerState(
           totalDuration: Duration(
             seconds: _computeFirmwareTotalDurationSeconds(
-              protocol,
+              resolvedProtocolByDevice[id]!,
               settingsByDevice[id] ?? advancedSettings,
             ),
           ),
-          totalCycles: protocol.cycles.length,
-          lastVisualCycleIndex: protocol.cycles.isNotEmpty ? 0 : -1,
+          totalCycles: resolvedProtocolByDevice[id]!.cycles.length,
+          lastVisualCycleIndex:
+              resolvedProtocolByDevice[id]!.cycles.isNotEmpty ? 0 : -1,
         ),
     };
     final deviceStatuses = <String, SessionStatus>{
@@ -267,8 +300,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       state = SessionEngineState(
         status: SessionStatus.idle,
         protocol: protocol,
+        protocolByDevice: resolvedProtocolByDevice,
         deviceIds: selectedDeviceIds,
         transport: transport,
+      wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
         advancedSettings: advancedSettings,
         advancedSettingsByDevice: settingsByDevice,
         deviceTimers: deviceTimers,
@@ -324,6 +359,45 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       // WiFi sessions: command is already sent via MQTT/API from the protocol
       // screen. We just run the timer UI.
       if (state.transport == SessionTransport.wifi) {
+        if (!state.wifiConfigAlreadyPublished) {
+          // Publish full RS35 session config per device, then start the timer UI.
+          // This matches the web flow when starting directly from the session setup screen.
+          try {
+            final dio = _ref.read(djangoDioProvider);
+            for (final mac in state.deviceIds) {
+              final deviceProtocol = state.protocolByDevice[mac];
+              if (deviceProtocol == null) {
+                throw StateError('Missing protocol for device=$mac');
+              }
+
+              final payloadObj = _protocolToRs232Json(
+                deviceProtocol,
+                transportId: mac,
+              );
+              final payloadStr = jsonEncode(payloadObj);
+
+              await dio.post(
+                ApiEndpoints.mqttPublish,
+                data: {
+                  'topic': 'HydraWav3Pro/config',
+                  'payload': payloadStr,
+                },
+              );
+            }
+          } catch (e) {
+            appLogger.e('WiFi: config publish failed: $e');
+            if (!_isActive) return;
+            state = state.copyWith(
+              status: SessionStatus.stopped,
+              error: 'WiFi publish failed: $e',
+            );
+            return;
+          } finally {
+            // If we published config ourselves, align UI to "now".
+            _sessionClockOffset = Duration.zero;
+          }
+        }
+
         appLogger.i(
           'Session: Starting WiFi session timer (devices=${state.deviceIds.length})',
         );
@@ -435,10 +509,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
       if (state.protocol == null) return;
 
-      final protocol = state.protocol!;
       appLogger.i(
         'Session: start payload source '
-        '(protocolId=${protocol.id}, name=${protocol.templateName}, sessions=${protocol.sessions}, cycles=${protocol.cycles.length})',
+        '(common protocolId=${state.protocol!.id}, name=${state.protocol!.templateName}, sessions=${state.protocol!.sessions}, cycles=${state.protocol!.cycles.length})',
       );
 
       // For BLE we intentionally start UI timer only AFTER PLAY succeeds,
@@ -455,13 +528,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       // STEP 1: payload to all devices (concurrently)
       final payloadResults = await Future.wait(
         actuallyConnectedIds.map((mac) async {
+          final deviceProtocol = state.protocolByDevice[mac];
+          if (deviceProtocol == null) {
+            failed.add(mac);
+            return MapEntry(mac, false);
+          }
+
           final legacyShape = _protocolToRs232Json(
-            protocol,
+            deviceProtocol,
             transportId: mac,
           );
 
-          if (protocol.cycles.isNotEmpty) {
-            final c0 = protocol.cycles.first;
+          if (deviceProtocol.cycles.isNotEmpty) {
+            final c0 = deviceProtocol.cycles.first;
             appLogger.i(
               'Session: protocol first-cycle '
               '(dur=${c0.durationSeconds}, rep=${c0.repetitions}, hot=${c0.hotPwm}, cold=${c0.coldPwm}, left=${c0.leftFunction}, right=${c0.rightFunction})',
@@ -481,9 +560,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             '(mac key=$mac, ${protocolFrame.length} bytes, shape=web-rs35-flat)',
           );
           appLogger.i('📱 BLE Payload Details for $mac:');
-          appLogger.i('   - cycles: ${protocol.cycles.length}');
+          appLogger.i('   - cycles: ${deviceProtocol.cycles.length}');
           appLogger.i(
-              '   - total duration: ${protocol.totalDurationSeconds}s');
+              '   - total duration: ${deviceProtocol.totalDurationSeconds}s');
           appLogger.i('   - payload size: ${protocolFrame.length} bytes');
           appLogger.i("🔥 CALLING BLE PAYLOAD NOW");
 

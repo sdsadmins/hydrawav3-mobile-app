@@ -42,8 +42,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
   AdvancedSettings _settings = const AdvancedSettings();
   final Map<String, AdvancedSettings> _settingsByDevice = {};
   String? _activeSettingsDeviceId;
+  final Map<String, String> _protocolByDeviceId = {};
   String? _delayedDeviceId;
   String? _seededProtocolId;
+  bool _startingFromDetail = false;
 
   static const Map<int, int> _hotPwmToLevel = {
     0: 0,
@@ -88,13 +90,14 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
     return map[bestKey] ?? fallback;
   }
 
-  void _seedAdvancedFromProtocol(Protocol p) {
+  AdvancedSettings _advancedDefaultsFromProtocol(Protocol p) {
     final first = p.cycles.isNotEmpty ? p.cycles.first : null;
-    final hotLevel = _nearestLevel(first?.hotPwm.toInt() ?? 70, _hotPwmToLevel, 5);
+    final hotLevel =
+        _nearestLevel(first?.hotPwm.toInt() ?? 70, _hotPwmToLevel, 5);
     final coldLevel =
         _nearestLevel(first?.coldPwm.toInt() ?? 190, _coldPwmToLevel, 5);
 
-    _settings = AdvancedSettings(
+    return AdvancedSettings(
       lights: true,
       vibrationMode: 'Sweep',
       vibrationSweepMin: p.vibmin,
@@ -113,7 +116,12 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
       startDelay: 0,
       flipSettings: false,
     );
+  }
+
+  void _seedAdvancedFromProtocol(Protocol p) {
+    _settings = _advancedDefaultsFromProtocol(p);
     _settingsByDevice.clear();
+    _protocolByDeviceId.clear();
     _activeSettingsDeviceId = null;
     _delayedDeviceId = null;
     _seededProtocolId = p.id;
@@ -122,6 +130,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(protocolDetailProvider(widget.protocolId));
+    final protocolsAsync = ref.watch(protocolListProvider);
     final target = ref.watch(sessionTargetProvider);
     final connectionStates = ref.watch(bleConnectionStatesProvider);
     final connectedIds = connectionStates.maybeWhen(
@@ -143,29 +152,22 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                 ref.invalidate(protocolDetailProvider(widget.protocolId))),
         data: (p) {
           final selectedTargetIds = target.deviceIds;
-          if (selectedTargetIds.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              var changed = false;
-              for (final id in selectedTargetIds) {
-                if (!_settingsByDevice.containsKey(id)) {
-                  _settingsByDevice[id] = _settings;
-                  changed = true;
-                }
-              }
-              if (_activeSettingsDeviceId == null ||
-                  !selectedTargetIds.contains(_activeSettingsDeviceId)) {
-                _activeSettingsDeviceId = selectedTargetIds.first;
-                changed = true;
-              }
-              if (changed) setState(() {});
-            });
-          }
           if (_seededProtocolId != p.id) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              setState(() => _seedAdvancedFromProtocol(p));
-            });
+            // Reset advanced settings + per-device protocol assignments
+            // when user navigates to a new protocol detail.
+            _seedAdvancedFromProtocol(p);
+          }
+
+          // Seed per-device maps synchronously so the dropdown never needs protocol fallback.
+          if (selectedTargetIds.isNotEmpty) {
+            for (final id in selectedTargetIds) {
+              _settingsByDevice.putIfAbsent(id, () => _settings);
+              _protocolByDeviceId.putIfAbsent(id, () => p.id);
+            }
+            if (_activeSettingsDeviceId == null ||
+                !selectedTargetIds.contains(_activeSettingsDeviceId)) {
+              _activeSettingsDeviceId = selectedTargetIds.first;
+            }
           }
           return ListView(
             physics: const ClampingScrollPhysics(),
@@ -393,6 +395,79 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                                       }).toList(),
                                     ),
                                     const SizedBox(height: 12),
+                                    if (target.deviceIds.isNotEmpty)
+                                      protocolsAsync.when(
+                                        data: (protocols) {
+                                          final activeId =
+                                              _activeSettingsDeviceId ??
+                                                  target.deviceIds.first;
+                                          final selectedPid =
+                                              _protocolByDeviceId[activeId]!;
+                                          return Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Protocol for device',
+                                                style: TextStyle(
+                                                  color: ThemeConstants
+                                                      .textSecondary,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              DropdownButton<String>(
+                                                value: selectedPid,
+                                                isExpanded: true,
+                                                dropdownColor:
+                                                    ThemeConstants.surface,
+                                                items: protocols.map((pr) {
+                                                  return DropdownMenuItem<
+                                                      String>(
+                                                    value: pr.id,
+                                                    child: Text(
+                                                      pr.templateName,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      maxLines: 1,
+                                                      style: const TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  );
+                                                }).toList(),
+                                                onChanged: (newId) {
+                                                  if (newId == null) return;
+                                                  final newProtocol =
+                                                      protocols.firstWhere(
+                                                    (x) => x.id == newId,
+                                                  );
+                                                  setState(() {
+                                                    _protocolByDeviceId[activeId] =
+                                                        newProtocol.id;
+                                                    _settingsByDevice[activeId] =
+                                                        _advancedDefaultsFromProtocol(
+                                                            newProtocol);
+                                                  });
+                                                },
+                                              ),
+                                            ],
+                                          );
+                                        },
+                                        loading: () => const SizedBox(
+                                          height: 28,
+                                          width: 28,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                        error: (_, __) => const SizedBox
+                                            .shrink(),
+                                      ),
+                                    const SizedBox(height: 12),
                                   ],
                                   _AdvancedSettingsPanel(
                                     protocolId: p.id,
@@ -477,6 +552,9 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                 index: p.cycles.length + 5,
                 child: GestureDetector(
                   onTap: () async {
+                    if (_startingFromDetail) return;
+                    setState(() => _startingFromDetail = true);
+                    try {
                     // Prefer the user-selected transport + devices from Devices tab.
                     final target = ref.read(sessionTargetProvider);
                     appLogger.i(
@@ -500,12 +578,27 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         // (session screen auto-starts the clock on open).
                         try {
                           final dio = ref.read(djangoDioProvider);
+                          // Resolve the protocol per selected device (web-parity).
+                          final protocolIdsNeeded = target.deviceIds
+                              .map((mac) => _protocolByDeviceId[mac]!)
+                              .toSet();
+                          final protocolById = <String, Protocol>{};
+                          await Future.wait(protocolIdsNeeded.map((pid) async {
+                            final proto = pid == p.id
+                                ? p
+                                : await ref
+                                    .read(protocolDetailProvider(pid).future);
+                            protocolById[pid] = proto;
+                          }));
                           for (final mac in target.deviceIds) {
                             final perDeviceSettings =
                                 _settingsByDevice[mac] ?? _settings;
+                            final deviceProtocol = protocolById[
+                                    _protocolByDeviceId[mac]!] ??
+                                (throw StateError('Missing protocol for $mac'));
                             final payloadObj =
                                 _protocolToWifiPayload(
-                              p,
+                              deviceProtocol,
                               mac: mac,
                               advancedSettings: perDeviceSettings,
                               applyStartDelay: perDeviceSettings.startDelay > 0,
@@ -549,7 +642,12 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                               for (final id in target.deviceIds)
                                 id: _settingsByDevice[id] ?? _settings,
                             },
+                            'protocolByDeviceId': {
+                              for (final id in target.deviceIds)
+                                id: _protocolByDeviceId[id]!,
+                            },
                             'delayedDeviceId': _delayedDeviceId,
+                            'wifiConfigAlreadyPublished': true,
                           },
                         );
                         return;
@@ -597,7 +695,12 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                             for (final id in target.deviceIds)
                               id: _settingsByDevice[id] ?? _settings,
                           },
+                          'protocolByDeviceId': {
+                            for (final id in target.deviceIds)
+                              id: _protocolByDeviceId[id]!,
+                          },
                           'delayedDeviceId': _delayedDeviceId,
+                          'wifiConfigAlreadyPublished': true,
                         },
                       );
                       return;
@@ -639,6 +742,14 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         return;
                       }
 
+                      // Ensure every selected device has an explicit protocol
+                      // mapping (no fallback).
+                      for (final id in selected) {
+                        if (!_protocolByDeviceId.containsKey(id)) {
+                          _protocolByDeviceId[id] = p.id;
+                        }
+                      }
+
                       // CRITICAL FIX: Re-verify devices are still connected after picker
                       final bleRepository = ref.read(bleRepositoryProvider);
                       final stillConnected = selected
@@ -677,6 +788,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                             for (final id in selected)
                               id: _settingsByDevice[id] ?? _settings,
                           },
+                          'protocolByDeviceId': {
+                            for (final id in selected)
+                              id: _protocolByDeviceId[id]!,
+                          },
                           'delayedDeviceId': _delayedDeviceId,
                         },
                       );
@@ -690,8 +805,28 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         return;
                       }
 
+                      // Ensure every selected device has an explicit protocol
+                      // mapping (no fallback).
+                      for (final d in selectedWifi) {
+                        if (!_protocolByDeviceId.containsKey(d.macAddress)) {
+                          _protocolByDeviceId[d.macAddress] = p.id;
+                        }
+                      }
+
                       try {
                         final dio = ref.read(djangoDioProvider);
+                        // Resolve the protocol per selected WiFi device (web-parity).
+                        final protocolIdsNeeded = selectedWifi
+                            .map((d) => _protocolByDeviceId[d.macAddress]!)
+                            .toSet();
+                        final protocolById = <String, Protocol>{};
+                        await Future.wait(protocolIdsNeeded.map((pid) async {
+                          final proto = pid == p.id
+                              ? p
+                              : await ref
+                                  .read(protocolDetailProvider(pid).future);
+                          protocolById[pid] = proto;
+                        }));
 
                         // Backend expects payload as a STRINGIFIED OBJECT (not a list).
                         // So we publish one request per device:
@@ -699,9 +834,12 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         for (final d in selectedWifi) {
                           final perDeviceSettings =
                               _settingsByDevice[d.macAddress] ?? _settings;
+                          final deviceProtocol = protocolById[
+                                  _protocolByDeviceId[d.macAddress]!] ??
+                              (throw StateError('Missing protocol for ${d.macAddress}'));
                           final payloadObj =
                               _protocolToWifiPayload(
-                            p,
+                            deviceProtocol,
                             mac: d.macAddress,
                             advancedSettings: perDeviceSettings,
                             applyStartDelay: perDeviceSettings.startDelay > 0,
@@ -765,6 +903,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                             for (final id
                                 in selectedWifi.map((d) => d.macAddress))
                               id: _settingsByDevice[id] ?? _settings,
+                          },
+                          'protocolByDeviceId': {
+                            for (final d in selectedWifi)
+                              d.macAddress: _protocolByDeviceId[d.macAddress]!,
                           },
                           'delayedDeviceId': _delayedDeviceId,
                         },
@@ -844,6 +986,11 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                     } else {
                       await startBle();
                     }
+                    } finally {
+                      if (mounted) {
+                        setState(() => _startingFromDetail = false);
+                      }
+                    }
                   },
                   child: Container(
                     height: 56,
@@ -858,18 +1005,24 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                             offset: const Offset(0, 4))
                       ],
                     ),
-                    child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.play_arrow_rounded,
-                              color: Colors.white, size: 22),
-                          SizedBox(width: 8),
-                          Text('Start Session',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600)),
-                        ]),
+                    child: _startingFromDetail
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.play_arrow_rounded,
+                                  color: Colors.white, size: 22),
+                              SizedBox(width: 8),
+                              Text('Start Session',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600)),
+                            ]),
                   ),
                 )),
             ],
