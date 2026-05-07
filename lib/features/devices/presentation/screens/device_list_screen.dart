@@ -99,18 +99,18 @@ class DeviceListScreen extends ConsumerWidget {
                                   ),
                                   child: const Row(
                                     children: [
-                                      Icon(Icons.check_rounded,
-                                          size: 18,
-                                          color: ThemeConstants.textPrimary),
-                                      SizedBox(width: 6),
                                       Text(
-                                        'Done',
+                                        'Next',
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
                                           color: ThemeConstants.textPrimary,
                                         ),
                                       ),
+                                      SizedBox(width: 6),
+                                      Icon(Icons.arrow_forward_rounded,
+                                          size: 18,
+                                          color: ThemeConstants.textPrimary),
                                     ],
                                   ),
                                 ),

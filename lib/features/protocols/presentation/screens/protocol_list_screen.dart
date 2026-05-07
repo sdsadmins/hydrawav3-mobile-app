@@ -424,7 +424,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: onContinueTap,
-                      child: const Text('Continue Setup'),
+                      child: const Text('Choose Protocol'),
                     ),
                   ),
                 ],
