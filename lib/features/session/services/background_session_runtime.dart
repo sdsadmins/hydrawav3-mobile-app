@@ -10,9 +10,10 @@ import '../../ble/services/ble_connector.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../../../core/utils/logger.dart';
 
-const _snapshotPrefsKey = 'live_session_snapshot_v1';
+const liveSessionSnapshotPrefsKey = 'live_session_snapshot_v1';
 
 class LiveSessionSnapshot {
+  final String sessionId;
   final String protocolId;
   final String protocolName;
   final List<String> deviceIds;
@@ -25,6 +26,7 @@ class LiveSessionSnapshot {
   final bool fromBackgroundService;
 
   const LiveSessionSnapshot({
+    required this.sessionId,
     required this.protocolId,
     required this.protocolName,
     required this.deviceIds,
@@ -38,6 +40,7 @@ class LiveSessionSnapshot {
   });
 
   Map<String, dynamic> toJson() => {
+        'sessionId': sessionId,
         'protocolId': protocolId,
         'protocolName': protocolName,
         'deviceIds': deviceIds,
@@ -74,6 +77,7 @@ class LiveSessionSnapshot {
     }
 
     return LiveSessionSnapshot(
+      sessionId: json['sessionId']?.toString() ?? '',
       protocolId: json['protocolId']?.toString() ?? '',
       protocolName: json['protocolName']?.toString() ?? '',
       deviceIds: ((json['deviceIds'] as List?) ?? const [])
@@ -155,6 +159,7 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
     );
   }
 
+  @override
   Future<void> dispose() async {
     await _eventsSub?.cancel();
     _eventsSub = null;
@@ -206,7 +211,8 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
     }
   }
 
-  Future<void> pauseService() async {
+  Future<void> pauseService({required String sessionId}) async {
+    if (!_ownsCurrentSnapshot(sessionId)) return;
     state = state.copyWith(status: 'paused');
     await _persistSnapshot(state.snapshot);
     if (defaultTargetPlatform != TargetPlatform.android) return;
@@ -217,7 +223,8 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
     }
   }
 
-  Future<void> resumeService() async {
+  Future<void> resumeService({required String sessionId}) async {
+    if (!_ownsCurrentSnapshot(sessionId)) return;
     state = state.copyWith(status: 'running');
     await _persistSnapshot(state.snapshot);
     if (defaultTargetPlatform != TargetPlatform.android) return;
@@ -228,7 +235,8 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
     }
   }
 
-  Future<void> stopService() async {
+  Future<void> stopService({required String sessionId}) async {
+    if (!_ownsCurrentSnapshot(sessionId)) return;
     state =
         state.copyWith(status: 'stopped', clearSnapshot: true, elapsedMs: 0);
     await _persistSnapshot(null);
@@ -246,6 +254,21 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
       startedAtEpochMs: snapshot.startedAtEpochMs,
     );
     await _persistSnapshot(snapshot);
+  }
+
+  bool _ownsCurrentSnapshot(String sessionId) {
+    final activeSessionId = state.snapshot?.sessionId;
+    if (activeSessionId == null || activeSessionId.isEmpty) {
+      return true;
+    }
+    if (activeSessionId == sessionId) {
+      return true;
+    }
+    appLogger.i(
+      'Ignoring background runtime update for session=$sessionId '
+      'because active snapshot belongs to session=$activeSessionId',
+    );
+    return false;
   }
 
   void _onEvent(dynamic raw) {
@@ -294,7 +317,7 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
   Future<void> _restoreSnapshot() async {
     try {
       final prefs = _ref.read(sharedPreferencesProvider);
-      final encoded = prefs.getString(_snapshotPrefsKey);
+      final encoded = prefs.getString(liveSessionSnapshotPrefsKey);
       if (encoded == null || encoded.isEmpty) return;
       final json = jsonDecode(encoded) as Map<String, dynamic>;
       final snapshot = LiveSessionSnapshot.fromJson(json);
@@ -315,10 +338,13 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
   Future<void> _persistSnapshot(LiveSessionSnapshot? snapshot) async {
     final prefs = _ref.read(sharedPreferencesProvider);
     if (snapshot == null) {
-      await prefs.remove(_snapshotPrefsKey);
+      await prefs.remove(liveSessionSnapshotPrefsKey);
       return;
     }
-    await prefs.setString(_snapshotPrefsKey, jsonEncode(snapshot.toJson()));
+    await prefs.setString(
+      liveSessionSnapshotPrefsKey,
+      jsonEncode(snapshot.toJson()),
+    );
   }
 }
 
@@ -327,6 +353,7 @@ extension on LiveSessionSnapshot {
     bool? fromBackgroundService,
   }) {
     return LiveSessionSnapshot(
+      sessionId: sessionId,
       protocolId: protocolId,
       protocolName: protocolName,
       deviceIds: deviceIds,

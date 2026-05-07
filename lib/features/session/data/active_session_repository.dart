@@ -48,16 +48,17 @@ class ActiveSessionRepository {
   }
 
   Future<String> createSession({
+    String? sessionId,
     required String protocolId,
     required String protocolName,
     required List<String> deviceIds,
     required String transport,
   }) async {
-    final sessionId = _uuid.v4();
+    final newSessionId = sessionId ?? _uuid.v4();
     final now = DateTime.now();
 
     final newSession = ActiveSession(
-      id: sessionId,
+      id: newSessionId,
       protocolId: protocolId,
       protocolName: protocolName,
       deviceIds: deviceIds,
@@ -73,8 +74,8 @@ class ActiveSessionRepository {
     await saveActiveSessions(updatedSessions);
 
     appLogger.i(
-        'Created new active session: $sessionId with ${deviceIds.length} devices');
-    return sessionId;
+        'Created new active session: $newSessionId with ${deviceIds.length} devices');
+    return newSessionId;
   }
 
   Future<void> updateSessionStatus(

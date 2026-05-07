@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -67,6 +68,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   ProviderSubscription<SessionEngineState>? _engineSub;
   bool _startingSession = false;
   String? _activeSessionId;
+  late final String _engineKey;
 
   /// Backend pad labels from Node `GET sessions/active/:org` (Hydrawav3-Server).
   String? _backendMoon;
@@ -83,20 +85,27 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   @override
   void initState() {
     super.initState();
-    _activeSessionId = widget.sessionId;
+    _activeSessionId = _findMatchingActiveSessionId();
+    _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
 
     _engineSub = ref.listenManual<SessionEngineState>(
-      sessionEngineProvider,
+      sessionEngineFamilyProvider(_engineKey),
       (prev, next) {
         if (!mounted) return;
         final prevS = prev?.status;
         final nextS = next.status;
+        final deviceStatusesChanged = prev == null
+            ? next.deviceStatuses.isNotEmpty
+            : !mapEquals(prev.deviceStatuses, next.deviceStatuses);
+        final statusChanged = prevS != nextS;
         final nowActive =
             nextS == SessionStatus.running || nextS == SessionStatus.paused;
         final wasActive =
             prevS == SessionStatus.running || prevS == SessionStatus.paused;
         if (nowActive && !wasActive) {
           _startBackendPadPolling();
+          unawaited(_ensureAndSyncFromEngineState(next));
+        } else if (nowActive && (statusChanged || deviceStatusesChanged)) {
           unawaited(_ensureAndSyncFromEngineState(next));
         } else if (!nowActive && wasActive) {
           // Avoid setState while route is being popped/unmounted.
@@ -108,7 +117,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     // If the engine is already active before this screen finishes wiring up
     // listeners (common when coming from setup with skipEngineBootstrap=true),
     // ensure we still create + sync the active session so History can show it.
-    unawaited(_ensureAndSyncFromEngineState(ref.read(sessionEngineProvider)));
+    unawaited(_ensureAndSyncFromEngineState(
+      ref.read(sessionEngineFamilyProvider(_engineKey)),
+    ));
 
     Future<void> bootstrap() async {
       if (!mounted) return;
@@ -116,70 +127,110 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       _bootstrapStarted = true;
       if (widget.skipEngineBootstrap) return;
 
-      final ctrl = ref.read(sessionEngineProvider.notifier);
+      final ctrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+      final currentEngineState =
+          ref.read(sessionEngineFamilyProvider(_engineKey));
 
       try {
         if (!mounted) return;
-        ctrl.prepareSession(
-          deviceIds: widget.deviceIds,
-          transport: widget.transport == 'wifi'
-              ? session_model.SessionTransport.wifi
-              : session_model.SessionTransport.ble,
+
+        final allActiveSessions = ref.read(activeSessionsProvider);
+        final hasConflictingSession = allActiveSessions.any(
+          (session) =>
+              session.id != _activeSessionId &&
+              _isLiveSession(session.status) &&
+              session.deviceIds.any(widget.deviceIds.contains),
         );
+        final targetProtocolId = widget.protocol?.id ?? widget.protocolId;
+        final engineMatchesTarget = _areDeviceListsEqual(
+                currentEngineState.deviceIds, widget.deviceIds) &&
+            currentEngineState.protocol?.id == targetProtocolId;
 
-        final Protocol commonProtocol = widget.protocol ??
-            await ref.read(
-              protocolDetailProvider(widget.protocolId).future,
-            );
-
-        if (!mounted) return;
-
-        // Resolve the selected protocol per device (no fallback: every device must have one).
-        if (widget.protocolByDeviceId.isEmpty) {
-          throw StateError(
-              'Missing protocolByDeviceId: per-device protocol is required.');
+        if (hasConflictingSession) {
+          appLogger.w(
+            'Skipping engine bootstrap for session=$_engineKey due to device overlap',
+          );
+          return;
         }
 
-        final Map<String, Protocol> protocolByDevice = {};
-        await Future.wait(widget.deviceIds.map((id) async {
-          final pid = widget.protocolByDeviceId[id];
-          if (pid == null) {
-            throw StateError('No protocol selected for device: $id');
-          }
-          final proto = pid == commonProtocol.id
-              ? commonProtocol
-              : await ref.read(protocolDetailProvider(pid).future);
-          protocolByDevice[id] = proto;
-        }));
+        if (!engineMatchesTarget ||
+            currentEngineState.status == SessionStatus.idle) {
+          appLogger.i(
+              'Loading new session into engine - devices: ${widget.deviceIds}');
+          ctrl.prepareSession(
+            deviceIds: widget.deviceIds,
+            transport: widget.transport == 'wifi'
+                ? session_model.SessionTransport.wifi
+                : session_model.SessionTransport.ble,
+          );
 
-        if (protocolByDevice.length != widget.deviceIds.length) {
-          throw StateError('protocolByDevice resolution incomplete.');
+          if (!mounted) return;
+
+          // Resolve the selected protocol per device (no fallback: every device must have one).
+          if (widget.protocolByDeviceId.isEmpty) {
+            throw StateError(
+                'Missing protocolByDeviceId: per-device protocol is required.');
+          }
+
+          final Protocol commonProtocol = widget.protocol ??
+              await ref.read(
+                protocolDetailProvider(widget.protocolId).future,
+              );
+
+          final Map<String, Protocol> protocolByDevice = {};
+          await Future.wait(widget.deviceIds.map((id) async {
+            final pid = widget.protocolByDeviceId[id];
+            if (pid == null) {
+              throw StateError('No protocol selected for device: $id');
+            }
+            final proto = pid == commonProtocol.id
+                ? commonProtocol
+                : await ref.read(protocolDetailProvider(pid).future);
+            protocolByDevice[id] = proto;
+          }));
+
+          if (protocolByDevice.length != widget.deviceIds.length) {
+            throw StateError('protocolByDevice resolution incomplete.');
+          }
+
+          ctrl.loadSession(
+            commonProtocol,
+            widget.deviceIds,
+            transport: widget.transport == 'wifi'
+                ? session_model.SessionTransport.wifi
+                : session_model.SessionTransport.ble,
+            advancedSettings: widget.advancedSettings,
+            advancedSettingsByDevice: widget.advancedSettingsByDevice,
+            delayedDeviceId: widget.delayedDeviceId,
+            protocolByDevice: protocolByDevice,
+            wifiConfigAlreadyPublished: widget.wifiConfigAlreadyPublished,
+          );
+
+          if (!mounted) return;
+          if (widget.transport == 'wifi') {
+            final ms = widget.sessionClockAnchorMs;
+            if (widget.wifiConfigAlreadyPublished && ms != null) {
+              ctrl.applySessionClockOffsetFromWallAnchor(
+                DateTime.fromMillisecondsSinceEpoch(ms),
+              );
+            }
+            await ctrl.start();
+          }
         }
 
-        ctrl.loadSession(
-          commonProtocol,
-          widget.deviceIds,
-          transport: widget.transport == 'wifi'
-              ? session_model.SessionTransport.wifi
-              : session_model.SessionTransport.ble,
-          advancedSettings: widget.advancedSettings,
-          advancedSettingsByDevice: widget.advancedSettingsByDevice,
-          delayedDeviceId: widget.delayedDeviceId,
-          protocolByDevice: protocolByDevice,
-          wifiConfigAlreadyPublished: widget.wifiConfigAlreadyPublished,
-        );
-
-        if (!mounted) return;
-        if (widget.transport == 'wifi') {
-          final ms = widget.sessionClockAnchorMs;
-          if (widget.wifiConfigAlreadyPublished && ms != null) {
-            ctrl.applySessionClockOffsetFromWallAnchor(
-              DateTime.fromMillisecondsSinceEpoch(ms),
-            );
-          }
-          await ctrl.start();
-          await _ensureActiveSessionCreated(protocolName: commonProtocol.templateName);
+        // Always ensure active session is created and synced for this screen
+        final updatedEngineState =
+            ref.read(sessionEngineFamilyProvider(_engineKey));
+        if (_areDeviceListsEqual(
+            widget.deviceIds, updatedEngineState.deviceIds)) {
+          final protocolName = updatedEngineState.protocol?.templateName ??
+              widget.protocol?.templateName ??
+              'Unknown Protocol';
+          await _ensureActiveSessionCreated(protocolName: protocolName);
           await _syncCurrentSessionToActiveSessions();
+        } else {
+          appLogger
+              .w('Skipping session sync - engine managing different devices');
         }
       } catch (e) {
         appLogger.e('SessionScreen error: $e');
@@ -303,64 +354,171 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   }
 
   Future<void> _ensureActiveSessionCreated({String? protocolName}) async {
-    if (_activeSessionId != null) return;
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
+    active_session.ActiveSession? existingSession;
+    for (final session in ref.read(activeSessionsProvider)) {
+      if (session.id == _engineKey) {
+        existingSession = session;
+        break;
+      }
+    }
+
+    if (existingSession != null) {
+      _activeSessionId = existingSession.id;
+      appLogger.i('Reusing existing session by ID: $_activeSessionId');
+      return;
+    }
+
     _activeSessionId = await activeSessionsNotifier.createSession(
+      sessionId: _engineKey,
       protocolId: widget.protocolId,
       protocolName: protocolName ?? 'Unknown Protocol',
       deviceIds: widget.deviceIds,
       transport: widget.transport,
     );
+    appLogger.i(
+        'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
+  }
+
+  bool _areDeviceListsEqual(List<String> list1, List<String> list2) {
+    if (list1.length != list2.length) return false;
+    final set1 = Set<String>.from(list1);
+    final set2 = Set<String>.from(list2);
+    return set1.containsAll(set2);
+  }
+
+  String? _findMatchingActiveSessionId() {
+    final explicitSessionId = widget.sessionId;
+    if (explicitSessionId != null && explicitSessionId.isNotEmpty) {
+      return explicitSessionId;
+    }
+
+    final matchingSessions = ref
+        .read(activeSessionsProvider)
+        .where((session) =>
+            _isLiveSession(session.status) &&
+            session.protocolId == widget.protocolId &&
+            _areDeviceListsEqual(session.deviceIds, widget.deviceIds))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return matchingSessions.isEmpty ? null : matchingSessions.first.id;
+  }
+
+  String _buildFallbackEngineKey() {
+    final sortedDeviceIds = [...widget.deviceIds]..sort();
+    return '${widget.transport}:${widget.protocolId}:${sortedDeviceIds.join(",")}';
+  }
+
+  bool _isLiveSession(active_session.SessionStatus status) {
+    return status == active_session.SessionStatus.running ||
+        status == active_session.SessionStatus.paused;
+  }
+
+  active_session.ActiveSession? _findTrackedSession(
+    List<active_session.ActiveSession> sessions,
+  ) {
+    final activeSessionId = _activeSessionId;
+    if (activeSessionId == null) return null;
+    for (final session in sessions) {
+      if (session.id == activeSessionId) {
+        return session;
+      }
+    }
+    return null;
   }
 
   active_session.SessionStatus _toActiveStatus(SessionStatus status) {
     return switch (status) {
       session_model.SessionStatus.idle => active_session.SessionStatus.idle,
-      session_model.SessionStatus.running => active_session.SessionStatus.running,
+      session_model.SessionStatus.running =>
+        active_session.SessionStatus.running,
       session_model.SessionStatus.paused => active_session.SessionStatus.paused,
-      session_model.SessionStatus.stopped => active_session.SessionStatus.stopped,
+      session_model.SessionStatus.stopped =>
+        active_session.SessionStatus.stopped,
       session_model.SessionStatus.completed =>
         active_session.SessionStatus.completed,
     };
   }
 
+  SessionStatus _toSessionStatus(active_session.SessionStatus status) {
+    return switch (status) {
+      active_session.SessionStatus.idle => session_model.SessionStatus.idle,
+      active_session.SessionStatus.running =>
+        session_model.SessionStatus.running,
+      active_session.SessionStatus.paused => session_model.SessionStatus.paused,
+      active_session.SessionStatus.stopped =>
+        session_model.SessionStatus.stopped,
+      active_session.SessionStatus.completed =>
+        session_model.SessionStatus.completed,
+    };
+  }
+
   Future<void> _syncCurrentSessionToActiveSessions() async {
     if (_activeSessionId == null) return;
-    final engine = ref.read(sessionEngineProvider);
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
-    await activeSessionsNotifier.updateSessionStatus(
-      _activeSessionId!,
-      _toActiveStatus(engine.status),
-    );
-    await activeSessionsNotifier.updateDeviceStatuses(
-      _activeSessionId!,
-      <String, active_session.SessionStatus>{
-        for (final entry in engine.deviceStatuses.entries)
-          entry.key: _toActiveStatus(entry.value),
-      },
-    );
+
+    // Only update if this session's devices match the engine's current devices
+    if (_areDeviceListsEqual(widget.deviceIds, engine.deviceIds)) {
+      await activeSessionsNotifier.updateSessionStatus(
+        _activeSessionId!,
+        _toActiveStatus(engine.status),
+      );
+      await activeSessionsNotifier.updateDeviceStatuses(
+        _activeSessionId!,
+        <String, active_session.SessionStatus>{
+          for (final entry in engine.deviceStatuses.entries)
+            entry.key: _toActiveStatus(entry.value),
+        },
+      );
+      appLogger.i('Synced session $_activeSessionId with engine state');
+    } else {
+      appLogger.w('Skipping session sync - device lists do not match');
+    }
   }
 
   Future<void> _removeTrackedSessionIfAny() async {
     if (_activeSessionId == null) return;
-    await ref.read(activeSessionsProvider.notifier).removeSession(_activeSessionId!);
-    _activeSessionId = null;
+
+    // Only remove session if it's actually completed or stopped
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
+    final sessionStatus = engine.status;
+
+    if (sessionStatus == SessionStatus.completed ||
+        sessionStatus == SessionStatus.stopped) {
+      await ref
+          .read(activeSessionsProvider.notifier)
+          .removeSession(_activeSessionId!);
+      appLogger.i('Removed completed session: $_activeSessionId');
+      _activeSessionId = null;
+    } else {
+      appLogger.w(
+          'Not removing session $_activeSessionId - status is $sessionStatus');
+    }
   }
 
-  Future<void> _syncEngineStateToActiveSessions(SessionEngineState engine) async {
+  Future<void> _syncEngineStateToActiveSessions(
+      SessionEngineState engine) async {
     if (_activeSessionId == null) return;
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
-    await activeSessionsNotifier.updateSessionStatus(
-      _activeSessionId!,
-      _toActiveStatus(engine.status),
-    );
-    await activeSessionsNotifier.updateDeviceStatuses(
-      _activeSessionId!,
-      <String, active_session.SessionStatus>{
-        for (final entry in engine.deviceStatuses.entries)
-          entry.key: _toActiveStatus(entry.value),
-      },
-    );
+
+    // Only update if this session's devices match the engine's current devices
+    if (_areDeviceListsEqual(widget.deviceIds, engine.deviceIds)) {
+      await activeSessionsNotifier.updateSessionStatus(
+        _activeSessionId!,
+        _toActiveStatus(engine.status),
+      );
+      await activeSessionsNotifier.updateDeviceStatuses(
+        _activeSessionId!,
+        <String, active_session.SessionStatus>{
+          for (final entry in engine.deviceStatuses.entries)
+            entry.key: _toActiveStatus(entry.value),
+        },
+      );
+      appLogger.i('Synced session $_activeSessionId with engine state');
+    } else {
+      appLogger.w('Skipping engine state sync - device lists do not match');
+    }
   }
 
   Future<void> _ensureAndSyncFromEngineState(SessionEngineState engine) async {
@@ -368,22 +526,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         engine.status == SessionStatus.paused;
     if (!isLive) return;
     await _ensureActiveSessionCreated(
-      protocolName: engine.protocol?.templateName ?? widget.protocol?.templateName,
+      protocolName:
+          engine.protocol?.templateName ?? widget.protocol?.templateName,
     );
     await _syncEngineStateToActiveSessions(engine);
   }
 
   @override
   Widget build(BuildContext context) {
-    final engine = ref.watch(
-        sessionEngineProvider); // ✅ FIX: WATCH instead of READ so UI rebuilds on state changes
-    final protocolAsync = widget.protocol != null
-        ? AsyncValue.data(widget.protocol!)
-        : ref.watch(protocolDetailProvider(widget.protocolId));
+    final engine = ref.watch(sessionEngineFamilyProvider(_engineKey));
+
+    // Get session-specific data instead of always using engine state
+    final activeSessions = ref.watch(activeSessionsProvider);
+    final currentSession = _findTrackedSession(activeSessions);
 
     final timer = engine.timer;
-    final status = engine.status;
-    final ctrl = ref.read(sessionEngineProvider.notifier);
+    final status = currentSession == null
+        ? engine.status
+        : _toSessionStatus(currentSession.status);
+    final ctrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
     final protocol = engine.protocol;
     // During timed pause gaps the engine sets currentCycleIndex to -1, but
     // the pads still reflect the active protocol cycle — use lastVisualCycleIndex.
@@ -463,7 +624,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   itemBuilder: (context, index) {
                     final id = orderedDeviceIds[index];
                     final deviceTimer = engine.deviceTimers[id]!;
-                    final deviceStatus = engine.deviceStatuses[id]!;
+                    final deviceStatus =
+                        engine.deviceStatuses[id] ?? SessionStatus.idle;
                     final perDeviceProtocolName =
                         engine.protocolByDevice[id]?.templateName ??
                             protocol?.templateName ??
@@ -762,8 +924,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     setState(() => _startingSession = true);
                     try {
                       await ctrl.start();
-                      final currentProtocol =
-                          ref.read(sessionEngineProvider).protocol;
+                      final currentProtocol = ref
+                          .read(sessionEngineFamilyProvider(_engineKey))
+                          .protocol;
                       await _ensureActiveSessionCreated(
                         protocolName:
                             currentProtocol?.templateName ?? 'Unknown Protocol',

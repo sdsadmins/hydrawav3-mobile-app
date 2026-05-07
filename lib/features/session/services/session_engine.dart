@@ -15,9 +15,12 @@ import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
 import '../domain/session_model.dart';
 
-final sessionEngineProvider =
-    StateNotifierProvider<SessionEngine, SessionEngineState>((ref) {
-  return SessionEngine(ref);
+/// Provider family that creates a separate SessionEngine instance for each session
+/// This allows true concurrent sessions without sharing state
+final sessionEngineFamilyProvider =
+    StateNotifierProvider.family<SessionEngine, SessionEngineState, String>(
+        (ref, sessionId) {
+  return SessionEngine(ref, sessionId: sessionId);
 });
 
 class SessionEngineState {
@@ -88,6 +91,7 @@ class SessionEngineState {
 
 class SessionEngine extends StateNotifier<SessionEngineState> {
   final Ref _ref;
+  final String sessionId;
   Timer? _timer;
   final Stopwatch _stopwatch = Stopwatch();
   Duration _sessionClockOffset = Duration.zero;
@@ -103,7 +107,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   static const int _bleStopByte = 0x03;
   static const String _debugLightProtocolId = 'light-on';
 
-  SessionEngine(this._ref) : super(const SessionEngineState());
+  SessionEngine(this._ref, {required this.sessionId})
+      : super(const SessionEngineState());
 
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
@@ -695,6 +700,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final startedAtMs = _firstBlePlayAnchor?.millisecondsSinceEpoch ??
         DateTime.now().millisecondsSinceEpoch;
     final snapshot = LiveSessionSnapshot(
+      sessionId: sessionId,
       protocolId: state.protocol!.id,
       protocolName: state.protocol!.templateName,
       deviceIds: List<String>.from(state.deviceIds),
@@ -715,11 +721,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (status == 'running') {
       await runtime.startService(snapshot);
     } else if (status == 'paused') {
-      await runtime.pauseService();
+      await runtime.pauseService(sessionId: sessionId);
     } else if (status == 'resumed') {
-      await runtime.resumeService();
+      await runtime.resumeService(sessionId: sessionId);
     } else if (status == 'stopped') {
-      await runtime.stopService();
+      await runtime.stopService(sessionId: sessionId);
     } else {
       await runtime.cacheSnapshotOnly(snapshot);
     }
@@ -1107,8 +1113,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     try {
       state = const SessionEngineState();
-      unawaited(
-          _ref.read(backgroundSessionRuntimeProvider.notifier).stopService());
+      unawaited(_ref
+          .read(backgroundSessionRuntimeProvider.notifier)
+          .stopService(sessionId: sessionId));
     } catch (e) {
       appLogger.d('Session: reset() state update ignored (notifier disposed)');
     }

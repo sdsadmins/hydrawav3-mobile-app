@@ -24,68 +24,36 @@ final _sessions = <_Session>[];
 class HistoryListScreen extends ConsumerWidget {
   const HistoryListScreen({super.key});
 
-  /// Check if a session is actually running by validating individual device statuses
-  bool _isSessionActuallyRunning(
-      ActiveSession session, SessionEngineState engineState) {
-    // Check if any devices in this session are actually running
-    bool hasRunningDevices = false;
+  bool _isLiveStatus(SessionStatus status) {
+    return status == SessionStatus.running || status == SessionStatus.paused;
+  }
+
+  /// Keep sessions visible while at least one device is still live,
+  /// including the fully-paused case where no device is currently running.
+  bool _isVisibleActiveSession(ActiveSession session) {
+    if (_isLiveStatus(session.status)) {
+      return true;
+    }
     for (final deviceId in session.deviceIds) {
       final deviceStatus =
           session.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (deviceStatus == SessionStatus.running) {
-        hasRunningDevices = true;
-        break;
+      if (_isLiveStatus(deviceStatus)) {
+        return true;
       }
     }
-
-    return hasRunningDevices;
-  }
-
-  String _deviceSetKey(List<String> ids) {
-    final list = List<String>.from(ids)..sort();
-    return list.join(',');
-  }
-
-  bool _isLiveByDeviceStatuses(ActiveSession s) {
-    // Check if any devices in this session are actually running
-    bool hasRunningDevices = false;
-    for (final deviceId in s.deviceIds) {
-      final deviceStatus = s.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (deviceStatus == SessionStatus.running) {
-        hasRunningDevices = true;
-        break;
-      }
-    }
-
-    return hasRunningDevices;
-  }
-
-  String _signature(ActiveSession s) {
-    return '${s.protocolId}|${s.transport}|${_deviceSetKey(s.deviceIds)}';
+    return false;
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final allActiveSessions = ref.watch(activeSessionsProvider);
-    final engineState = ref.watch(sessionEngineProvider);
 
     // Show ALL sessions in History (running on top, older below).
-    // Engine is only used to decide which running card can open live timing UI.
-    // Keep only genuinely live sessions, then collapse duplicates so
-    // one real session appears as one card.
-    final liveSessions = allActiveSessions
-        .where(_isLiveByDeviceStatuses)
+    // Keep only genuinely live sessions, but DON'T collapse duplicates - each session
+    // should remain separate even if they have the same protocol/devices.
+    final runningSessions = allActiveSessions
+        .where(_isVisibleActiveSession)
         .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final bySignature = <String, ActiveSession>{};
-    for (final s in liveSessions) {
-      final key = _signature(s);
-      final existing = bySignature[key];
-      if (existing == null || s.createdAt.isAfter(existing.createdAt)) {
-        bySignature[key] = s;
-      }
-    }
-    final runningSessions = bySignature.values.toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     return Scaffold(
@@ -181,8 +149,7 @@ class HistoryListScreen extends ConsumerWidget {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _ActiveSessionCard(
                           session: session,
-                          canOpenLive:
-                              _isSessionActuallyRunning(session, engineState),
+                          canOpenLive: _isVisibleActiveSession(session),
                         ),
                       ),
                     );
@@ -412,6 +379,7 @@ class _ServiceLiveSessionCard extends StatelessWidget {
         context.pushNamed(
           RouteNames.session,
           extra: {
+            'sessionId': snapshot.sessionId,
             'protocolId': snapshot.protocolId,
             'deviceIds': snapshot.deviceIds,
             'transport': snapshot.transport,
