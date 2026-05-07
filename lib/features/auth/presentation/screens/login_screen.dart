@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
@@ -72,18 +73,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF1E3040),
-              ThemeConstants.background,
-              ThemeConstants.background
-            ],
-            stops: [0.0, 0.4, 1.0],
-          ),
-        ),
+        decoration: const BoxDecoration(color: ThemeConstants.background),
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
@@ -92,14 +82,52 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 constraints: const BoxConstraints(maxWidth: 420),
                 child: Column(
                   children: [
+                    const SizedBox(height: 20),
+
                     /// Logo
                     AnimatedEntrance(
                       child: Column(
                         children: [
-                          Image.asset(
-                            'assets/images/White_Hydrawav3_Logo.png',
-                            height: 86,
-                            fit: BoxFit.contain,
+                          Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              SvgPicture.asset(
+                                'assets/images/Hydrawav3_Black_Logo.svg',
+                                height: 120,
+                                fit: BoxFit.contain,
+                              ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: ThemeConstants.accent,
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: ThemeConstants.accent
+                                            .withValues(alpha: 0.3),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Text(
+                                    'BETA',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -120,12 +148,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               /// Username
                               TextFormField(
                                 controller: _userCtrl,
-                                decoration: const InputDecoration(
-                                    hintText: 'Username'),
-                                validator: (v) =>
-                                    (v == null || v.isEmpty)
-                                        ? 'Required'
-                                        : null,
+                                decoration:
+                                    const InputDecoration(hintText: 'Username'),
+                                validator: (v) => (v == null || v.isEmpty)
+                                    ? 'Required'
+                                    : null,
                               ),
 
                               const SizedBox(height: 12),
@@ -140,14 +167,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                     icon: Icon(_obscure
                                         ? Icons.visibility_off
                                         : Icons.visibility),
-                                    onPressed: () => setState(
-                                        () => _obscure = !_obscure),
+                                    onPressed: () =>
+                                        setState(() => _obscure = !_obscure),
                                   ),
                                 ),
-                                validator: (v) =>
-                                    (v == null || v.isEmpty)
-                                        ? 'Required'
-                                        : null,
+                                validator: (v) => (v == null || v.isEmpty)
+                                    ? 'Required'
+                                    : null,
                               ),
 
                               const SizedBox(height: 20),
@@ -178,7 +204,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         style: TextStyle(
                                           color: ThemeConstants.accent,
                                           decoration: TextDecoration.underline,
-                                          decorationColor: ThemeConstants.accent,
+                                          decorationColor:
+                                              ThemeConstants.accent,
                                           decorationThickness: 2,
                                           fontWeight: FontWeight.w800,
                                         ),
@@ -211,7 +238,6 @@ class _GradientCTA extends StatelessWidget {
 
   const _GradientCTA({
     required this.label,
-
     this.isLoading = false,
     required this.onTap,
   });
@@ -223,9 +249,7 @@ class _GradientCTA extends StatelessWidget {
       child: Container(
         height: 52,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [ThemeConstants.accent, Color(0xFFE09060)],
-          ),
+          color: ThemeConstants.accent,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Center(
@@ -234,8 +258,7 @@ class _GradientCTA extends StatelessWidget {
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(label,
-                        style: const TextStyle(color: Colors.white)),
+                    Text(label, style: const TextStyle(color: Colors.white)),
                     const SizedBox(width: 8),
                   ],
                 ),

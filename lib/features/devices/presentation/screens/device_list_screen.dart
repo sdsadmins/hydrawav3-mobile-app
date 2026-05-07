@@ -15,6 +15,7 @@ import '../../../devices/domain/device_model.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
+import '../../../ble/services/ble_scanner.dart';
 
 final pairedDevicesProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
@@ -24,15 +25,24 @@ final _bleConnectingIdsProvider = StateProvider<Set<String>>((ref) {
   return <String>{};
 });
 
+final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
+
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Initialize auto-scan for BLE devices
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final scanner = ref.read(bleScannerProvider);
+      scanner.initializeAutoScan();
+    });
+
     final pairedDevices = ref.watch(pairedDevicesProvider);
     final target = ref.watch(sessionTargetProvider);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
     final connectingIds = ref.watch(_bleConnectingIdsProvider);
+    final hydrawaveOnly = ref.watch(_hydrawaveOnlyProvider);
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: CustomScrollView(
@@ -40,13 +50,7 @@ class DeviceListScreen extends ConsumerWidget {
         slivers: [
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1E3040), ThemeConstants.background],
-                ),
-              ),
+              decoration: const BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -62,7 +66,7 @@ class DeviceListScreen extends ConsumerWidget {
                                 style: TextStyle(
                                     fontSize: 28,
                                     fontWeight: FontWeight.w700,
-                                    color: Colors.white,
+                                    color: ThemeConstants.textPrimary,
                                     letterSpacing: -0.5)),
                             SizedBox(height: 4),
                             Text('Manage your Hydrawav3 devices',
@@ -96,14 +100,15 @@ class DeviceListScreen extends ConsumerWidget {
                                   child: const Row(
                                     children: [
                                       Icon(Icons.check_rounded,
-                                          size: 18, color: Colors.white),
+                                          size: 18,
+                                          color: ThemeConstants.textPrimary),
                                       SizedBox(width: 6),
                                       Text(
                                         'Done',
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
-                                          color: Colors.white,
+                                          color: ThemeConstants.textPrimary,
                                         ),
                                       ),
                                     ],
@@ -157,7 +162,7 @@ class DeviceListScreen extends ConsumerWidget {
                           onTap: () {
                             ref
                                 .read(sessionTargetProvider.notifier)
-                                .setTransport(SessionTransport.ble);
+                                .setTransport(SessionTransport.ble, ref);
                             Future.delayed(const Duration(milliseconds: 100),
                                 () {
                               ref.read(startScanProvider)();
@@ -173,7 +178,7 @@ class DeviceListScreen extends ConsumerWidget {
                           label: 'Wi‑Fi',
                           onTap: () => ref
                               .read(sessionTargetProvider.notifier)
-                              .setTransport(SessionTransport.wifi),
+                              .setTransport(SessionTransport.wifi, ref),
                         ),
                       ),
                     ],
@@ -187,12 +192,67 @@ class DeviceListScreen extends ConsumerWidget {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
             sliver: SliverToBoxAdapter(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: _ScanButton(
-                  visible: target.transport == SessionTransport.ble,
-                  onTap: () => ref.read(startScanProvider)(),
-                ),
+              child: Row(
+                children: [
+                  if (target.transport == SessionTransport.ble) ...[
+                    Container(
+                      height: 34,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.surface,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: ThemeConstants.border),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.verified_rounded,
+                            size: 14,
+                            color: hydrawaveOnly
+                                ? ThemeConstants.accent
+                                : ThemeConstants.textTertiary,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Hydrawav3',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: hydrawaveOnly
+                                  ? ThemeConstants.accent
+                                  : ThemeConstants.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          SizedBox(
+                            height: 22,
+                            child: Center(
+                              child: Transform.scale(
+                                scale: 0.68,
+                                child: Switch.adaptive(
+                                  value: hydrawaveOnly,
+                                  activeColor: ThemeConstants.accent,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  onChanged: (v) => ref
+                                      .read(_hydrawaveOnlyProvider.notifier)
+                                      .state = v,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                  ],
+                  _ScanButton(
+                    visible: target.transport == SessionTransport.ble,
+                    onTap: () => ref.read(startScanProvider)(),
+                  ),
+                ],
               ),
             ),
           ),
@@ -252,8 +312,8 @@ class DeviceListScreen extends ConsumerWidget {
                       ),
                     );
                   }
-                  final selected =
-                      list.where((d) => target.deviceIds.contains(d.macAddress));
+                  final selected = list
+                      .where((d) => target.deviceIds.contains(d.macAddress));
                   if (selected.isEmpty) {
                     return const SliverToBoxAdapter(
                       child: _EmptyDashed(
@@ -275,12 +335,17 @@ class DeviceListScreen extends ConsumerWidget {
                               typeIcon: Icons.wifi_rounded,
                               typeLabel: 'Wi‑Fi',
                               name: d.name,
-                              subtitle: 'SN: ${d.macAddress}',
+                              subtitle: 'MAC: ${d.macAddress}',
                               batteryText: '--',
                               primaryActionLabel: 'Disconnect',
-                              onPrimaryAction: () => ref
-                                  .read(sessionTargetProvider.notifier)
-                                  .toggleDevice(d.macAddress),
+                              onPrimaryAction: () async {
+                                await ref
+                                    .read(bleRepositoryProvider)
+                                    .disconnectDevice(d.macAddress);
+                                ref
+                                    .read(sessionTargetProvider.notifier)
+                                    .ensureDeselected(d.macAddress);
+                              },
                             ),
                           ),
                         );
@@ -291,7 +356,6 @@ class DeviceListScreen extends ConsumerWidget {
                 },
               ),
             ),
-
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               sliver: SliverToBoxAdapter(
@@ -340,7 +404,7 @@ class DeviceListScreen extends ConsumerWidget {
                       (ctx, i) {
                         final d = list[i];
                         final selected =
-                            target.deviceIds.contains(d.macAddress);
+                            target.filteredDeviceIds.contains(d.macAddress);
                         return AnimatedEntrance(
                           index: i + 1,
                           child: Padding(
@@ -348,10 +412,7 @@ class DeviceListScreen extends ConsumerWidget {
                             child: _AvailableDeviceRow(
                               icon: Icons.wifi_rounded,
                               name: d.name,
-                              metaLeft: 'Strong',
-                              metaRight: d.firmware != null
-                                  ? 'v${d.firmware}'
-                                  : 'v—',
+                              idText: d.macAddress,
                               buttonLabel: selected ? 'Selected' : 'Select',
                               onTap: () => ref
                                   .read(sessionTargetProvider.notifier)
@@ -403,7 +464,7 @@ class DeviceListScreen extends ConsumerWidget {
                             name: r.device.platformName.isNotEmpty
                                 ? r.device.platformName
                                 : 'Unknown Device',
-                            subtitle: 'SN: ${r.device.remoteId.str}',
+                            subtitle: 'MAC: ${r.device.remoteId.str}',
                             batteryText: '--',
                             primaryActionLabel: 'Disconnect',
                             onPrimaryAction: () async {
@@ -434,9 +495,23 @@ class DeviceListScreen extends ConsumerWidget {
                               .map((r) => r.device.remoteId.str)
                               .toSet();
                           final deduped = byId.values
-                              .where((r) =>
-                                  !connectedIdSet.contains(r.device.remoteId.str))
-                              .toList();
+                              .where((r) => !connectedIdSet
+                                  .contains(r.device.remoteId.str))
+                              .where((r) {
+                            if (!hydrawaveOnly) return true;
+                            final expected = BleConstants.preferredServiceUuid;
+                            if (expected == null || expected.isEmpty) {
+                              return false;
+                            }
+                            final targetUuid =
+                                BleConstants.normalizeUuid(expected);
+                            final advertised = r.advertisementData.serviceUuids;
+                            for (final u in advertised) {
+                              final adv = BleConstants.normalizeUuid(u.str);
+                              if (adv == targetUuid) return true;
+                            }
+                            return false;
+                          }).toList();
                           if (deduped.isEmpty) {
                             return const _EmptyDashed(
                               icon: Icons.bluetooth_rounded,
@@ -460,9 +535,9 @@ class DeviceListScreen extends ConsumerWidget {
                                       BleConstants.preferredServiceUuid!,
                                     )
                                   : null;
-                              final advertisedServices = r
-                                  .advertisementData.serviceUuids
-                                  .map((u) => BleConstants.normalizeUuid(u.str));
+                              final advertisedServices =
+                                  r.advertisementData.serviceUuids.map(
+                                      (u) => BleConstants.normalizeUuid(u.str));
                               final uuidAllowed = !strictEnabled ||
                                   advertisedServices.contains(targetService);
                               return AnimatedEntrance(
@@ -472,8 +547,7 @@ class DeviceListScreen extends ConsumerWidget {
                                   child: _AvailableDeviceRow(
                                     icon: Icons.bluetooth_rounded,
                                     name: name,
-                                    metaLeft: 'Strong',
-                                    metaRight: 'v—',
+                                    idText: id,
                                     buttonLabel: connectingIds.contains(id)
                                         ? 'Connecting...'
                                         : 'Connect',
@@ -496,7 +570,8 @@ class DeviceListScreen extends ConsumerWidget {
                                         return;
                                       }
                                       ref
-                                          .read(_bleConnectingIdsProvider.notifier)
+                                          .read(_bleConnectingIdsProvider
+                                              .notifier)
                                           .state = {...connectingIds, id};
                                       final messenger =
                                           ScaffoldMessenger.of(context);
@@ -528,11 +603,9 @@ class DeviceListScreen extends ConsumerWidget {
                                         final current =
                                             ref.read(_bleConnectingIdsProvider);
                                         ref
-                                            .read(
-                                                _bleConnectingIdsProvider.notifier)
-                                            .state = {
-                                          ...current
-                                        }..remove(id);
+                                            .read(_bleConnectingIdsProvider
+                                                .notifier)
+                                            .state = {...current}..remove(id);
                                       }
                                     },
                                   ),
@@ -629,14 +702,20 @@ class _SegmentBtn extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 18, color: active ? Colors.white : ThemeConstants.textSecondary),
+            Icon(icon,
+                size: 18,
+                color: active
+                    ? ThemeConstants.textPrimary
+                    : ThemeConstants.textSecondary),
             const SizedBox(width: 8),
             Text(
               label,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
-                color: active ? Colors.white : ThemeConstants.textSecondary,
+                color: active
+                    ? ThemeConstants.textPrimary
+                    : ThemeConstants.textSecondary,
               ),
             ),
           ],
@@ -674,7 +753,9 @@ class _ScanButton extends ConsumerWidget {
             Icon(
               Icons.refresh_rounded,
               size: 16,
-              color: scanning ? ThemeConstants.accent : ThemeConstants.textTertiary,
+              color: scanning
+                  ? ThemeConstants.accent
+                  : ThemeConstants.textTertiary,
             ),
             const SizedBox(width: 8),
             Text(
@@ -682,7 +763,9 @@ class _ScanButton extends ConsumerWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: scanning ? ThemeConstants.accent : ThemeConstants.textSecondary,
+                color: scanning
+                    ? ThemeConstants.accent
+                    : ThemeConstants.textSecondary,
               ),
             ),
           ],
@@ -715,13 +798,10 @@ class _ConnectedGradientCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [ThemeConstants.accent, Color(0xFFE09060)],
-        ),
+        color: ThemeConstants.accent,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        border:
+            Border.all(color: ThemeConstants.accent.withValues(alpha: 0.65)),
         boxShadow: [
           BoxShadow(
             color: ThemeConstants.accent.withValues(alpha: 0.30),
@@ -751,45 +831,46 @@ class _ConnectedGradientCard extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Icon(typeIcon, size: 18, color: Colors.white),
+                        Icon(typeIcon,
+                            size: 18, color: ThemeConstants.textPrimary),
                         const SizedBox(width: 8),
                         Text(
                           typeLabel,
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: Colors.white.withValues(alpha: 0.85),
+                            color: ThemeConstants.textPrimary,
                           ),
                         ),
                       ],
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.10),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.battery_full,
-                              size: 14, color: Colors.white),
-                          const SizedBox(width: 6),
-                          Text(
-                            batteryText,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    // Container(
+                    //   padding: const EdgeInsets.symmetric(
+                    //       horizontal: 10, vertical: 6),
+                    //   decoration: BoxDecoration(
+                    //     color: Colors.black.withValues(alpha: 0.12),
+                    //     borderRadius: BorderRadius.circular(10),
+                    //     border: Border.all(
+                    //       color: Colors.black.withValues(alpha: 0.10),
+                    //     ),
+                    //   ),
+                    //   // child: Row(
+                    //   //   mainAxisSize: MainAxisSize.min,
+                    //   //   // children: [
+                    //   //   //   const Icon(Icons.battery_full,
+                    //   //   //       size: 14, color: ThemeConstants.textPrimary),
+                    //   //   //   const SizedBox(width: 6),
+                    //   //   //   Text(
+                    //   //   //     batteryText,
+                    //   //   //     style: const TextStyle(
+                    //   //   //       fontSize: 12,
+                    //   //   //       fontWeight: FontWeight.w700,
+                    //   //   //       color: ThemeConstants.textPrimary,
+                    //   //   //     ),
+                    //   //   //   ),
+                    //   //   // ],
+                    //   // ),
+                    // ),
                   ],
                 ),
                 const SizedBox(height: 10),
@@ -798,7 +879,7 @@ class _ConnectedGradientCard extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
-                    color: Colors.white,
+                    color: ThemeConstants.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -806,7 +887,7 @@ class _ConnectedGradientCard extends StatelessWidget {
                   subtitle,
                   style: TextStyle(
                     fontSize: 13,
-                    color: Colors.white.withValues(alpha: 0.82),
+                    color: ThemeConstants.textSecondary,
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -818,10 +899,10 @@ class _ConnectedGradientCard extends StatelessWidget {
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.18),
+                            color: Colors.black.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.10),
+                              color: Colors.black.withValues(alpha: 0.10),
                             ),
                           ),
                           child: Center(
@@ -830,7 +911,7 @@ class _ConnectedGradientCard extends StatelessWidget {
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.white,
+                                color: ThemeConstants.textPrimary,
                               ),
                             ),
                           ),
@@ -842,14 +923,14 @@ class _ConnectedGradientCard extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.18),
+                        color: Colors.black.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.10),
+                          color: Colors.black.withValues(alpha: 0.10),
                         ),
                       ),
                       child: const Icon(Icons.settings_rounded,
-                          color: Colors.white, size: 20),
+                          color: ThemeConstants.textPrimary, size: 20),
                     ),
                   ],
                 ),
@@ -865,8 +946,7 @@ class _ConnectedGradientCard extends StatelessWidget {
 class _AvailableDeviceRow extends StatelessWidget {
   final IconData icon;
   final String name;
-  final String metaLeft;
-  final String metaRight;
+  final String idText;
   final String buttonLabel;
   final bool isLoading;
   final VoidCallback onTap;
@@ -874,8 +954,7 @@ class _AvailableDeviceRow extends StatelessWidget {
   const _AvailableDeviceRow({
     required this.icon,
     required this.name,
-    required this.metaLeft,
-    required this.metaRight,
+    required this.idText,
     required this.buttonLabel,
     this.isLoading = false,
     required this.onTap,
@@ -921,41 +1000,20 @@ class _AvailableDeviceRow extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
-                    color: Colors.white,
+                    color: ThemeConstants.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.network_wifi_rounded,
-                            size: 14, color: Colors.greenAccent),
-                        const SizedBox(width: 4),
-                        Text(
-                          metaLeft,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: ThemeConstants.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('•',
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: ThemeConstants.textTertiary)),
-                    const SizedBox(width: 8),
-                    Text(
-                      metaRight,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: ThemeConstants.textSecondary,
-                      ),
-                    ),
-                  ],
+                Text(
+                  idText,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: ThemeConstants.textSecondary,
+                    height: 1.2,
+                  ),
                 ),
               ],
             ),
@@ -981,10 +1039,10 @@ class _AvailableDeviceRow extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: ThemeConstants.textPrimary,
                       ),
                     ),
-              ),
+            ),
           ),
         ],
       ),
@@ -1068,7 +1126,8 @@ class _HeaderBtn extends StatelessWidget {
                   color: ThemeConstants.accent.withValues(alpha: 0.15)),
         ),
         child: Icon(icon,
-            color: filled ? Colors.white : ThemeConstants.accent, size: 20),
+            color: filled ? ThemeConstants.textPrimary : ThemeConstants.accent,
+            size: 20),
       ),
     );
   }
@@ -1091,8 +1150,7 @@ class _WifiDeviceCard extends StatelessWidget {
     return _AvailableDeviceRow(
       icon: Icons.wifi_rounded,
       name: device.name,
-      metaLeft: 'Strong',
-      metaRight: device.firmware != null ? 'v${device.firmware}' : 'v—',
+      idText: device.macAddress,
       buttonLabel: selected ? 'Selected' : 'Select',
       onTap: onTap,
     );

@@ -29,7 +29,7 @@ class HwButton extends StatelessWidget {
     final child = isLoading
         ? const SizedBox(
             height: 20, width: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
           )
         : Row(
             mainAxisSize: MainAxisSize.min,

@@ -94,8 +94,10 @@ class ProtocolRepository {
       }
     }
 
-    // Return cached data
-    return cached.map(_cachedToProtocol).toList();
+    // Return cached data sorted alphabetically
+    final protocols = cached.map(_cachedToProtocol).toList();
+    protocols.sort((a, b) => a.templateName.compareTo(b.templateName));
+    return protocols;
   }
 
   Future<Protocol> getProtocol(String id) async {

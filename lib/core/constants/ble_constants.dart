@@ -155,7 +155,7 @@ class BleConstants {
 
   // Timeouts
   static const Duration scanTimeout = Duration(seconds: 10);
-  static const Duration connectionTimeout = Duration(seconds: 15);
+  static const Duration connectionTimeout = Duration(seconds: 6);
   static const Duration reconnectDelay = Duration(seconds: 3);
   static const int maxReconnectAttempts = 5;
 

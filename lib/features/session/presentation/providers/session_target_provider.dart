@@ -1,13 +1,15 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/session_model.dart';
+import '../../../ble/presentation/providers/ble_scan_provider.dart'; // Fixed import path
+import '../../../ble/data/ble_repository.dart'; // Added missing import
 
 class SessionTargetState {
   final SessionTransport transport;
   final List<String> deviceIds; // mac addresses for wifi / ble remoteId for ble
 
   const SessionTargetState({
-    this.transport = SessionTransport.wifi,
+    this.transport = SessionTransport.ble,
     this.deviceIds = const <String>[],
   });
 
@@ -20,18 +22,30 @@ class SessionTargetState {
       deviceIds: deviceIds ?? this.deviceIds,
     );
   }
+
+  /// Filter device IDs based on current transport type
+  List<String> get filteredDeviceIds {
+    // For now, return all device IDs to allow cross-transport selection
+    // This preserves user selection when switching between BLE and WiFi
+    return deviceIds;
+  }
 }
 
 class SessionTargetNotifier extends StateNotifier<SessionTargetState> {
   SessionTargetNotifier() : super(const SessionTargetState());
 
-  void setTransport(SessionTransport t) {
-    // Clear previously selected devices when transport changes
-    // since WiFi device IDs are incompatible with BLE and vice versa
-    state = SessionTargetState(
-      transport: t,
-      deviceIds: const <String>[],
-    );
+  void setTransport(SessionTransport t, WidgetRef ref) {
+    // Keep the same device IDs when transport changes
+    // This allows users to toggle between BLE and WiFi without losing selection
+    // Also stop any ongoing auto-scanning when switching transport
+    final scanner = ref.read(bleScanResultsProvider);
+    final bleRepo = ref.read(bleRepositoryProvider);
+    if (scanner != null && bleRepo.isScanning) {
+      // Use the correct stopScan method from bleRepository
+      bleRepo.stopScan();
+    }
+
+    state = state.copyWith(transport: t);
   }
 
   void setSelected(List<String> deviceIds) {

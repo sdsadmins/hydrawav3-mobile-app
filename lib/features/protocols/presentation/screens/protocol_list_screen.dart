@@ -64,7 +64,9 @@ class ProtocolListScreen extends ConsumerWidget {
         if (target.deviceIds.isEmpty) {
           return connectedIds;
         }
-        return target.deviceIds.where((id) => connectedIds.contains(id)).toList();
+        return target.deviceIds
+            .where((id) => connectedIds.contains(id))
+            .toList();
       }
 
       // WiFi: if the user hasn't picked explicit targets, keep empty.
@@ -90,13 +92,7 @@ class ProtocolListScreen extends ConsumerWidget {
           /// 🔥 HEADER
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1E3040), ThemeConstants.background],
-                ),
-              ),
+              decoration: const BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -114,7 +110,7 @@ class ProtocolListScreen extends ConsumerWidget {
                               style: TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.white,
+                                color: ThemeConstants.textPrimary,
                                 letterSpacing: -0.5,
                               ),
                             ),
@@ -148,8 +144,7 @@ class ProtocolListScreen extends ConsumerWidget {
                           children: [
                             _HeaderButton(
                               icon: Icons.smart_toy_outlined,
-                              onTap: () =>
-                                  context.push(RoutePaths.chat),
+                              onTap: () => context.push(RoutePaths.chat),
                             ),
                           ],
                         ),
@@ -163,7 +158,7 @@ class ProtocolListScreen extends ConsumerWidget {
 
           /// ✅ ACTIVE DEVICES CARD (TOP)
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
             sliver: SliverToBoxAdapter(
               child: AnimatedEntrance(
                 index: 0,
@@ -180,7 +175,9 @@ class ProtocolListScreen extends ConsumerWidget {
                       RoutePaths.sessionSetup,
                       extra: {
                         'deviceIds': setupDeviceIds,
-                        'transport': target.transport == SessionTransport.ble ? 'ble' : 'wifi',
+                        'transport': target.transport == SessionTransport.ble
+                            ? 'ble'
+                            : 'wifi',
                       },
                     );
                   },
@@ -344,7 +341,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: ThemeConstants.textPrimary,
                       ),
                     ),
                   ),
@@ -352,7 +349,8 @@ class _ActiveDevicesCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
+                      color:
+                          ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: ThemeConstants.border),
                     ),
@@ -393,7 +391,8 @@ class _ActiveDevicesCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: ThemeConstants.accent.withValues(alpha: 0.22),
+                            color:
+                                ThemeConstants.accent.withValues(alpha: 0.22),
                             blurRadius: 18,
                             offset: const Offset(0, 6),
                           )
@@ -404,7 +403,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                          color: ThemeConstants.textPrimary,
                         ),
                       ),
                     ),
@@ -602,7 +601,7 @@ class _ConnectedDeviceRow extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color: Colors.white,
+                    color: ThemeConstants.textPrimary,
                   ),
                 ),
               ),
@@ -734,7 +733,8 @@ class _ProtocolCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GradientCard(
-      //onTap: () => context.push('/protocols/${protocol.id}'),
+      onTap: () => context.push(
+          '${RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)}'),
       showGlow: true,
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -753,7 +753,7 @@ class _ProtocolCard extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: ThemeConstants.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),

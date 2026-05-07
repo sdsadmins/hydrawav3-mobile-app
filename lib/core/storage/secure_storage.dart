@@ -10,6 +10,8 @@ class SecureStorageService {
   static const _refreshTokenKey = 'refresh_token';
   static const _biometricEnabledKey = 'biometric_enabled';
   static const _userIdKey = 'user_id';
+  static const _selectedOrgIdKey = 'selected_org_id';
+  static const _selectedOrgNameKey = 'selected_org_name';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -29,18 +31,17 @@ class SecureStorageService {
       _storage.write(key: _refreshTokenKey, value: refreshToken),
     ]);
   }
-  
 
   // Future<String?> getAccessToken() =>
   //     _storage.read(key: _accessTokenKey);
   //     print("GET TOKEN: $token");
-Future<String?> getAccessToken() async {
-  final token = await _storage.read(key: 'access_token');
-  print("GET TOKEN FROM STORAGE: $token"); // ✅ ADD
-  return token;
-}
-  Future<String?> getRefreshToken() =>
-      _storage.read(key: _refreshTokenKey);
+  Future<String?> getAccessToken() async {
+    final token = await _storage.read(key: 'access_token');
+    print("GET TOKEN FROM STORAGE: $token"); // ✅ ADD
+    return token;
+  }
+
+  Future<String?> getRefreshToken() => _storage.read(key: _refreshTokenKey);
 
   Future<void> clearTokens() async {
     await Future.wait([
@@ -68,6 +69,25 @@ Future<String?> getAccessToken() async {
       _storage.write(key: _userIdKey, value: userId);
 
   Future<String?> getUserId() => _storage.read(key: _userIdKey);
+
+  // Organization selection
+  Future<void> saveSelectedOrganization(String orgId, String orgName) async {
+    await Future.wait([
+      _storage.write(key: _selectedOrgIdKey, value: orgId),
+      _storage.write(key: _selectedOrgNameKey, value: orgName),
+    ]);
+  }
+
+  Future<String?> getSelectedOrgId() => _storage.read(key: _selectedOrgIdKey);
+  Future<String?> getSelectedOrgName() =>
+      _storage.read(key: _selectedOrgNameKey);
+
+  Future<void> clearSelectedOrganization() async {
+    await Future.wait([
+      _storage.delete(key: _selectedOrgIdKey),
+      _storage.delete(key: _selectedOrgNameKey),
+    ]);
+  }
 
   // Clear all
   Future<void> clearAll() => _storage.deleteAll();

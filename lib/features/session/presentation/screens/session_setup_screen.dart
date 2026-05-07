@@ -14,8 +14,9 @@ import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../presets/data/preset_repository.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
-import '../../../session/domain/session_model.dart';
+import '../../../session/domain/session_model.dart' as session_model;
 import '../../services/session_engine.dart';
+import '../providers/busy_devices_provider.dart';
 
 // This screen is the “web-like” setup:
 // 1) One card per device.
@@ -39,6 +40,7 @@ class SessionSetupScreen extends ConsumerStatefulWidget {
 class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   final Map<String, String> _protocolIdByDeviceId = {};
   final Map<String, AdvancedSettings> _settingsByDeviceId = {};
+  final Set<String> _runDeviceIds = <String>{};
   String? _activeDeviceId;
   String? _delayedDeviceId;
   bool _showSavePreset = false;
@@ -124,6 +126,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
     super.initState();
     _activeDeviceId =
         widget.deviceIds.isNotEmpty ? widget.deviceIds.first : null;
+    _runDeviceIds.addAll(widget.deviceIds);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadDeviceNames());
   }
 
@@ -165,6 +168,8 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
+        backgroundColor: ThemeConstants.surface,
+        foregroundColor: ThemeConstants.textPrimary,
         title: const Text('Session Setup'),
       ),
       body: protocolsAsync.when(
@@ -173,275 +178,617 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
           child: Text('Failed to load protocols: $e'),
         ),
         data: (protocols) {
-          final allSelected = widget.deviceIds.isNotEmpty &&
-              widget.deviceIds.every((id) =>
+          final selectedDeviceIds = widget.deviceIds
+              .where((id) => _runDeviceIds.contains(id))
+              .toList();
+          final allSelected = selectedDeviceIds.isNotEmpty &&
+              selectedDeviceIds.every((id) =>
                   _protocolIdByDeviceId.containsKey(id) &&
                   _settingsByDeviceId.containsKey(id));
 
           final transportEnum = widget.transport == 'wifi'
-              ? SessionTransport.wifi
-              : SessionTransport.ble;
+              ? session_model.SessionTransport.wifi
+              : session_model.SessionTransport.ble;
 
-          return ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            children: [
-              const Text(
-                'Configure each device individually',
-                style: TextStyle(
-                  color: ThemeConstants.textSecondary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
+          Future<String?> pickProtocolId({
+            required String? currentId,
+          }) async {
+            String query = '';
+            return showModalBottomSheet<String>(
+              context: context,
+              showDragHandle: true,
+              isScrollControlled: true,
+              backgroundColor: ThemeConstants.surface,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
               ),
-              const SizedBox(height: 16),
-
-              ...widget.deviceIds.map((deviceId) {
-                final selectedProtocolId = _protocolIdByDeviceId[deviceId];
-                final selectedProtocol = selectedProtocolId == null
-                    ? null
-                    : protocols.firstWhere(
-                        (p) => p.id == selectedProtocolId,
-                      );
-                final settings = _settingsByDeviceId[deviceId];
-                final showAdvanced = _showAdvancedByDeviceId[deviceId] ?? false;
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: ThemeConstants.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: ThemeConstants.border),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _labelFor(deviceId),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
+              builder: (ctx) => SafeArea(
+                top: false,
+                child: StatefulBuilder(
+                  builder: (ctx, setSheetState) {
+                    final list = query.trim().isEmpty
+                        ? protocols
+                        : protocols
+                            .where((p) =>
+                                p.templateName
+                                    .toLowerCase()
+                                    .contains(query.toLowerCase()) ||
+                                p.description
+                                    .toLowerCase()
+                                    .contains(query.toLowerCase()))
+                            .toList();
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        left: 16,
+                        right: 16,
+                        bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
+                        top: 8,
                       ),
-                      const SizedBox(height: 10),
-
-                      Text(
-                        'Protocol',
-                        style: TextStyle(
-                          color: ThemeConstants.textSecondary,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-
-                      DropdownButton<String>(
-                        value: selectedProtocolId,
-                        isExpanded: true,
-                        hint: const Text('Select protocol'),
-                        dropdownColor: ThemeConstants.surface,
-                        items: protocols.map((p) {
-                          return DropdownMenuItem<String>(
-                            value: p.id,
-                            child: Text(
-                              p.templateName,
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (newId) {
-                          if (newId == null) return;
-                          final p = protocols.firstWhere((x) => x.id == newId);
-                          setState(() {
-                            _protocolIdByDeviceId[deviceId] = newId;
-                            _settingsByDeviceId[deviceId] =
-                                _advancedDefaultsFromProtocol(p);
-                            _activeDeviceId = deviceId;
-                          });
-                        },
-                      ),
-
-                      const SizedBox(height: 14),
-                      // Advanced Settings collapsible header (same pattern as protocol detail).
-                      if (selectedProtocol == null || settings == null) ...[
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Select a protocol to edit advanced settings.',
-                          style: TextStyle(color: ThemeConstants.textSecondary),
-                        ),
-                      ] else ...[
-                        const SizedBox(height: 4),
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              _showAdvancedByDeviceId[deviceId] = !showAdvanced;
-                            });
-                          },
-                          child: Row(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              const Icon(
-                                Icons.settings_rounded,
-                                color: ThemeConstants.accent,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 10),
                               const Expanded(
                                 child: Text(
-                                  'Advanced Settings',
+                                  'Select protocol',
                                   style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                    color: ThemeConstants.textPrimary,
                                   ),
                                 ),
                               ),
-                              Icon(
-                                showAdvanced
-                                    ? Icons.keyboard_arrow_up_rounded
-                                    : Icons.keyboard_arrow_down_rounded,
-                                color: ThemeConstants.textSecondary,
+                              IconButton(
+                                onPressed: () => Navigator.of(ctx).pop(),
+                                icon: const Icon(
+                                  Icons.close_rounded,
+                                  color: ThemeConstants.textTertiary,
+                                ),
+                                tooltip: 'Close',
                               ),
                             ],
                           ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            autofocus: true,
+                            onChanged: (v) =>
+                                setSheetState(() => query = v.trim()),
+                            style: const TextStyle(
+                              color: ThemeConstants.textPrimary,
+                              fontSize: 14,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Search protocols...',
+                              hintStyle: const TextStyle(
+                                color: ThemeConstants.textTertiary,
+                              ),
+                              prefixIcon: const Icon(
+                                Icons.search_rounded,
+                                color: ThemeConstants.textTertiary,
+                              ),
+                              filled: true,
+                              fillColor: ThemeConstants.surfaceVariant
+                                  .withValues(alpha: 0.7),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: ThemeConstants.border,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: ThemeConstants.border,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Flexible(
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              physics: const ClampingScrollPhysics(),
+                              itemCount: list.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (ctx, i) {
+                                final p = list[i];
+                                final selected = p.id == currentId;
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: () => Navigator.of(ctx).pop(p.id),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: selected
+                                          ? ThemeConstants.accent
+                                              .withValues(alpha: 0.14)
+                                          : ThemeConstants.surface,
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: selected
+                                            ? ThemeConstants.accent
+                                            : ThemeConstants.border,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          selected
+                                              ? Icons.check_circle_rounded
+                                              : Icons.science_outlined,
+                                          size: 18,
+                                          color: selected
+                                              ? ThemeConstants.accent
+                                              : ThemeConstants.textTertiary,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                p.templateName,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: ThemeConstants
+                                                      .textPrimary,
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              if (p.description.isNotEmpty) ...[
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  p.description,
+                                                  maxLines: 2,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    color: ThemeConstants
+                                                        .textSecondary,
+                                                    fontSize: 12,
+                                                    height: 1.25,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            );
+          }
+
+          final bottomInset = MediaQuery.of(context).padding.bottom;
+          const bottomBarHeight = 56.0;
+
+          return Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    16,
+                    16,
+                    16 + bottomInset + bottomBarHeight + 12,
+                  ),
+                  children: [
+                    const Text(
+                      'Configure each device individually',
+                      style: TextStyle(
+                        color: ThemeConstants.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    ...widget.deviceIds.map((deviceId) {
+                      final isIncluded = _runDeviceIds.contains(deviceId);
+                      final selectedProtocolId =
+                          _protocolIdByDeviceId[deviceId];
+                      final selectedProtocol = selectedProtocolId == null
+                          ? null
+                          : protocols.firstWhere(
+                              (p) => p.id == selectedProtocolId,
+                            );
+                      final settings = _settingsByDeviceId[deviceId];
+                      final showAdvanced =
+                          _showAdvancedByDeviceId[deviceId] ?? false;
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: ThemeConstants.surface,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: ThemeConstants.border),
                         ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          child: !showAdvanced
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.only(top: 10),
-                                  child: _AdvancedSettingsPanel(
-                                    protocolId: selectedProtocol.id,
-                                    selectedDeviceIds: widget.deviceIds,
-                                    settings: settings,
-                                    delayedDeviceId: _delayedDeviceId,
-                                    showSavePreset: _showSavePreset,
-                                    onChangeSettings: (s) {
-                                      setState(() =>
-                                          _settingsByDeviceId[deviceId] = s);
-                                    },
-                                    onToggleSavePreset: () {
-                                      setState(
-                                          () => _showSavePreset = !_showSavePreset);
-                                    },
-                                    onChangeDelayedDeviceId: (id) {
-                                      setState(() => _delayedDeviceId = id);
-                                    },
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _labelFor(deviceId),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: ThemeConstants.textPrimary,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
+                                const SizedBox(width: 8),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'Use',
+                                      style: TextStyle(
+                                        color: ThemeConstants.textSecondary,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Switch.adaptive(
+                                      value: isIncluded,
+                                      activeColor: ThemeConstants.accent,
+                                      onChanged: (v) {
+                                        setState(() {
+                                          if (v) {
+                                            _runDeviceIds.add(deviceId);
+                                          } else {
+                                            _runDeviceIds.remove(deviceId);
+                                            if (_delayedDeviceId == deviceId) {
+                                              _delayedDeviceId = null;
+                                            }
+                                          }
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+
+                            Text(
+                              'Protocol',
+                              style: TextStyle(
+                                color: ThemeConstants.textSecondary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+
+                            InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: !isIncluded
+                                  ? null
+                                  : () async {
+                                      final picked = await pickProtocolId(
+                                        currentId: selectedProtocolId,
+                                      );
+                                      if (!mounted || picked == null) return;
+                                      final p = protocols
+                                          .firstWhere((x) => x.id == picked);
+                                      setState(() {
+                                        _protocolIdByDeviceId[deviceId] =
+                                            picked;
+                                        _settingsByDeviceId[deviceId] =
+                                            _advancedDefaultsFromProtocol(p);
+                                        _activeDeviceId = deviceId;
+                                        // Default advanced panel to collapsed on protocol change.
+                                        _showAdvancedByDeviceId[deviceId] =
+                                            false;
+                                      });
+                                    },
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: ThemeConstants.surfaceVariant
+                                      .withValues(alpha: 0.6),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border:
+                                      Border.all(color: ThemeConstants.border),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        selectedProtocol?.templateName ??
+                                            (isIncluded
+                                                ? 'Select protocol'
+                                                : 'Excluded from session'),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: (!isIncluded ||
+                                                  selectedProtocol == null)
+                                              ? ThemeConstants.textTertiary
+                                              : ThemeConstants.textPrimary,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      color: ThemeConstants.textTertiary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 14),
+                            // Advanced Settings collapsible header (same pattern as protocol detail).
+                            if (!isIncluded) ...[
+                              const SizedBox(height: 4),
+                              const Text(
+                                'This device will not be used in this session.',
+                                style: TextStyle(
+                                    color: ThemeConstants.textSecondary),
+                              ),
+                            ] else if (selectedProtocol == null ||
+                                settings == null) ...[
+                              const SizedBox(height: 4),
+                              const Text(
+                                'Select a protocol to edit advanced settings.',
+                                style: TextStyle(
+                                    color: ThemeConstants.textSecondary),
+                              ),
+                            ] else ...[
+                              const SizedBox(height: 4),
+                              InkWell(
+                                onTap: () {
+                                  setState(() {
+                                    _showAdvancedByDeviceId[deviceId] =
+                                        !showAdvanced;
+                                  });
+                                },
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.settings_rounded,
+                                      color: ThemeConstants.accent,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    const Expanded(
+                                      child: Text(
+                                        'Advanced Settings',
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                          color: ThemeConstants.textPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                    Icon(
+                                      showAdvanced
+                                          ? Icons.keyboard_arrow_up_rounded
+                                          : Icons.keyboard_arrow_down_rounded,
+                                      color: ThemeConstants.textSecondary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 200),
+                                curve: Curves.easeOut,
+                                child: !showAdvanced
+                                    ? const SizedBox.shrink()
+                                    : Padding(
+                                        padding: const EdgeInsets.only(top: 10),
+                                        child: _AdvancedSettingsPanel(
+                                          protocolId: selectedProtocol.id,
+                                          selectedDeviceIds: selectedDeviceIds,
+                                          settings: settings,
+                                          delayedDeviceId: _delayedDeviceId,
+                                          showSavePreset: _showSavePreset,
+                                          onChangeSettings: (s) {
+                                            setState(() =>
+                                                _settingsByDeviceId[deviceId] =
+                                                    s);
+                                          },
+                                          onToggleSavePreset: () {
+                                            setState(() => _showSavePreset =
+                                                !_showSavePreset);
+                                          },
+                                          onChangeDelayedDeviceId: (id) {
+                                            setState(
+                                                () => _delayedDeviceId = id);
+                                          },
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ],
                         ),
-                      ],
-                    ],
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  child: SizedBox(
+                    height: bottomBarHeight,
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _starting || !allSelected
+                          ? null
+                          : () async {
+                              // Check if any selected devices are actually in use by validating session engine state
+                              final engineState =
+                                  ref.read(sessionEngineProvider);
+                              final currentSelectedDeviceIds = widget.deviceIds
+                                  .where((id) => _runDeviceIds.contains(id))
+                                  .toList();
+
+                              // Only consider devices busy if they're in the running session engine
+                              final conflictingDevices =
+                                  currentSelectedDeviceIds
+                                      .where((deviceId) => engineState.deviceIds
+                                          .contains(deviceId))
+                                      .toList();
+
+                              if (conflictingDevices.isNotEmpty &&
+                                  engineState.status ==
+                                      session_model.SessionStatus.running) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Cannot start session. Devices already in use: ${conflictingDevices.join(", ")}',
+                                    ),
+                                    backgroundColor: ThemeConstants.error,
+                                  ),
+                                );
+                                return;
+                              }
+
+                              setState(() => _starting = true);
+                              try {
+                                final ctrl =
+                                    ref.read(sessionEngineProvider.notifier);
+
+                                final runIds = selectedDeviceIds;
+                                final firstId = runIds.first;
+                                final firstProtocolId =
+                                    _protocolIdByDeviceId[firstId]!;
+                                // IMPORTANT: resolve full protocol details before start.
+                                // protocolList items can be lightweight; start payload needs
+                                // full cycles/template fields (same as old flow).
+                                final selectedProtocolIds = runIds
+                                    .map((id) => _protocolIdByDeviceId[id]!)
+                                    .toSet();
+                                final fullProtocolById = <String, Protocol>{};
+                                await Future.wait(
+                                  selectedProtocolIds.map((pid) async {
+                                    final detailed = await ref.read(
+                                      protocolDetailProvider(pid).future,
+                                    );
+                                    fullProtocolById[pid] = detailed;
+                                  }),
+                                );
+
+                                final commonProtocol =
+                                    fullProtocolById[firstProtocolId]!;
+
+                                final protocolByDevice = <String, Protocol>{};
+                                for (final id in runIds) {
+                                  final pid = _protocolIdByDeviceId[id]!;
+                                  protocolByDevice[id] = fullProtocolById[pid]!;
+                                }
+
+                                final advancedSettingsByDevice =
+                                    <String, AdvancedSettings>{};
+                                for (final id in runIds) {
+                                  advancedSettingsByDevice[id] =
+                                      _settingsByDeviceId[id]!;
+                                }
+
+                                final commonAdvanced =
+                                    advancedSettingsByDevice[firstId]!;
+                                final effectiveDelayedDeviceId =
+                                    _delayedDeviceId != null &&
+                                            runIds.contains(_delayedDeviceId)
+                                        ? _delayedDeviceId
+                                        : null;
+
+                                ctrl.prepareSession(
+                                  deviceIds: runIds,
+                                  transport: transportEnum,
+                                );
+
+                                ctrl.loadSession(
+                                  commonProtocol,
+                                  runIds,
+                                  transport: transportEnum,
+                                  advancedSettings: commonAdvanced,
+                                  advancedSettingsByDevice:
+                                      advancedSettingsByDevice,
+                                  delayedDeviceId: effectiveDelayedDeviceId,
+                                  protocolByDevice: protocolByDevice,
+                                  wifiConfigAlreadyPublished: false,
+                                );
+
+                                // Align timer UI close to “now”.
+                                ctrl.applySessionClockOffsetFromWallAnchor(
+                                  DateTime.now(),
+                                );
+
+                                await ctrl.start();
+
+                                if (!mounted) return;
+
+                                context.push(
+                                  RoutePaths.session,
+                                  extra: {
+                                    'protocolId': commonProtocol.id,
+                                    'protocol': commonProtocol,
+                                    'deviceIds': runIds,
+                                    'transport': widget.transport,
+                                    'advancedSettings': commonAdvanced,
+                                    'advancedSettingsByDevice':
+                                        advancedSettingsByDevice,
+                                    'protocolByDeviceId': {
+                                      for (final id in runIds)
+                                        id: _protocolIdByDeviceId[id]!,
+                                    },
+                                    'delayedDeviceId': effectiveDelayedDeviceId,
+                                    'skipEngineBootstrap': true,
+                                  },
+                                );
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Start failed: $e')),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) setState(() => _starting = false);
+                              }
+                            },
+                      child: _starting
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Start Session'),
+                    ),
                   ),
-                );
-              }).toList(),
-
-              const SizedBox(height: 6),
-              SizedBox(
-                height: 56,
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _starting || !allSelected
-                      ? null
-                      : () async {
-                          setState(() => _starting = true);
-                          try {
-                            final ctrl = ref.read(sessionEngineProvider.notifier);
-
-                            final firstId = widget.deviceIds.first;
-                            final firstProtocolId =
-                                _protocolIdByDeviceId[firstId]!;
-                            // IMPORTANT: resolve full protocol details before start.
-                            // protocolList items can be lightweight; start payload needs
-                            // full cycles/template fields (same as old flow).
-                            final selectedProtocolIds =
-                                _protocolIdByDeviceId.values.toSet();
-                            final fullProtocolById = <String, Protocol>{};
-                            await Future.wait(selectedProtocolIds.map((pid) async {
-                              final detailed = await ref.read(
-                                protocolDetailProvider(pid).future,
-                              );
-                              fullProtocolById[pid] = detailed;
-                            }));
-
-                            final commonProtocol = fullProtocolById[firstProtocolId]!;
-
-                            final protocolByDevice = <String, Protocol>{};
-                            for (final id in widget.deviceIds) {
-                              final pid = _protocolIdByDeviceId[id]!;
-                              protocolByDevice[id] = fullProtocolById[pid]!;
-                            }
-
-                            final advancedSettingsByDevice =
-                                <String, AdvancedSettings>{};
-                            for (final id in widget.deviceIds) {
-                              advancedSettingsByDevice[id] = _settingsByDeviceId[id]!;
-                            }
-
-                            final commonAdvanced =
-                                advancedSettingsByDevice[firstId]!;
-
-                            ctrl.prepareSession(
-                              deviceIds: widget.deviceIds,
-                              transport: transportEnum,
-                            );
-
-                            ctrl.loadSession(
-                              commonProtocol,
-                              widget.deviceIds,
-                              transport: transportEnum,
-                              advancedSettings: commonAdvanced,
-                              advancedSettingsByDevice: advancedSettingsByDevice,
-                              delayedDeviceId: _delayedDeviceId,
-                              protocolByDevice: protocolByDevice,
-                              wifiConfigAlreadyPublished: false,
-                            );
-
-                            // Align timer UI close to “now”.
-                            ctrl.applySessionClockOffsetFromWallAnchor(
-                              DateTime.now(),
-                            );
-
-                            await ctrl.start();
-
-                            if (!mounted) return;
-
-                            context.push(
-                              RoutePaths.session,
-                              extra: {
-                                'protocolId': commonProtocol.id,
-                                'protocol': commonProtocol,
-                                'deviceIds': widget.deviceIds,
-                                'transport': widget.transport,
-                                'advancedSettings': commonAdvanced,
-                                'advancedSettingsByDevice': advancedSettingsByDevice,
-                                'protocolByDeviceId': _protocolIdByDeviceId,
-                                'delayedDeviceId': _delayedDeviceId,
-                                'skipEngineBootstrap': true,
-                              },
-                            );
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Start failed: $e')),
-                              );
-                            }
-                          } finally {
-                            if (mounted) setState(() => _starting = false);
-                          }
-                        },
-                  child: _starting
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Start Session'),
                 ),
               ),
             ],
@@ -552,7 +899,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: ThemeConstants.textPrimary,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -657,13 +1004,17 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                       : ThemeConstants.surfaceVariant,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: selected ? ThemeConstants.accent : ThemeConstants.border,
+                    color: selected
+                        ? ThemeConstants.accent
+                        : ThemeConstants.border,
                   ),
                 ),
                 child: Text(
                   m,
                   style: TextStyle(
-                    color: selected ? ThemeConstants.accent : Colors.white,
+                    color: selected
+                        ? ThemeConstants.accent
+                        : ThemeConstants.textPrimary,
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
@@ -709,7 +1060,8 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             onChanged: (v) {
               var newMax = v;
               var newMin = settings.vibMin;
-              if (newMax <= newMin) newMin = (newMax - 1).clamp(0, vibMaxHz - 1);
+              if (newMax <= newMin)
+                newMin = (newMax - 1).clamp(0, vibMaxHz - 1);
               onChangeSettings(
                 settings.copyWith(
                   vibMin: newMin,
@@ -744,7 +1096,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               LengthLimitingTextInputFormatter(3),
             ],
             style: const TextStyle(
-              color: Colors.white,
+              color: ThemeConstants.textPrimary,
               fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
@@ -805,7 +1157,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         slider(
           label: 'Hot Pad Intensity',
           value: settings.hotLevel,
-          valueColor: const Color(0xFFE09060),
+          valueColor: ThemeConstants.accent,
           onChanged: (v) =>
               onChangeSettings(settings.copyWith(hotLevel: v, hotPack: true)),
         ),
@@ -838,7 +1190,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             LengthLimitingTextInputFormatter(2),
           ],
           style: const TextStyle(
-            color: Colors.white,
+            color: ThemeConstants.textPrimary,
             fontSize: 13,
             fontWeight: FontWeight.w700,
           ),
@@ -904,8 +1256,9 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                         : ThemeConstants.surfaceVariant,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color:
-                          selected ? ThemeConstants.accent : ThemeConstants.border,
+                      color: selected
+                          ? ThemeConstants.accent
+                          : ThemeConstants.border,
                     ),
                   ),
                   child: Text(
@@ -1007,6 +1360,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                   );
                 }
               }
+
               return Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -1020,7 +1374,14 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                       child: Padding(
                         padding: EdgeInsets.only(right: i == 2 ? 0 : 8),
                         child: OutlinedButton(
-                          onPressed: selectedDeviceIds.isEmpty ? null : () => saveToSlot(i),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: ThemeConstants.textPrimary,
+                            side:
+                                const BorderSide(color: ThemeConstants.border),
+                          ),
+                          onPressed: selectedDeviceIds.isEmpty
+                              ? null
+                              : () => saveToSlot(i),
                           child: Text('Slot ${i + 1}'),
                         ),
                       ),
@@ -1043,4 +1404,3 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
     );
   }
 }
-

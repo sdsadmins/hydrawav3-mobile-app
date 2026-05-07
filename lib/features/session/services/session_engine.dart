@@ -12,6 +12,7 @@ import '../../../core/utils/logger.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../protocols/domain/protocol_model.dart';
+import 'background_session_runtime.dart';
 import '../domain/session_model.dart';
 
 final sessionEngineProvider =
@@ -123,8 +124,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
   }
 
-  Duration get _effectiveElapsed =>
-      _stopwatch.elapsed + _sessionClockOffset;
+  Duration get _effectiveElapsed => _stopwatch.elapsed + _sessionClockOffset;
 
   Future<bool> _sendLargePayload(
     String mac,
@@ -263,7 +263,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocol,
       advancedSettings,
     );
-    appLogger.i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
+    appLogger
+        .i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
     appLogger.i(
       '  Advanced: cycle1=${advancedSettings.cycle1Initiation}, '
       'cycle5=${advancedSettings.cycle5Completion}, '
@@ -303,7 +304,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         protocolByDevice: resolvedProtocolByDevice,
         deviceIds: selectedDeviceIds,
         transport: transport,
-      wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
+        wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
         advancedSettings: advancedSettings,
         advancedSettingsByDevice: settingsByDevice,
         deviceTimers: deviceTimers,
@@ -454,54 +455,54 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
 
       if (BleConstants.startSendsOnlyPlayCmd) {
-      // This mode is only meant to "turn on" by sending a tiny command.
-      // Cancel any previously running timer so we don't tick while
-      // `state.protocol` is null (this was causing the crash you pasted).
-      _timer?.cancel();
-      _timer = null;
-      _stopwatch.stop();
-      _stopwatch.reset();
+        // This mode is only meant to "turn on" by sending a tiny command.
+        // Cancel any previously running timer so we don't tick while
+        // `state.protocol` is null (this was causing the crash you pasted).
+        _timer?.cancel();
+        _timer = null;
+        _stopwatch.stop();
+        _stopwatch.reset();
 
-      final failed = <String>[];
-      final playCmdJson = jsonEncode({'playCmd': 1});
-      // Some firmwares only accept specific newline framing. We try a small
-      // ordered set to find the exact terminator the device expects.
-      final terminatorFrames = <String>[
-        '$playCmdJson${BleConstants.sessionJsonLineSuffix}', // current suffix (likely '\n')
-        '$playCmdJson\r\n',
-        '$playCmdJson\n\n',
-      ];
+        final failed = <String>[];
+        final playCmdJson = jsonEncode({'playCmd': 1});
+        // Some firmwares only accept specific newline framing. We try a small
+        // ordered set to find the exact terminator the device expects.
+        final terminatorFrames = <String>[
+          '$playCmdJson${BleConstants.sessionJsonLineSuffix}', // current suffix (likely '\n')
+          '$playCmdJson\r\n',
+          '$playCmdJson\n\n',
+        ];
 
-      appLogger.i(
-        'Session: Sending playCmd-only (frame variants=$terminatorFrames) '
-        'to ${actuallyConnectedIds.length} connected device(s)',
-      );
-
-      for (final mac in actuallyConnectedIds) {
-        bool anyOk = false;
-        for (final frame in terminatorFrames) {
-          appLogger.i(
-            "Session: playCmd-only sending to $mac frame='${frame.replaceAll('\n', '\\\\n').replaceAll('\r', '\\\\r')}' "
-            '(${frame.length} bytes, utf8)',
-          );
-          final ok = await connector.writeToDevice(mac, utf8.encode(frame));
-          anyOk = anyOk || ok;
-          appLogger.i('Session: playCmd-only sent to $mac (variant) → $ok');
-          // Tiny pause between variants; helps some UART-like bridges.
-          await Future<void>.delayed(const Duration(milliseconds: 150));
-        }
-        if (!anyOk) failed.add(mac);
-      }
-
-      if (failed.isNotEmpty) {
-        state = state.copyWith(
-          error: 'Failed to send playCmd to: ${failed.join(', ')}',
+        appLogger.i(
+          'Session: Sending playCmd-only (frame variants=$terminatorFrames) '
+          'to ${actuallyConnectedIds.length} connected device(s)',
         );
-        appLogger.w('Session: playCmd-only failed');
-        return;
-      }
 
-      // In playCmd-only mode, we don't run the protocol timer.
+        for (final mac in actuallyConnectedIds) {
+          bool anyOk = false;
+          for (final frame in terminatorFrames) {
+            appLogger.i(
+              "Session: playCmd-only sending to $mac frame='${frame.replaceAll('\n', '\\\\n').replaceAll('\r', '\\\\r')}' "
+              '(${frame.length} bytes, utf8)',
+            );
+            final ok = await connector.writeToDevice(mac, utf8.encode(frame));
+            anyOk = anyOk || ok;
+            appLogger.i('Session: playCmd-only sent to $mac (variant) → $ok');
+            // Tiny pause between variants; helps some UART-like bridges.
+            await Future<void>.delayed(const Duration(milliseconds: 150));
+          }
+          if (!anyOk) failed.add(mac);
+        }
+
+        if (failed.isNotEmpty) {
+          state = state.copyWith(
+            error: 'Failed to send playCmd to: ${failed.join(', ')}',
+          );
+          appLogger.w('Session: playCmd-only failed');
+          return;
+        }
+
+        // In playCmd-only mode, we don't run the protocol timer.
         if (!_isActive) return;
         state = state.copyWith(status: SessionStatus.stopped, error: null);
         return;
@@ -516,7 +517,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
       // For BLE we intentionally start UI timer only AFTER PLAY succeeds,
       // so elapsed time tracks physical device runtime.
-      appLogger.i('Session: Starting BLE send sequence (timer starts after PLAY)');
+      appLogger
+          .i('Session: Starting BLE send sequence (timer starts after PLAY)');
 
       // Send protocol JSON to all connected devices over BLE (RS232 bridge)
       // first, then do ONE common delay, then send PLAY to all devices together.
@@ -671,7 +673,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         error: null,
       );
     } catch (e) {
-      appLogger.d('Session: timer start state update ignored (notifier disposed)');
+      appLogger
+          .d('Session: timer start state update ignored (notifier disposed)');
       return;
     }
     final alreadyRunning = _stopwatch.isRunning;
@@ -684,6 +687,42 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // Periodic timer does not fire until the first interval; sync once now
     // so remaining time and cycle/pad UI match the device immediately.
     _syncDisplayedTimerFromStopwatch();
+    unawaited(_syncBackgroundRuntime('running'));
+  }
+
+  Future<void> _syncBackgroundRuntime(String status) async {
+    if (!_isActive || state.protocol == null || state.deviceIds.isEmpty) return;
+    final startedAtMs = _firstBlePlayAnchor?.millisecondsSinceEpoch ??
+        DateTime.now().millisecondsSinceEpoch;
+    final snapshot = LiveSessionSnapshot(
+      protocolId: state.protocol!.id,
+      protocolName: state.protocol!.templateName,
+      deviceIds: List<String>.from(state.deviceIds),
+      transport: state.transport == SessionTransport.wifi ? 'wifi' : 'ble',
+      startedAtEpochMs: startedAtMs,
+      delayedDeviceId: state.delayedDeviceId,
+      protocolByDeviceId: {
+        for (final entry in state.protocolByDevice.entries)
+          entry.key: entry.value.id,
+      },
+      advancedSettings: state.advancedSettings,
+      advancedSettingsByDevice:
+          Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice),
+      fromBackgroundService: true,
+    );
+
+    final runtime = _ref.read(backgroundSessionRuntimeProvider.notifier);
+    if (status == 'running') {
+      await runtime.startService(snapshot);
+    } else if (status == 'paused') {
+      await runtime.pauseService();
+    } else if (status == 'resumed') {
+      await runtime.resumeService();
+    } else if (status == 'stopped') {
+      await runtime.stopService();
+    } else {
+      await runtime.cacheSnapshotOnly(snapshot);
+    }
   }
 
   Map<String, dynamic> _protocolToRs232Json(
@@ -692,7 +731,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     final advancedSettings =
         state.advancedSettingsByDevice[transportId] ?? state.advancedSettings;
-    final applyDelay = advancedSettings.startDelay > 0;
+    // In multi-device mode, apply start delay only to the selected device.
+    // If no delayed device is selected, keep legacy behavior and apply when > 0.
+    final selectedDelayedDeviceId = state.delayedDeviceId;
+    final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
+        state.deviceIds.contains(selectedDelayedDeviceId);
+    final applyDelay = advancedSettings.startDelay > 0 &&
+        (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
     return _protocolToRs35Payload(
       p,
       mac: transportId,
@@ -770,8 +815,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _ => advancedSettings.vibMin.toInt(),
     };
     final vibMax = switch (vibMode) {
-      'Off' => 0,
-      'Single' => (advancedSettings.vibrationSingleHz.clamp(10, 230).toInt() + 10),
+      'Off' => 1,
+      'Single' =>
+        (advancedSettings.vibrationSingleHz.clamp(10, 230).toInt() + 10),
       'Sweep' => advancedSettings.vibrationSweepMax.toInt(),
       _ => advancedSettings.vibMax.toInt(),
     };
@@ -817,16 +863,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final c2 = cycles[0];
     final c3 = cycles[1];
     final c4 = cycles[2];
-    int baseTimeline =
-        (c2.repetitions * ((c2.durationSeconds + c2.pauseSeconds).toInt())) +
-            c2.cyclePause.toInt() +
-            (c3.repetitions * ((c3.durationSeconds + c3.pauseSeconds).toInt())) +
-            c3.cyclePause.toInt() +
-            (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
+    int baseTimeline = (c2.repetitions *
+            ((c2.durationSeconds + c2.pauseSeconds).toInt())) +
+        c2.cyclePause.toInt() +
+        (c3.repetitions * ((c3.durationSeconds + c3.pauseSeconds).toInt())) +
+        c3.cyclePause.toInt() +
+        (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
 
     if (p.sessions > 1) {
-      baseTimeline =
-          (baseTimeline * p.sessions) + (p.sessionPause.toInt() * (p.sessions - 1));
+      baseTimeline = (baseTimeline * p.sessions) +
+          (p.sessionPause.toInt() * (p.sessions - 1));
     }
 
     if (advancedSettings.cycle1Initiation) {
@@ -865,7 +911,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
     final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
     for (final id in state.deviceIds) {
-      if (statuses[id] == SessionStatus.running) statuses[id] = SessionStatus.paused;
+      if (statuses[id] == SessionStatus.running)
+        statuses[id] = SessionStatus.paused;
     }
     try {
       state = state.copyWith(
@@ -873,6 +920,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         status: _deriveOverallStatus(statuses),
       );
       appLogger.i('🔥 PAUSE: State updated to paused');
+      unawaited(_syncBackgroundRuntime('paused'));
     } catch (e) {
       appLogger.d('Session: pause() state update ignored (notifier disposed)');
     }
@@ -916,7 +964,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
     final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
     for (final id in state.deviceIds) {
-      if (statuses[id] == SessionStatus.paused) statuses[id] = SessionStatus.running;
+      if (statuses[id] == SessionStatus.paused)
+        statuses[id] = SessionStatus.running;
     }
     state = state.copyWith(
       deviceStatuses: statuses,
@@ -926,6 +975,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
     _syncDisplayedTimerFromStopwatch();
     appLogger.i('🔄 RESUME: Timer restarted on app side');
+    unawaited(_syncBackgroundRuntime('resumed'));
   }
 
   Future<void> stop() async {
@@ -962,6 +1012,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         deviceStatuses: statuses,
         status: SessionStatus.stopped,
       );
+      unawaited(_syncBackgroundRuntime('stopped'));
     } catch (e) {
       appLogger.d('Session: stop() state update ignored (notifier disposed)');
     }
@@ -1056,6 +1107,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     try {
       state = const SessionEngineState();
+      unawaited(
+          _ref.read(backgroundSessionRuntimeProvider.notifier).stopService());
     } catch (e) {
       appLogger.d('Session: reset() state update ignored (notifier disposed)');
     }
@@ -1094,7 +1147,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     final updatedTimers = Map<String, TimerState>.from(state.deviceTimers);
-    final updatedStatuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+    final updatedStatuses =
+        Map<String, SessionStatus>.from(state.deviceStatuses);
     final completedDevices = <String>[];
 
     for (final id in state.deviceIds) {

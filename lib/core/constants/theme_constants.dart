@@ -3,21 +3,21 @@ import 'package:flutter/material.dart';
 class ThemeConstants {
   ThemeConstants._();
 
-  // ─── Dark Theme Palette (from reference design) ───
-  static const Color background = Color(0xFF1A2332);
-  static const Color surface = Color(0xFF212D3B);
-  static const Color surfaceVariant = Color(0xFF2A3A4A);
-  static const Color accent = Color(0xFFA6785F);
+  // ─── Light / Cream Palette ───
+  static const Color background = Color(0xFFF9F5F1); // light warm off-white
+  static const Color surface = Color(0xFFF5EBDD); // warm surface
+  static const Color surfaceVariant = Color(0xFFE8D9C4); // deeper warm tint
+  static const Color accent = Color(0xFFC69E83);
   static const Color accentLight = Color(0xFFD6B39D);
 
   // Text
-  static const Color textPrimary = Color(0xFFFFFFFF);
-  static const Color textSecondary = Color(0xFF8B95A5);
-  static const Color textTertiary = Color(0xFF5A6577);
+  static const Color textPrimary = Color(0xFF141414);
+  static const Color textSecondary = Color(0xFF4A4A4A);
+  static const Color textTertiary = Color(0xFF7A7A7A);
 
   // Borders
-  static const Color border = Color(0xFF2D3B4D);
-  static const Color borderLight = Color(0xFF3A4A5C);
+  static const Color border = Color(0xFFD7C6AE);
+  static const Color borderLight = Color(0xFFE0D2BF);
 
   // Status
   static const Color success = Color(0xFF10B981);
@@ -28,7 +28,7 @@ class ThemeConstants {
   // BLE Status
   static const Color bleConnected = success;
   static const Color bleDiscovered = warning;
-  static const Color bleDisconnected = Color(0xFF5A6577);
+  static const Color bleDisconnected = textTertiary;
 
   // Spacing
   static const double spacingXs = 4.0;

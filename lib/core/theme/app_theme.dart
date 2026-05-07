@@ -6,19 +6,23 @@ import '../constants/theme_constants.dart';
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get lightTheme => darkTheme; // dark-only app
+  static ThemeData get lightTheme => _theme;
 
-  static ThemeData get darkTheme {
+  static ThemeData get darkTheme => _theme; // kept for compatibility
+
+  static ThemeData get _theme {
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
+      brightness: Brightness.light,
       scaffoldBackgroundColor: ThemeConstants.background,
-      colorScheme: const ColorScheme.dark(
+      colorScheme: const ColorScheme.light(
         primary: ThemeConstants.accent,
         secondary: ThemeConstants.accentLight,
+        background: ThemeConstants.background,
         surface: ThemeConstants.surface,
         error: ThemeConstants.error,
-        onPrimary: Colors.white,
+        onPrimary: Colors.black,
+        onBackground: ThemeConstants.textPrimary,
         onSurface: ThemeConstants.textPrimary,
       ),
       appBarTheme: const AppBarTheme(
@@ -26,7 +30,7 @@ class AppTheme {
         foregroundColor: ThemeConstants.textPrimary,
         elevation: 0,
         centerTitle: false,
-        systemOverlayStyle: SystemUiOverlayStyle.light,
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
         titleTextStyle: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.w700,
@@ -46,7 +50,7 @@ class AppTheme {
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: ThemeConstants.accent,
-          foregroundColor: Colors.white,
+          foregroundColor: Colors.black,
           minimumSize: const Size(double.infinity, 52),
           elevation: 0,
           shape: RoundedRectangleBorder(

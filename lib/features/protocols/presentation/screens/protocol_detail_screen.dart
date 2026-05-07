@@ -173,858 +173,879 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
             physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.all(16),
             children: [
-            AnimatedEntrance(
-                child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(p.templateName,
-                    style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        letterSpacing: -0.3)),
-                if (p.description.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(p.description,
+              AnimatedEntrance(
+                  child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.templateName,
                       style: const TextStyle(
-                          fontSize: 14,
-                          color: ThemeConstants.textSecondary,
-                          height: 1.5)),
-                ],
-              ],
-            )),
-            const SizedBox(height: 16),
-            AnimatedEntrance(
-                index: 1,
-                child: Row(children: [
-                  StatChip(
-                      icon: Icons.timer_outlined,
-                      value: p.totalDuration.formatted),
-                  const SizedBox(width: 8),
-                  StatChip(
-                      icon: Icons.repeat_rounded,
-                      value: '${p.cycles.length}',
-                      label: 'cycles'),
-                  const SizedBox(width: 8),
-                  StatChip(
-                      icon: Icons.play_circle_outline_rounded,
-                      value: '${p.sessions}',
-                      label: 'sessions'),
-                ])),
-            const SizedBox(height: 24),
-            AnimatedEntrance(
-              index: 2,
-              child: GradientCard(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Selected Devices',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                          letterSpacing: -0.3)),
+                  if (p.description.isNotEmpty) ...[
                     const SizedBox(height: 8),
-                    Text(
-                      target.deviceIds.isEmpty
-                          ? 'No devices selected. Go to Devices screen and connect devices.'
-                          : '${target.deviceIds.length} selected (${target.transport.name.toUpperCase()})',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: ThemeConstants.textSecondary,
-                      ),
-                    ),
-                    if (target.deviceIds.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: target.deviceIds
-                            .map(
-                              (id) => Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: ThemeConstants.surfaceVariant,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  id,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            AnimatedEntrance(
-              index: 3,
-              child: GradientCard(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Web Payload Mapping',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _R('Session Count', '${p.sessions}'),
-                    _R('Session Pause', '${p.sessionPause.toInt()}s'),
-                    _R('Cycle 1 (edge)', p.cycle1 ? 'enabled' : 'disabled'),
-                    _R('Cycle 5 (edge)', p.cycle5 ? 'enabled' : 'disabled'),
-                    _R('Edge Cycle Duration', '${p.edgecycleduration.toInt()}s'),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            AnimatedEntrance(
-              index: 4,
-              child: GradientCard(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    InkWell(
-                      onTap: () =>
-                          setState(() => _showAdvanced = !_showAdvanced),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.settings_rounded,
-                            color: ThemeConstants.accent,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Text(
-                              'Advanced Settings',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                          Icon(
-                            _showAdvanced
-                                ? Icons.keyboard_arrow_up_rounded
-                                : Icons.keyboard_arrow_down_rounded,
+                    Text(p.description,
+                        style: const TextStyle(
+                            fontSize: 14,
                             color: ThemeConstants.textSecondary,
-                          ),
-                        ],
-                      ),
-                    ),
-                    AnimatedSize(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeOut,
-                      child: !_showAdvanced
-                          ? const SizedBox.shrink()
-                          : Padding(
-                              padding: const EdgeInsets.only(top: 14),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (target.deviceIds.length > 1) ...[
-                                    const Text(
-                                      'Editing Settings For Device',
-                                      style: TextStyle(
-                                        color: ThemeConstants.textSecondary,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: target.deviceIds.map((id) {
-                                        final active = id == _activeSettingsDeviceId;
-                                        return InkWell(
-                                          onTap: () => setState(
-                                            () => _activeSettingsDeviceId = id,
-                                          ),
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 10,
-                                              vertical: 8,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: active
-                                                  ? ThemeConstants.accent
-                                                      .withValues(alpha: 0.18)
-                                                  : ThemeConstants.surfaceVariant,
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                              border: Border.all(
-                                                color: active
-                                                    ? ThemeConstants.accent
-                                                    : ThemeConstants.border,
-                                              ),
-                                            ),
-                                            child: Text(
-                                              id,
-                                              style: TextStyle(
-                                                color: active
-                                                    ? ThemeConstants.accent
-                                                    : ThemeConstants.textSecondary,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    if (target.deviceIds.isNotEmpty)
-                                      protocolsAsync.when(
-                                        data: (protocols) {
-                                          final activeId =
-                                              _activeSettingsDeviceId ??
-                                                  target.deviceIds.first;
-                                          final selectedPid =
-                                              _protocolByDeviceId[activeId]!;
-                                          return Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'Protocol for device',
-                                                style: TextStyle(
-                                                  color: ThemeConstants
-                                                      .textSecondary,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              DropdownButton<String>(
-                                                value: selectedPid,
-                                                isExpanded: true,
-                                                dropdownColor:
-                                                    ThemeConstants.surface,
-                                                items: protocols.map((pr) {
-                                                  return DropdownMenuItem<
-                                                      String>(
-                                                    value: pr.id,
-                                                    child: Text(
-                                                      pr.templateName,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      maxLines: 1,
-                                                      style: const TextStyle(
-                                                        fontSize: 13,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
-                                                    ),
-                                                  );
-                                                }).toList(),
-                                                onChanged: (newId) {
-                                                  if (newId == null) return;
-                                                  final newProtocol =
-                                                      protocols.firstWhere(
-                                                    (x) => x.id == newId,
-                                                  );
-                                                  setState(() {
-                                                    _protocolByDeviceId[activeId] =
-                                                        newProtocol.id;
-                                                    _settingsByDevice[activeId] =
-                                                        _advancedDefaultsFromProtocol(
-                                                            newProtocol);
-                                                  });
-                                                },
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                        loading: () => const SizedBox(
-                                          height: 28,
-                                          width: 28,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        ),
-                                        error: (_, __) => const SizedBox
-                                            .shrink(),
-                                      ),
-                                    const SizedBox(height: 12),
-                                  ],
-                                  _AdvancedSettingsPanel(
-                                    protocolId: p.id,
-                                    selectedDeviceIds: target.deviceIds,
-                                    settings: _activeSettingsDeviceId != null
-                                        ? (_settingsByDevice[_activeSettingsDeviceId!] ??
-                                            _settings)
-                                        : _settings,
-                                    delayedDeviceId: _delayedDeviceId,
-                                    showSavePreset: _showSavePreset,
-                                    onChangeSettings: (s) => setState(() {
-                                      _settings = s;
-                                      if (_activeSettingsDeviceId != null) {
-                                        _settingsByDevice[_activeSettingsDeviceId!] = s;
-                                      }
-                                    }),
-                                    onToggleSavePreset: () => setState(
-                                      () => _showSavePreset = !_showSavePreset,
-                                    ),
-                                    onChangeDelayedDeviceId: (id) => setState(
-                                      () => _delayedDeviceId = id,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                    ),
+                            height: 1.5)),
                   ],
+                ],
+              )),
+              const SizedBox(height: 16),
+              AnimatedEntrance(
+                  index: 1,
+                  child: Row(children: [
+                    StatChip(
+                        icon: Icons.timer_outlined,
+                        value: p.totalDuration.formatted),
+                    const SizedBox(width: 8),
+                    StatChip(
+                        icon: Icons.repeat_rounded,
+                        value: '${p.cycles.length}',
+                        label: 'cycles'),
+                    const SizedBox(width: 8),
+                    StatChip(
+                        icon: Icons.play_circle_outline_rounded,
+                        value: '${p.sessions}',
+                        label: 'sessions'),
+                  ])),
+              const SizedBox(height: 24),
+              // AnimatedEntrance(
+              //   index: 2,
+              //   child: GradientCard(
+              //     padding: const EdgeInsets.all(14),
+              //     child: Column(
+              //       crossAxisAlignment: CrossAxisAlignment.start,
+              //       children: [
+              //         const Text(
+              //           'Selected Devices',
+              //           style: TextStyle(
+              //             fontSize: 15,
+              //             fontWeight: FontWeight.w700,
+              //             color: Colors.black,
+              //           ),
+              //         ),
+              //         const SizedBox(height: 8),
+              //         Text(
+              //           target.deviceIds.isEmpty
+              //               ? 'No devices selected. Go to Devices screen and connect devices.'
+              //               : '${target.deviceIds.length} selected (${target.transport.name.toUpperCase()})',
+              //           style: const TextStyle(
+              //             fontSize: 12,
+              //             color: ThemeConstants.textSecondary,
+              //           ),
+              //         ),
+              //         if (target.deviceIds.isNotEmpty) ...[
+              //           const SizedBox(height: 10),
+              //           Wrap(
+              //             spacing: 6,
+              //             runSpacing: 6,
+              //             children: target.deviceIds
+              //                 .map(
+              //                   (id) => Container(
+              //                     padding: const EdgeInsets.symmetric(
+              //                       horizontal: 8,
+              //                       vertical: 5,
+              //                     ),
+              //                     decoration: BoxDecoration(
+              //                       color: ThemeConstants.surfaceVariant,
+              //                       borderRadius: BorderRadius.circular(8),
+              //                     ),
+              //                     child: Text(
+              //                       id,
+              //                       style: const TextStyle(
+              //                         fontSize: 11,
+              //                         color: Colors.black,
+              //                       ),
+              //                     ),
+              //                   ),
+              //                 )
+              //                 .toList(),
+              //           ),
+              //         ],
+              //       ],
+              //     ),
+              //   ),
+              // ),
+              // const SizedBox(height: 16),
+              AnimatedEntrance(
+                index: 3,
+                child: GradientCard(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Web Payload Mapping',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _R('Session Count', '${p.sessions}'),
+                      _R('Session Pause', '${p.sessionPause.toInt()}s'),
+                      _R('Cycle 1 (edge)', p.cycle1 ? 'enabled' : 'disabled'),
+                      _R('Cycle 5 (edge)', p.cycle5 ? 'enabled' : 'disabled'),
+                      _R('Edge Cycle Duration',
+                          '${p.edgecycleduration.toInt()}s'),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            AnimatedEntrance(
-                index: 5, child: const SectionHeader(title: 'Cycles')),
-            ...p.cycles.asMap().entries.map((e) {
-              final i = e.key;
-              final c = e.value;
-              return AnimatedEntrance(
-                  index: i + 6,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: GradientCard(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(children: [
-                              GlowIconBox(
-                                  icon: Icons.loop_rounded,
-                                  size: 36,
-                                  iconSize: 18),
-                              const SizedBox(width: 12),
-                              Text('Cycle ${i + 1} (C${i + 1})',
-                                  style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white)),
-                            ]),
-                            const SizedBox(height: 12),
-                            _R('Duration (cycleDurations)', '${c.durationSeconds.toInt()}s'),
-                            _R('Repetitions (cycleRepetitions)', '${c.repetitions}'),
-                            _R(
-                              'Pause Between Repetitions (pauseIntervals/cycle_pause)',
-                              '${c.cyclePause.toInt()}s',
-                            ),
-                            _R(
-                              'Pause After Cycle (cyclePauses/pause_seconds)',
-                              '${c.pauseSeconds.toInt()}s',
-                            ),
-                            _R('Hot PWM', '${c.hotPwm.toInt()}'),
-                            _R('Cold PWM', '${c.coldPwm.toInt()}'),
-                            if (c.leftFunction.isNotEmpty)
-                              _R('Left Function', c.leftFunction),
-                            if (c.rightFunction.isNotEmpty)
-                              _R('Right Function', c.rightFunction),
-                          ],
-                        )),
-                  ));
-            }),
-            const SizedBox(height: 20),
-            AnimatedEntrance(
-                index: p.cycles.length + 5,
-                child: GestureDetector(
-                  onTap: () async {
-                    if (_startingFromDetail) return;
-                    setState(() => _startingFromDetail = true);
-                    try {
-                    // Prefer the user-selected transport + devices from Devices tab.
-                    final target = ref.read(sessionTargetProvider);
-                    appLogger.i(
-                      'ProtocolDetail: Start tapped '
-                      '(protocolId=${p.id}, name=${p.templateName}, sessions=${p.sessions}, cycles=${p.cycles.length})',
-                    );
-                      appLogger.i(
-                        'ProtocolDetail: Advanced snapshot '
-                        '(cycle1=${_settings.cycle1Initiation}, '
-                        'cycle5=${_settings.cycle5Completion}, '
-                        'led=${_settings.lights}, '
-                        'vibrationMode=${_settings.vibrationMode}, '
-                        'vibMin=${_settings.vibMin}, vibMax=${_settings.vibMax}, '
-                        'sweepMin=${_settings.vibrationSweepMin}, sweepMax=${_settings.vibrationSweepMax}, '
-                        'singleHz=${_settings.vibrationSingleHz}, '
-                        'flip=${_settings.flipSettings})',
-                      );
-                    if (target.deviceIds.isNotEmpty) {
-                      if (target.transport == SessionTransport.wifi) {
-                        // Publish first so device and in-app timer stay aligned
-                        // (session screen auto-starts the clock on open).
-                        try {
-                          final dio = ref.read(djangoDioProvider);
-                          // Resolve the protocol per selected device (web-parity).
-                          final protocolIdsNeeded = target.deviceIds
-                              .map((mac) => _protocolByDeviceId[mac]!)
-                              .toSet();
-                          final protocolById = <String, Protocol>{};
-                          await Future.wait(protocolIdsNeeded.map((pid) async {
-                            final proto = pid == p.id
-                                ? p
-                                : await ref
-                                    .read(protocolDetailProvider(pid).future);
-                            protocolById[pid] = proto;
-                          }));
-                          for (final mac in target.deviceIds) {
-                            final perDeviceSettings =
-                                _settingsByDevice[mac] ?? _settings;
-                            final deviceProtocol = protocolById[
-                                    _protocolByDeviceId[mac]!] ??
-                                (throw StateError('Missing protocol for $mac'));
-                            final payloadObj =
-                                _protocolToWifiPayload(
-                              deviceProtocol,
-                              mac: mac,
-                              advancedSettings: perDeviceSettings,
-                              applyStartDelay: perDeviceSettings.startDelay > 0,
-                            );
-                            final payloadStr = jsonEncode(payloadObj);
-                            appLogger.i(
-                              'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
-                            );
-                            await dio.post(
-                              ApiEndpoints.mqttPublish,
-                              data: {
-                                'topic': 'HydraWav3Pro/config',
-                                'payload': payloadStr,
-                              },
-                            );
-                          }
-                        } catch (e) {
-                          appLogger.e('WiFi: publish failed: $e');
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('WiFi publish failed: $e'),
-                              ),
-                            );
-                          }
-                          return;
-                        }
-                        if (!context.mounted) return;
-                        final sessionClockAnchorMs =
-                            DateTime.now().millisecondsSinceEpoch;
-                        context.push(
-                          RoutePaths.session,
-                          extra: {
-                            'protocolId': p.id,
-                            'protocol': p,
-                            'deviceIds': target.deviceIds,
-                            'transport': 'wifi',
-                            'sessionClockAnchorMs': sessionClockAnchorMs,
-                            'advancedSettings': _settings,
-                            'advancedSettingsByDevice': {
-                              for (final id in target.deviceIds)
-                                id: _settingsByDevice[id] ?? _settings,
-                            },
-                            'protocolByDeviceId': {
-                              for (final id in target.deviceIds)
-                                id: _protocolByDeviceId[id]!,
-                            },
-                            'delayedDeviceId': _delayedDeviceId,
-                            'wifiConfigAlreadyPublished': true,
-                          },
-                        );
-                        return;
-                      }
-
-                      // BLE selected
-                      // CRITICAL FIX: Check if selected devices are still connected
-                      final bleRepository = ref.read(bleRepositoryProvider);
-                      final connectedNow = target.deviceIds
-                          .where((id) => bleRepository.isConnected(id))
-                          .toList();
-
-                      if (connectedNow.isEmpty) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Selected BLE devices are not connected. ${target.deviceIds.length} device(s) selected but none are connected. '
-                              'Please reconnect and try again.',
-                            ),
-                            duration: const Duration(seconds: 4),
-                          ),
-                        );
-                        return;
-                      }
-
-                      if (connectedNow.length < target.deviceIds.length) {
-                        final disconnectedCount =
-                            target.deviceIds.length - connectedNow.length;
-                        appLogger.w(
-                          'Protocol: Starting with $disconnectedCount of ${target.deviceIds.length} BLE devices disconnected, '
-                          'proceeding with ${connectedNow.length} connected device(s)',
-                        );
-                      }
-
-                      context.push(
-                        RoutePaths.session,
-                        extra: {
-                          'protocolId': p.id,
-                          'protocol': p,
-                          'deviceIds': target.deviceIds,
-                          'transport': 'ble',
-                          'advancedSettings': _settings,
-                          'advancedSettingsByDevice': {
-                            for (final id in target.deviceIds)
-                              id: _settingsByDevice[id] ?? _settings,
-                          },
-                          'protocolByDeviceId': {
-                            for (final id in target.deviceIds)
-                              id: _protocolByDeviceId[id]!,
-                          },
-                          'delayedDeviceId': _delayedDeviceId,
-                          'wifiConfigAlreadyPublished': true,
-                        },
-                      );
-                      return;
-                    }
-
-                    final hasBle = connectedIds.isNotEmpty;
-
-                    // WiFi devices available from backend (MQTT/API path)
-                    List<DeviceInfo> wifiDevices = const <DeviceInfo>[];
-                    try {
-                      wifiDevices =
-                          await ref.read(wifiDevicesByOrgProvider.future);
-                    } catch (_) {
-                      wifiDevices = const <DeviceInfo>[];
-                    }
-                    final hasWifi = wifiDevices.isNotEmpty;
-
-                    if (!hasBle && !hasWifi) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'No BLE connected and no WiFi devices found.',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-
-                    Future<void> startBle() async {
-                      final selected = await _pickConnectedDevices(
-                        context,
-                        connectedIds,
-                        p,
-                      );
-                      if (!context.mounted ||
-                          selected == null ||
-                          selected.isEmpty) {
-                        return;
-                      }
-
-                      // Ensure every selected device has an explicit protocol
-                      // mapping (no fallback).
-                      for (final id in selected) {
-                        if (!_protocolByDeviceId.containsKey(id)) {
-                          _protocolByDeviceId[id] = p.id;
-                        }
-                      }
-
-                      // CRITICAL FIX: Re-verify devices are still connected after picker
-                      final bleRepository = ref.read(bleRepositoryProvider);
-                      final stillConnected = selected
-                          .where((id) => bleRepository.isConnected(id))
-                          .toList();
-
-                      if (stillConnected.isEmpty) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Selected BLE devices disconnected. Please reconnect and try again.',
-                            ),
-                            duration: Duration(seconds: 3),
-                          ),
-                        );
-                        return;
-                      }
-
-                      if (stillConnected.length < selected.length) {
-                        appLogger.w(
-                          'Protocol: ${selected.length - stillConnected.length} BLE devices disconnected after picker, '
-                          'proceeding with ${stillConnected.length} connected device(s)',
-                        );
-                      }
-
-                      context.push(
-                        RoutePaths.session,
-                        extra: {
-                          'protocolId': p.id,
-                          'protocol': p,
-                          'deviceIds': selected,
-                          'transport': 'ble',
-                          'advancedSettings': _settings,
-                          'advancedSettingsByDevice': {
-                            for (final id in selected)
-                              id: _settingsByDevice[id] ?? _settings,
-                          },
-                          'protocolByDeviceId': {
-                            for (final id in selected)
-                              id: _protocolByDeviceId[id]!,
-                          },
-                          'delayedDeviceId': _delayedDeviceId,
-                        },
-                      );
-                    }
-
-                    Future<void> startWifi() async {
-                      final selectedWifi = await _pickWifiDevices(context, ref);
-                      if (!context.mounted ||
-                          selectedWifi == null ||
-                          selectedWifi.isEmpty) {
-                        return;
-                      }
-
-                      // Ensure every selected device has an explicit protocol
-                      // mapping (no fallback).
-                      for (final d in selectedWifi) {
-                        if (!_protocolByDeviceId.containsKey(d.macAddress)) {
-                          _protocolByDeviceId[d.macAddress] = p.id;
-                        }
-                      }
-
-                      try {
-                        final dio = ref.read(djangoDioProvider);
-                        // Resolve the protocol per selected WiFi device (web-parity).
-                        final protocolIdsNeeded = selectedWifi
-                            .map((d) => _protocolByDeviceId[d.macAddress]!)
-                            .toSet();
-                        final protocolById = <String, Protocol>{};
-                        await Future.wait(protocolIdsNeeded.map((pid) async {
-                          final proto = pid == p.id
-                              ? p
-                              : await ref
-                                  .read(protocolDetailProvider(pid).future);
-                          protocolById[pid] = proto;
-                        }));
-
-                        // Backend expects payload as a STRINGIFIED OBJECT (not a list).
-                        // So we publish one request per device:
-                        // { topic: "...", payload: "{\"mac\":\"...\", ...}" }
-                        for (final d in selectedWifi) {
-                          final perDeviceSettings =
-                              _settingsByDevice[d.macAddress] ?? _settings;
-                          final deviceProtocol = protocolById[
-                                  _protocolByDeviceId[d.macAddress]!] ??
-                              (throw StateError('Missing protocol for ${d.macAddress}'));
-                          final payloadObj =
-                              _protocolToWifiPayload(
-                            deviceProtocol,
-                            mac: d.macAddress,
-                            advancedSettings: perDeviceSettings,
-                            applyStartDelay: perDeviceSettings.startDelay > 0,
-                          );
-                          final payloadStr = jsonEncode(payloadObj);
-                          appLogger.i(
-                            'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=${d.macAddress}, payload=$payloadStr)',
-                          );
-                          final resp = await dio.post(
-                            ApiEndpoints.mqttPublish,
-                            data: {
-                              'topic': 'HydraWav3Pro/config',
-                              'payload': payloadStr,
-                            },
-                          );
-                          appLogger.i(
-                            'WiFi: MQTT publish OK (mac=${d.macAddress}, status=${resp.statusCode ?? 200})',
-                          );
-                        }
-                      } on DioException catch (e) {
-                        appLogger.e(
-                          'WiFi: MQTT publish failed '
-                          '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
-                        );
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'WiFi publish failed: ${e.message ?? e.toString()}',
-                              ),
-                            ),
-                          );
-                        }
-                        return;
-                      } catch (e) {
-                        appLogger.e('WiFi: MQTT publish failed: $e');
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('WiFi publish failed: $e'),
-                            ),
-                          );
-                        }
-                        return;
-                      }
-
-                      if (!context.mounted) return;
-                      final sessionClockAnchorMs =
-                          DateTime.now().millisecondsSinceEpoch;
-                      context.push(
-                        RoutePaths.session,
-                        extra: {
-                          'protocolId': p.id,
-                          'protocol': p,
-                          'deviceIds':
-                              selectedWifi.map((d) => d.macAddress).toList(),
-                          'transport': 'wifi',
-                          'sessionClockAnchorMs': sessionClockAnchorMs,
-                          'advancedSettings': _settings,
-                          'advancedSettingsByDevice': {
-                            for (final id
-                                in selectedWifi.map((d) => d.macAddress))
-                              id: _settingsByDevice[id] ?? _settings,
-                          },
-                          'protocolByDeviceId': {
-                            for (final d in selectedWifi)
-                              d.macAddress: _protocolByDeviceId[d.macAddress]!,
-                          },
-                          'delayedDeviceId': _delayedDeviceId,
-                        },
-                      );
-                    }
-
-                    if (hasWifi && !hasBle) {
-                      await startWifi();
-                      return;
-                    }
-                    if (hasBle && !hasWifi) {
-                      await startBle();
-                      return;
-                    }
-
-                    // Both available → ask user which transport to use.
-                    final choice = await showModalBottomSheet<String>(
-                      context: context,
-                      showDragHandle: true,
-                      backgroundColor: ThemeConstants.surface,
-                      shape: const RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.vertical(top: Radius.circular(18)),
-                      ),
-                      builder: (ctx) => SafeArea(
-                        top: false,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              const SizedBox(height: 16),
+              // AnimatedEntrance(
+              //   index: 4,
+              //   child: GradientCard(
+              //     padding: const EdgeInsets.all(16),
+              //     child: Column(
+              //       crossAxisAlignment: CrossAxisAlignment.start,
+              //       children: [
+              //         InkWell(
+              //           onTap: () =>
+              //               setState(() => _showAdvanced = !_showAdvanced),
+              //           child: Row(
+              //             children: [
+              //               const Icon(
+              //                 Icons.settings_rounded,
+              //                 color: ThemeConstants.accent,
+              //                 size: 20,
+              //               ),
+              //               const SizedBox(width: 10),
+              //               const Expanded(
+              //                 child: Text(
+              //                   'Advanced Settings',
+              //                   style: TextStyle(
+              //                     fontSize: 15,
+              //                     fontWeight: FontWeight.w700,
+              //                     color: Colors.black,
+              //                   ),
+              //                 ),
+              //               ),
+              //               Icon(
+              //                 _showAdvanced
+              //                     ? Icons.keyboard_arrow_up_rounded
+              //                     : Icons.keyboard_arrow_down_rounded,
+              //                 color: ThemeConstants.textSecondary,
+              //               ),
+              //             ],
+              //           ),
+              //         ),
+              //         AnimatedSize(
+              //           duration: const Duration(milliseconds: 200),
+              //           curve: Curves.easeOut,
+              //           child: !_showAdvanced
+              //               ? const SizedBox.shrink()
+              //               : Padding(
+              //                   padding: const EdgeInsets.only(top: 14),
+              //                   child: Column(
+              //                     crossAxisAlignment: CrossAxisAlignment.start,
+              //                     children: [
+              //                       if (target.deviceIds.length > 1) ...[
+              //                         const Text(
+              //                           'Editing Settings For Device',
+              //                           style: TextStyle(
+              //                             color: ThemeConstants.textSecondary,
+              //                             fontSize: 11,
+              //                             fontWeight: FontWeight.w700,
+              //                           ),
+              //                         ),
+              //                         const SizedBox(height: 8),
+              //                         Wrap(
+              //                           spacing: 8,
+              //                           runSpacing: 8,
+              //                           children: target.deviceIds.map((id) {
+              //                             final active =
+              //                                 id == _activeSettingsDeviceId;
+              //                             return InkWell(
+              //                               onTap: () => setState(
+              //                                 () =>
+              //                                     _activeSettingsDeviceId = id,
+              //                               ),
+              //                               child: Container(
+              //                                 padding:
+              //                                     const EdgeInsets.symmetric(
+              //                                   horizontal: 10,
+              //                                   vertical: 8,
+              //                                 ),
+              //                                 decoration: BoxDecoration(
+              //                                   color: active
+              //                                       ? ThemeConstants.accent
+              //                                           .withValues(alpha: 0.18)
+              //                                       : ThemeConstants
+              //                                           .surfaceVariant,
+              //                                   borderRadius:
+              //                                       BorderRadius.circular(10),
+              //                                   border: Border.all(
+              //                                     color: active
+              //                                         ? ThemeConstants.accent
+              //                                         : ThemeConstants.border,
+              //                                   ),
+              //                                 ),
+              //                                 child: Text(
+              //                                   id,
+              //                                   style: TextStyle(
+              //                                     color: active
+              //                                         ? ThemeConstants.accent
+              //                                         : ThemeConstants
+              //                                             .textSecondary,
+              //                                     fontSize: 11,
+              //                                     fontWeight: FontWeight.w700,
+              //                                   ),
+              //                                 ),
+              //                               ),
+              //                             );
+              //                           }).toList(),
+              //                         ),
+              //                         const SizedBox(height: 12),
+              //                         if (target.deviceIds.isNotEmpty)
+              //                           protocolsAsync.when(
+              //                             data: (protocols) {
+              //                               final activeId =
+              //                                   _activeSettingsDeviceId ??
+              //                                       target.deviceIds.first;
+              //                               final selectedPid =
+              //                                   _protocolByDeviceId[activeId]!;
+              //                               return Column(
+              //                                 crossAxisAlignment:
+              //                                     CrossAxisAlignment.start,
+              //                                 children: [
+              //                                   Text(
+              //                                     'Protocol for device',
+              //                                     style: TextStyle(
+              //                                       color: ThemeConstants
+              //                                           .textSecondary,
+              //                                       fontSize: 11,
+              //                                       fontWeight: FontWeight.w700,
+              //                                     ),
+              //                                   ),
+              //                                   const SizedBox(height: 8),
+              //                                   DropdownButton<String>(
+              //                                     value: selectedPid,
+              //                                     isExpanded: true,
+              //                                     dropdownColor:
+              //                                         ThemeConstants.surface,
+              //                                     items: protocols.map((pr) {
+              //                                       return DropdownMenuItem<
+              //                                           String>(
+              //                                         value: pr.id,
+              //                                         child: Text(
+              //                                           pr.templateName,
+              //                                           overflow: TextOverflow
+              //                                               .ellipsis,
+              //                                           maxLines: 1,
+              //                                           style: const TextStyle(
+              //                                             fontSize: 13,
+              //                                             fontWeight:
+              //                                                 FontWeight.w600,
+              //                                           ),
+              //                                         ),
+              //                                       );
+              //                                     }).toList(),
+              //                                     onChanged: (newId) {
+              //                                       if (newId == null) return;
+              //                                       final newProtocol =
+              //                                           protocols.firstWhere(
+              //                                         (x) => x.id == newId,
+              //                                       );
+              //                                       setState(() {
+              //                                         _protocolByDeviceId[
+              //                                                 activeId] =
+              //                                             newProtocol.id;
+              //                                         _settingsByDevice[
+              //                                                 activeId] =
+              //                                             _advancedDefaultsFromProtocol(
+              //                                                 newProtocol);
+              //                                       });
+              //                                     },
+              //                                   ),
+              //                                 ],
+              //                               );
+              //                             },
+              //                             loading: () => const SizedBox(
+              //                               height: 28,
+              //                               width: 28,
+              //                               child: CircularProgressIndicator(
+              //                                 strokeWidth: 2,
+              //                               ),
+              //                             ),
+              //                             error: (_, __) =>
+              //                                 const SizedBox.shrink(),
+              //                           ),
+              //                         const SizedBox(height: 12),
+              //                       ],
+              //                       _AdvancedSettingsPanel(
+              //                         protocolId: p.id,
+              //                         selectedDeviceIds: target.deviceIds,
+              //                         settings: _activeSettingsDeviceId != null
+              //                             ? (_settingsByDevice[
+              //                                     _activeSettingsDeviceId!] ??
+              //                                 _settings)
+              //                             : _settings,
+              //                         delayedDeviceId: _delayedDeviceId,
+              //                         showSavePreset: _showSavePreset,
+              //                         onChangeSettings: (s) => setState(() {
+              //                           _settings = s;
+              //                           if (_activeSettingsDeviceId != null) {
+              //                             _settingsByDevice[
+              //                                 _activeSettingsDeviceId!] = s;
+              //                           }
+              //                         }),
+              //                         onToggleSavePreset: () => setState(
+              //                           () =>
+              //                               _showSavePreset = !_showSavePreset,
+              //                         ),
+              //                         onChangeDelayedDeviceId: (id) => setState(
+              //                           () => _delayedDeviceId = id,
+              //                         ),
+              //                       ),
+              //                     ],
+              //                   ),
+              //                 ),
+              //         ),
+              //       ],
+              //     ),
+              //   ),
+              // ),
+              // const SizedBox(height: 16),
+              AnimatedEntrance(
+                  index: 5, child: const SectionHeader(title: 'Cycles')),
+              ...p.cycles.asMap().entries.map((e) {
+                final i = e.key;
+                final c = e.value;
+                return AnimatedEntrance(
+                    index: i + 6,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: GradientCard(
+                          padding: const EdgeInsets.all(16),
                           child: Column(
-                            mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                'Start session using',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
+                              Row(children: [
+                                GlowIconBox(
+                                    icon: Icons.loop_rounded,
+                                    size: 36,
+                                    iconSize: 18),
+                                const SizedBox(width: 12),
+                                Text('Cycle ${i + 1} (C${i + 1})',
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black)),
+                              ]),
+                              const SizedBox(height: 12),
+                              _R('Duration (cycleDurations)',
+                                  '${c.durationSeconds.toInt()}s'),
+                              _R('Repetitions (cycleRepetitions)',
+                                  '${c.repetitions}'),
+                              _R(
+                                'Pause Between Repetitions (pauseIntervals/cycle_pause)',
+                                '${c.cyclePause.toInt()}s',
                               ),
-                              const SizedBox(height: 10),
-                              ListTile(
-                                leading: const Icon(Icons.bluetooth_rounded,
-                                    color: Colors.white),
-                                title: const Text('Bluetooth (BLE)',
-                                    style: TextStyle(color: Colors.white)),
-                                subtitle: Text(
-                                  '${connectedIds.length} connected',
-                                  style: const TextStyle(
-                                    color: ThemeConstants.textSecondary,
-                                  ),
-                                ),
-                                onTap: () => Navigator.of(ctx).pop('ble'),
+                              _R(
+                                'Pause After Cycle (cyclePauses/pause_seconds)',
+                                '${c.pauseSeconds.toInt()}s',
                               ),
-                              ListTile(
-                                leading: const Icon(Icons.wifi_rounded,
-                                    color: Colors.white),
-                                title: const Text('WiFi (MQTT/API)',
-                                    style: TextStyle(color: Colors.white)),
-                                subtitle: Text(
-                                  '${wifiDevices.length} available',
-                                  style: const TextStyle(
-                                    color: ThemeConstants.textSecondary,
-                                  ),
-                                ),
-                                onTap: () => Navigator.of(ctx).pop('wifi'),
-                              ),
+                              _R('Hot PWM', '${c.hotPwm.toInt()}'),
+                              _R('Cold PWM', '${c.coldPwm.toInt()}'),
+                              if (c.leftFunction.isNotEmpty)
+                                _R('Left Function', c.leftFunction),
+                              if (c.rightFunction.isNotEmpty)
+                                _R('Right Function', c.rightFunction),
                             ],
-                          ),
-                        ),
-                      ),
-                    );
+                          )),
+                    ));
+              }),
+              const SizedBox(height: 20),
+              // AnimatedEntrance(
+              //     index: p.cycles.length + 5,
+              //     child: GestureDetector(
+              //       onTap: () async {
+              //         if (_startingFromDetail) return;
+              //         setState(() => _startingFromDetail = true);
+              //         try {
+              //           // Prefer the user-selected transport + devices from Devices tab.
+              //           final target = ref.read(sessionTargetProvider);
+              //           appLogger.i(
+              //             'ProtocolDetail: Start tapped '
+              //             '(protocolId=${p.id}, name=${p.templateName}, sessions=${p.sessions}, cycles=${p.cycles.length})',
+              //           );
+              //           appLogger.i(
+              //             'ProtocolDetail: Advanced snapshot '
+              //             '(cycle1=${_settings.cycle1Initiation}, '
+              //             'cycle5=${_settings.cycle5Completion}, '
+              //             'led=${_settings.lights}, '
+              //             'vibrationMode=${_settings.vibrationMode}, '
+              //             'vibMin=${_settings.vibMin}, vibMax=${_settings.vibMax}, '
+              //             'sweepMin=${_settings.vibrationSweepMin}, sweepMax=${_settings.vibrationSweepMax}, '
+              //             'singleHz=${_settings.vibrationSingleHz}, '
+              //             'flip=${_settings.flipSettings})',
+              //           );
+              //           if (target.deviceIds.isNotEmpty) {
+              //             if (target.transport == SessionTransport.wifi) {
+              //               // Publish first so device and in-app timer stay aligned
+              //               // (session screen auto-starts the clock on open).
+              //               try {
+              //                 final dio = ref.read(djangoDioProvider);
+              //                 // Resolve the protocol per selected device (web-parity).
+              //                 final protocolIdsNeeded = target.deviceIds
+              //                     .map((mac) => _protocolByDeviceId[mac]!)
+              //                     .toSet();
+              //                 final protocolById = <String, Protocol>{};
+              //                 await Future.wait(
+              //                     protocolIdsNeeded.map((pid) async {
+              //                   final proto = pid == p.id
+              //                       ? p
+              //                       : await ref.read(
+              //                           protocolDetailProvider(pid).future);
+              //                   protocolById[pid] = proto;
+              //                 }));
+              //                 for (final mac in target.deviceIds) {
+              //                   final perDeviceSettings =
+              //                       _settingsByDevice[mac] ?? _settings;
+              //                   final deviceProtocol =
+              //                       protocolById[_protocolByDeviceId[mac]!] ??
+              //                           (throw StateError(
+              //                               'Missing protocol for $mac'));
+              //                   final payloadObj = _protocolToWifiPayload(
+              //                     deviceProtocol,
+              //                     mac: mac,
+              //                     advancedSettings: perDeviceSettings,
+              //                     applyStartDelay:
+              //                         perDeviceSettings.startDelay > 0,
+              //                   );
+              //                   final payloadStr = jsonEncode(payloadObj);
+              //                   appLogger.i(
+              //                     'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
+              //                   );
+              //                   await dio.post(
+              //                     ApiEndpoints.mqttPublish,
+              //                     data: {
+              //                       'topic': 'HydraWav3Pro/config',
+              //                       'payload': payloadStr,
+              //                     },
+              //                   );
+              //                 }
+              //               } catch (e) {
+              //                 appLogger.e('WiFi: publish failed: $e');
+              //                 if (context.mounted) {
+              //                   ScaffoldMessenger.of(context).showSnackBar(
+              //                     SnackBar(
+              //                       content: Text('WiFi publish failed: $e'),
+              //                     ),
+              //                   );
+              //                 }
+              //                 return;
+              //               }
+              //               if (!context.mounted) return;
+              //               final sessionClockAnchorMs =
+              //                   DateTime.now().millisecondsSinceEpoch;
+              //               context.push(
+              //                 RoutePaths.session,
+              //                 extra: {
+              //                   'protocolId': p.id,
+              //                   'protocol': p,
+              //                   'deviceIds': target.deviceIds,
+              //                   'transport': 'wifi',
+              //                   'sessionClockAnchorMs': sessionClockAnchorMs,
+              //                   'advancedSettings': _settings,
+              //                   'advancedSettingsByDevice': {
+              //                     for (final id in target.deviceIds)
+              //                       id: _settingsByDevice[id] ?? _settings,
+              //                   },
+              //                   'protocolByDeviceId': {
+              //                     for (final id in target.deviceIds)
+              //                       id: _protocolByDeviceId[id]!,
+              //                   },
+              //                   'delayedDeviceId': _delayedDeviceId,
+              //                   'wifiConfigAlreadyPublished': true,
+              //                 },
+              //               );
+              //               return;
+              //             }
 
-                    if (!context.mounted || choice == null) return;
-                    if (choice == 'wifi') {
-                      await startWifi();
-                    } else {
-                      await startBle();
-                    }
-                    } finally {
-                      if (mounted) {
-                        setState(() => _startingFromDetail = false);
-                      }
-                    }
-                  },
-                  child: Container(
-                    height: 56,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                          colors: [ThemeConstants.accent, Color(0xFFE09060)]),
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                            color: ThemeConstants.accent.withValues(alpha: 0.3),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4))
-                      ],
-                    ),
-                    child: _startingFromDetail
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.play_arrow_rounded,
-                                  color: Colors.white, size: 22),
-                              SizedBox(width: 8),
-                              Text('Start Session',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600)),
-                            ]),
-                  ),
-                )),
+              //             // BLE selected
+              //             // CRITICAL FIX: Check if selected devices are still connected
+              //             final bleRepository = ref.read(bleRepositoryProvider);
+              //             final connectedNow = target.deviceIds
+              //                 .where((id) => bleRepository.isConnected(id))
+              //                 .toList();
+
+              //             if (connectedNow.isEmpty) {
+              //               if (!context.mounted) return;
+              //               ScaffoldMessenger.of(context).showSnackBar(
+              //                 SnackBar(
+              //                   content: Text(
+              //                     'Selected BLE devices are not connected. ${target.deviceIds.length} device(s) selected but none are connected. '
+              //                     'Please reconnect and try again.',
+              //                   ),
+              //                   duration: const Duration(seconds: 4),
+              //                 ),
+              //               );
+              //               return;
+              //             }
+
+              //             if (connectedNow.length < target.deviceIds.length) {
+              //               final disconnectedCount =
+              //                   target.deviceIds.length - connectedNow.length;
+              //               appLogger.w(
+              //                 'Protocol: Starting with $disconnectedCount of ${target.deviceIds.length} BLE devices disconnected, '
+              //                 'proceeding with ${connectedNow.length} connected device(s)',
+              //               );
+              //             }
+
+              //             context.push(
+              //               RoutePaths.session,
+              //               extra: {
+              //                 'protocolId': p.id,
+              //                 'protocol': p,
+              //                 'deviceIds': target.deviceIds,
+              //                 'transport': 'ble',
+              //                 'advancedSettings': _settings,
+              //                 'advancedSettingsByDevice': {
+              //                   for (final id in target.deviceIds)
+              //                     id: _settingsByDevice[id] ?? _settings,
+              //                 },
+              //                 'protocolByDeviceId': {
+              //                   for (final id in target.deviceIds)
+              //                     id: _protocolByDeviceId[id]!,
+              //                 },
+              //                 'delayedDeviceId': _delayedDeviceId,
+              //                 'wifiConfigAlreadyPublished': true,
+              //               },
+              //             );
+              //             return;
+              //           }
+
+              //           final hasBle = connectedIds.isNotEmpty;
+
+              //           // WiFi devices available from backend (MQTT/API path)
+              //           List<DeviceInfo> wifiDevices = const <DeviceInfo>[];
+              //           try {
+              //             wifiDevices =
+              //                 await ref.read(wifiDevicesByOrgProvider.future);
+              //           } catch (_) {
+              //             wifiDevices = const <DeviceInfo>[];
+              //           }
+              //           final hasWifi = wifiDevices.isNotEmpty;
+
+              //           if (!hasBle && !hasWifi) {
+              //             if (!context.mounted) return;
+              //             ScaffoldMessenger.of(context).showSnackBar(
+              //               const SnackBar(
+              //                 content: Text(
+              //                   'No BLE connected and no WiFi devices found.',
+              //                 ),
+              //               ),
+              //             );
+              //             return;
+              //           }
+
+              //           Future<void> startBle() async {
+              //             final selected = await _pickConnectedDevices(
+              //               context,
+              //               connectedIds,
+              //               p,
+              //             );
+              //             if (!context.mounted ||
+              //                 selected == null ||
+              //                 selected.isEmpty) {
+              //               return;
+              //             }
+
+              //             // Ensure every selected device has an explicit protocol
+              //             // mapping (no fallback).
+              //             for (final id in selected) {
+              //               if (!_protocolByDeviceId.containsKey(id)) {
+              //                 _protocolByDeviceId[id] = p.id;
+              //               }
+              //             }
+
+              //             // CRITICAL FIX: Re-verify devices are still connected after picker
+              //             final bleRepository = ref.read(bleRepositoryProvider);
+              //             final stillConnected = selected
+              //                 .where((id) => bleRepository.isConnected(id))
+              //                 .toList();
+
+              //             if (stillConnected.isEmpty) {
+              //               if (!context.mounted) return;
+              //               ScaffoldMessenger.of(context).showSnackBar(
+              //                 const SnackBar(
+              //                   content: Text(
+              //                     'Selected BLE devices disconnected. Please reconnect and try again.',
+              //                   ),
+              //                   duration: Duration(seconds: 3),
+              //                 ),
+              //               );
+              //               return;
+              //             }
+
+              //             if (stillConnected.length < selected.length) {
+              //               appLogger.w(
+              //                 'Protocol: ${selected.length - stillConnected.length} BLE devices disconnected after picker, '
+              //                 'proceeding with ${stillConnected.length} connected device(s)',
+              //               );
+              //             }
+
+              //             context.push(
+              //               RoutePaths.session,
+              //               extra: {
+              //                 'protocolId': p.id,
+              //                 'protocol': p,
+              //                 'deviceIds': selected,
+              //                 'transport': 'ble',
+              //                 'advancedSettings': _settings,
+              //                 'advancedSettingsByDevice': {
+              //                   for (final id in selected)
+              //                     id: _settingsByDevice[id] ?? _settings,
+              //                 },
+              //                 'protocolByDeviceId': {
+              //                   for (final id in selected)
+              //                     id: _protocolByDeviceId[id]!,
+              //                 },
+              //                 'delayedDeviceId': _delayedDeviceId,
+              //               },
+              //             );
+              //           }
+
+              //           Future<void> startWifi() async {
+              //             final selectedWifi =
+              //                 await _pickWifiDevices(context, ref);
+              //             if (!context.mounted ||
+              //                 selectedWifi == null ||
+              //                 selectedWifi.isEmpty) {
+              //               return;
+              //             }
+
+              //             // Ensure every selected device has an explicit protocol
+              //             // mapping (no fallback).
+              //             for (final d in selectedWifi) {
+              //               if (!_protocolByDeviceId
+              //                   .containsKey(d.macAddress)) {
+              //                 _protocolByDeviceId[d.macAddress] = p.id;
+              //               }
+              //             }
+
+              //             try {
+              //               final dio = ref.read(djangoDioProvider);
+              //               // Resolve the protocol per selected WiFi device (web-parity).
+              //               final protocolIdsNeeded = selectedWifi
+              //                   .map((d) => _protocolByDeviceId[d.macAddress]!)
+              //                   .toSet();
+              //               final protocolById = <String, Protocol>{};
+              //               await Future.wait(
+              //                   protocolIdsNeeded.map((pid) async {
+              //                 final proto = pid == p.id
+              //                     ? p
+              //                     : await ref
+              //                         .read(protocolDetailProvider(pid).future);
+              //                 protocolById[pid] = proto;
+              //               }));
+
+              //               // Backend expects payload as a STRINGIFIED OBJECT (not a list).
+              //               // So we publish one request per device:
+              //               // { topic: "...", payload: "{\"mac\":\"...\", ...}" }
+              //               for (final d in selectedWifi) {
+              //                 final perDeviceSettings =
+              //                     _settingsByDevice[d.macAddress] ?? _settings;
+              //                 final deviceProtocol = protocolById[
+              //                         _protocolByDeviceId[d.macAddress]!] ??
+              //                     (throw StateError(
+              //                         'Missing protocol for ${d.macAddress}'));
+              //                 final payloadObj = _protocolToWifiPayload(
+              //                   deviceProtocol,
+              //                   mac: d.macAddress,
+              //                   advancedSettings: perDeviceSettings,
+              //                   applyStartDelay:
+              //                       perDeviceSettings.startDelay > 0,
+              //                 );
+              //                 final payloadStr = jsonEncode(payloadObj);
+              //                 appLogger.i(
+              //                   'WiFi: Publishing MQTT config (topic=HydraWav3Pro/config, mac=${d.macAddress}, payload=$payloadStr)',
+              //                 );
+              //                 final resp = await dio.post(
+              //                   ApiEndpoints.mqttPublish,
+              //                   data: {
+              //                     'topic': 'HydraWav3Pro/config',
+              //                     'payload': payloadStr,
+              //                   },
+              //                 );
+              //                 appLogger.i(
+              //                   'WiFi: MQTT publish OK (mac=${d.macAddress}, status=${resp.statusCode ?? 200})',
+              //                 );
+              //               }
+              //             } on DioException catch (e) {
+              //               appLogger.e(
+              //                 'WiFi: MQTT publish failed '
+              //                 '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
+              //               );
+              //               if (context.mounted) {
+              //                 ScaffoldMessenger.of(context).showSnackBar(
+              //                   SnackBar(
+              //                     content: Text(
+              //                       'WiFi publish failed: ${e.message ?? e.toString()}',
+              //                     ),
+              //                   ),
+              //                 );
+              //               }
+              //               return;
+              //             } catch (e) {
+              //               appLogger.e('WiFi: MQTT publish failed: $e');
+              //               if (context.mounted) {
+              //                 ScaffoldMessenger.of(context).showSnackBar(
+              //                   SnackBar(
+              //                     content: Text('WiFi publish failed: $e'),
+              //                   ),
+              //                 );
+              //               }
+              //               return;
+              //             }
+
+              //             if (!context.mounted) return;
+              //             final sessionClockAnchorMs =
+              //                 DateTime.now().millisecondsSinceEpoch;
+              //             context.push(
+              //               RoutePaths.session,
+              //               extra: {
+              //                 'protocolId': p.id,
+              //                 'protocol': p,
+              //                 'deviceIds': selectedWifi
+              //                     .map((d) => d.macAddress)
+              //                     .toList(),
+              //                 'transport': 'wifi',
+              //                 'sessionClockAnchorMs': sessionClockAnchorMs,
+              //                 'advancedSettings': _settings,
+              //                 'advancedSettingsByDevice': {
+              //                   for (final id
+              //                       in selectedWifi.map((d) => d.macAddress))
+              //                     id: _settingsByDevice[id] ?? _settings,
+              //                 },
+              //                 'protocolByDeviceId': {
+              //                   for (final d in selectedWifi)
+              //                     d.macAddress:
+              //                         _protocolByDeviceId[d.macAddress]!,
+              //                 },
+              //                 'delayedDeviceId': _delayedDeviceId,
+              //               },
+              //             );
+              //           }
+
+              //           if (hasWifi && !hasBle) {
+              //             await startWifi();
+              //             return;
+              //           }
+              //           if (hasBle && !hasWifi) {
+              //             await startBle();
+              //             return;
+              //           }
+
+              //           // Both available → ask user which transport to use.
+              //           final choice = await showModalBottomSheet<String>(
+              //             context: context,
+              //             showDragHandle: true,
+              //             backgroundColor: ThemeConstants.surface,
+              //             shape: const RoundedRectangleBorder(
+              //               borderRadius:
+              //                   BorderRadius.vertical(top: Radius.circular(18)),
+              //             ),
+              //             builder: (ctx) => SafeArea(
+              //               top: false,
+              //               child: Padding(
+              //                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              //                 child: Column(
+              //                   mainAxisSize: MainAxisSize.min,
+              //                   crossAxisAlignment: CrossAxisAlignment.start,
+              //                   children: [
+              //                     const Text(
+              //                       'Start session using',
+              //                       style: TextStyle(
+              //                         fontSize: 18,
+              //                         fontWeight: FontWeight.w700,
+              //                         color: Colors.black,
+              //                       ),
+              //                     ),
+              //                     const SizedBox(height: 10),
+              //                     ListTile(
+              //                       leading: const Icon(Icons.bluetooth_rounded,
+              //                           color: Colors.black),
+              //                       title: const Text('Bluetooth (BLE)',
+              //                           style: TextStyle(color: Colors.black)),
+              //                       subtitle: Text(
+              //                         '${connectedIds.length} connected',
+              //                         style: const TextStyle(
+              //                           color: ThemeConstants.textSecondary,
+              //                         ),
+              //                       ),
+              //                       onTap: () => Navigator.of(ctx).pop('ble'),
+              //                     ),
+              //                     ListTile(
+              //                       leading: const Icon(Icons.wifi_rounded,
+              //                           color: Colors.black),
+              //                       title: const Text('WiFi (MQTT/API)',
+              //                           style: TextStyle(color: Colors.black)),
+              //                       subtitle: Text(
+              //                         '${wifiDevices.length} available',
+              //                         style: const TextStyle(
+              //                           color: ThemeConstants.textSecondary,
+              //                         ),
+              //                       ),
+              //                       onTap: () => Navigator.of(ctx).pop('wifi'),
+              //                     ),
+              //                   ],
+              //                 ),
+              //               ),
+              //             ),
+              //           );
+
+              //           if (!context.mounted || choice == null) return;
+              //           if (choice == 'wifi') {
+              //             await startWifi();
+              //           } else {
+              //             await startBle();
+              //           }
+              //         } finally {
+              //           if (mounted) {
+              //             setState(() => _startingFromDetail = false);
+              //           }
+              //         }
+              //       },
+              //       child: Container(
+              //         height: 56,
+              //         decoration: BoxDecoration(
+              //           color: ThemeConstants.accent,
+              //           borderRadius: BorderRadius.circular(14),
+              //           boxShadow: [
+              //             BoxShadow(
+              //                 color:
+              //                     ThemeConstants.accent.withValues(alpha: 0.3),
+              //                 blurRadius: 16,
+              //                 offset: const Offset(0, 4))
+              //           ],
+              //         ),
+              //         child: _startingFromDetail
+              //             ? const SizedBox(
+              //                 height: 18,
+              //                 width: 18,
+              //                 child: CircularProgressIndicator(strokeWidth: 2),
+              //               )
+              //             : const Row(
+              //                 mainAxisAlignment: MainAxisAlignment.center,
+              //                 children: [
+              //                     Icon(Icons.play_arrow_rounded,
+              //                         color: Colors.black, size: 22),
+              //                     SizedBox(width: 8),
+              //                     Text('Start Session',
+              //                         style: TextStyle(
+              //                             color: Colors.black,
+              //                             fontSize: 16,
+              //                             fontWeight: FontWeight.w600)),
+              //                   ]),
+              //       ),
+              //     )),
             ],
           );
         },
@@ -1074,7 +1095,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -1092,16 +1113,16 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                         itemBuilder: (ctx, i) {
                           final d = async[i];
                           final key = d.macAddress;
-                            final checked = selectedMacs.contains(key);
-                            return CheckboxListTile(
-                              value: checked,
-                              activeColor: ThemeConstants.accent,
-                              checkColor: Colors.white,
+                          final checked = selectedMacs.contains(key);
+                          return CheckboxListTile(
+                            value: checked,
+                            activeColor: ThemeConstants.accent,
+                            checkColor: Colors.black,
                             contentPadding: EdgeInsets.zero,
                             title: Text(
                               d.name,
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: Colors.black,
                                 fontSize: 13,
                               ),
                             ),
@@ -1112,15 +1133,15 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                                 fontSize: 11,
                               ),
                             ),
-                              onChanged: (v) {
-                                setSheetState(() {
-                                  if (v == true) {
-                                    selectedMacs.add(key);
-                                  } else {
-                                    selectedMacs.remove(key);
-                                  }
-                                });
-                              },
+                            onChanged: (v) {
+                              setSheetState(() {
+                                if (v == true) {
+                                  selectedMacs.add(key);
+                                } else {
+                                  selectedMacs.remove(key);
+                                }
+                              });
+                            },
                           );
                         },
                       ),
@@ -1133,7 +1154,8 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                             ? null
                             : () {
                                 final picked = async
-                                    .where((d) => selectedMacs.contains(d.macAddress))
+                                    .where((d) =>
+                                        selectedMacs.contains(d.macAddress))
                                     .toList();
                                 Navigator.of(ctx).pop(picked);
                               },
@@ -1239,7 +1261,8 @@ Map<String, dynamic> _protocolToRs35Payload(
   };
   final vibMax = switch (vibMode) {
     'Off' => 0,
-    'Single' => (advancedSettings.vibrationSingleHz.clamp(10, 230).toInt() + 10),
+    'Single' =>
+      (advancedSettings.vibrationSingleHz.clamp(10, 230).toInt() + 10),
     'Sweep' => advancedSettings.vibrationSweepMax.toInt(),
     _ => advancedSettings.vibMax.toInt(),
   };
@@ -1294,8 +1317,8 @@ int _computeFirmwareTotalDurationSeconds(
           (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
 
   if (p.sessions > 1) {
-    baseTimeline =
-        (baseTimeline * p.sessions) + (p.sessionPause.toInt() * (p.sessions - 1));
+    baseTimeline = (baseTimeline * p.sessions) +
+        (p.sessionPause.toInt() * (p.sessions - 1));
   }
 
   if (advancedSettings.cycle1Initiation) {
@@ -1339,7 +1362,7 @@ Future<List<String>?> _pickConnectedDevices(
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -1361,12 +1384,12 @@ Future<List<String>?> _pickConnectedDevices(
                               return CheckboxListTile(
                                 value: checked,
                                 activeColor: ThemeConstants.accent,
-                                checkColor: Colors.white,
+                                checkColor: Colors.black,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(
                                   id,
                                   style: const TextStyle(
-                                    color: Colors.white,
+                                    color: Colors.black,
                                     fontSize: 13,
                                   ),
                                 ),
@@ -1407,7 +1430,8 @@ Future<List<String>?> _pickConnectedDevices(
                                 ),
                                 child: Consumer(
                                   builder: (context, ref, _) {
-                                    final selectedTransportId = selectedIds.first;
+                                    final selectedTransportId =
+                                        selectedIds.first;
                                     final gatt = ref
                                         .read(bleRepositoryProvider)
                                         .getGattInfo(selectedTransportId);
@@ -1428,7 +1452,7 @@ Future<List<String>?> _pickConnectedDevices(
                                       ),
                                       style: const TextStyle(
                                         fontSize: 11,
-                                        color: Colors.white,
+                                        color: Colors.black,
                                         fontFamily: 'monospace',
                                       ),
                                     );
@@ -1446,8 +1470,7 @@ Future<List<String>?> _pickConnectedDevices(
                       child: ElevatedButton(
                         onPressed: selectedIds.isEmpty
                             ? null
-                            : () =>
-                                Navigator.of(ctx).pop(selectedIds.toList()),
+                            : () => Navigator.of(ctx).pop(selectedIds.toList()),
                         child: Text(
                           selectedIds.length <= 1
                               ? 'Start with selected device'
@@ -1530,7 +1553,7 @@ class _R extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Colors.white,
+                  color: Colors.black,
                 ),
               ),
             ),
@@ -1683,7 +1706,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: Colors.black,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -1746,13 +1769,15 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                       : ThemeConstants.surfaceVariant,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: selected ? ThemeConstants.accent : ThemeConstants.border,
+                    color: selected
+                        ? ThemeConstants.accent
+                        : ThemeConstants.border,
                   ),
                 ),
                 child: Text(
                   m,
                   style: TextStyle(
-                    color: selected ? ThemeConstants.accent : Colors.white,
+                    color: selected ? ThemeConstants.accent : Colors.black,
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
@@ -1797,7 +1822,8 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             onChanged: (v) {
               var newMax = v;
               var newMin = settings.vibMin;
-              if (newMax <= newMin) newMin = (newMax - 1).clamp(0, vibMaxHz - 1);
+              if (newMax <= newMin)
+                newMin = (newMax - 1).clamp(0, vibMaxHz - 1);
               onChangeSettings(
                 settings.copyWith(
                   vibMin: newMin,
@@ -1830,7 +1856,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         slider(
           label: 'Hot Pad Intensity',
           value: settings.hotLevel,
-          valueColor: const Color(0xFFE09060),
+          valueColor: ThemeConstants.accent,
           onChanged: (v) =>
               onChangeSettings(settings.copyWith(hotLevel: v, hotPack: true)),
         ),
@@ -1869,7 +1895,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                   const Text(
                     'Delay',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Colors.black,
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -2045,8 +2071,9 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                       child: Padding(
                         padding: EdgeInsets.only(right: i == 2 ? 0 : 8),
                         child: OutlinedButton(
-                          onPressed:
-                              selectedDeviceIds.isEmpty ? null : () => saveToSlot(i),
+                          onPressed: selectedDeviceIds.isEmpty
+                              ? null
+                              : () => saveToSlot(i),
                           child: Text('Slot ${i + 1}'),
                         ),
                       ),

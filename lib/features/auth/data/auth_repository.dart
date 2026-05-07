@@ -36,32 +36,33 @@ class AuthRepository {
   //   return profile;
   // }
   Future<UserProfile> login(LoginRequest request) async {
-  final tokens = await _remoteSource.login(request);
+    final tokens = await _remoteSource.login(request);
 
-  // ✅ DEBUG
-  print("LOGIN TOKEN RAW: ${tokens.accessToken}");
+    // ✅ DEBUG
+    print("LOGIN TOKEN RAW: ${tokens.accessToken}");
 
-  // ✅ REMOVE "Bearer " BEFORE SAVING
-  final cleanAccessToken = tokens.accessToken.replaceFirst("Bearer ", "");
-  final cleanRefreshToken = tokens.refreshToken.replaceFirst("Bearer ", "");
+    // ✅ REMOVE "Bearer " BEFORE SAVING
+    final cleanAccessToken = tokens.accessToken.replaceFirst("Bearer ", "");
+    final cleanRefreshToken = tokens.refreshToken.replaceFirst("Bearer ", "");
 
-  await _secureStorage.saveTokens(
-    accessToken: cleanAccessToken,
-    refreshToken: cleanRefreshToken,
-  );
+    await _secureStorage.saveTokens(
+      accessToken: cleanAccessToken,
+      refreshToken: cleanRefreshToken,
+    );
 
-  // ✅ VERIFY SAVE
-  final storedToken = await _secureStorage.getAccessToken();
-  print("TOKEN AFTER SAVE: $storedToken");
+    // ✅ VERIFY SAVE
+    final storedToken = await _secureStorage.getAccessToken();
+    print("TOKEN AFTER SAVE: $storedToken");
 
-  final profile = await _remoteSource.getProfile();
+    final profile = await _remoteSource.getProfile();
 
-  if (profile.id != null) {
-    await _secureStorage.saveUserId(profile.id!);
+    if (profile.id != null) {
+      await _secureStorage.saveUserId(profile.id!);
+    }
+
+    return profile;
   }
 
-  return profile;
-}
   Future<void> logout() async {
     await _secureStorage.clearAll();
   }
@@ -77,10 +78,11 @@ class AuthRepository {
   Future<UserProfile> updateProfile(Map<String, dynamic> data) async {
     return await _remoteSource.updateProfile(data);
   }
+
   Future<List<Map<String, dynamic>>> getOrganizations() async {
-  final response = await _remoteSource.getOrganizations();
-  return response;
-}
+    final response = await _remoteSource.getOrganizations();
+    return response;
+  }
 
   Future<void> changePassword({
     required String oldPassword,
@@ -91,8 +93,26 @@ class AuthRepository {
       newPassword: newPassword,
     );
   }
+
   // forgot password
   Future<void> forgotPassword(String id) {
-  return _remoteSource.forgotPassword(id);
-}
+    return _remoteSource.forgotPassword(id);
+  }
+
+  // Organization management
+  Future<void> saveSelectedOrganization(String orgId, String orgName) async {
+    await _secureStorage.saveSelectedOrganization(orgId, orgName);
+  }
+
+  Future<String?> getSelectedOrgId() async {
+    return await _secureStorage.getSelectedOrgId();
+  }
+
+  Future<String?> getSelectedOrgName() async {
+    return await _secureStorage.getSelectedOrgName();
+  }
+
+  Future<void> clearSelectedOrganization() async {
+    await _secureStorage.clearSelectedOrganization();
+  }
 }

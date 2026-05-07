@@ -42,18 +42,7 @@ class _SelectOrganizationPageState
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF1E3040),
-              ThemeConstants.background,
-              ThemeConstants.background
-            ],
-            stops: [0.0, 0.4, 1.0],
-          ),
-        ),
+        decoration: const BoxDecoration(color: ThemeConstants.background),
         child: SafeArea(
           child: orgAsync.when(
             loading: () => const Center(
@@ -63,7 +52,7 @@ class _SelectOrganizationPageState
               child: Text(
                 'Failed to load organizations\n$e',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white),
+                style: const TextStyle(color: ThemeConstants.textPrimary),
               ),
             ),
             data: (orgs) {
@@ -88,7 +77,7 @@ class _SelectOrganizationPageState
                               style: TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                                color: ThemeConstants.textPrimary,
                               ),
                             ),
 
@@ -115,20 +104,13 @@ class _SelectOrganizationPageState
                                 padding: const EdgeInsets.all(18),
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(18),
-                                  gradient: isSelected
-                                      ? const LinearGradient(
-                                          colors: [
-                                            ThemeConstants.accent,
-                                            Color(0xFFE09060)
-                                          ],
-                                        )
-                                      : null,
                                   color: isSelected
-                                      ? null
+                                      ? ThemeConstants.accent
+                                          .withValues(alpha: 0.14)
                                       : ThemeConstants.surface,
                                   border: Border.all(
                                     color: isSelected
-                                        ? Colors.transparent
+                                        ? ThemeConstants.accent
                                         : ThemeConstants.border,
                                   ),
                                   boxShadow: [
@@ -144,12 +126,12 @@ class _SelectOrganizationPageState
                                 ),
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(18),
-                                  onTap: () {
+                                  onTap: () async {
                                     setState(() {
                                       selectedOrgId = orgId;
                                     });
 
-                                    ref
+                                    await ref
                                         .read(authStateProvider.notifier)
                                         .setOrganization(
                                           orgId,
@@ -157,7 +139,9 @@ class _SelectOrganizationPageState
                                               'Organization', // ✅ PASS NAME
                                         );
 
-                                    context.go(RoutePaths.protocols);
+                                    if (mounted) {
+                                      context.go(RoutePaths.protocols);
+                                    }
                                   },
                                   child: Row(
                                     children: [
@@ -170,7 +154,7 @@ class _SelectOrganizationPageState
                                         ),
                                         child: const Icon(
                                           Icons.business,
-                                          color: Colors.white,
+                                          color: ThemeConstants.textPrimary,
                                           size: 26,
                                         ),
                                       ),
@@ -181,7 +165,7 @@ class _SelectOrganizationPageState
                                           style: const TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
-                                            color: Colors.white,
+                                            color: ThemeConstants.textPrimary,
                                           ),
                                         ),
                                       ),
@@ -191,7 +175,8 @@ class _SelectOrganizationPageState
                                         child: isSelected
                                             ? const Icon(
                                                 Icons.check_circle,
-                                                color: Colors.white,
+                                                color:
+                                                    ThemeConstants.textPrimary,
                                               )
                                             : const Icon(
                                                 Icons.arrow_forward_ios,

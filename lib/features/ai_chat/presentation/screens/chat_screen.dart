@@ -116,7 +116,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 const SizedBox(width: 10),
                 Expanded(child: TextField(
                   controller: _ctrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  style: const TextStyle(color: Colors.black, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'Ask about protocols, placement...',
                     hintStyle: const TextStyle(color: ThemeConstants.textTertiary, fontSize: 14),
@@ -134,13 +134,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [ThemeConstants.accent, Color(0xFFE09060)]),
+                      color: ThemeConstants.accent,
                       borderRadius: BorderRadius.circular(10),
                       boxShadow: [BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.25), blurRadius: 8)],
                     ),
                     child: sending
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                        : const Icon(Icons.send_rounded, color: Colors.black, size: 20),
                   ),
                 ),
               ]),
@@ -159,7 +159,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             GlowIconBox(icon: Icons.smart_toy_outlined, size: 64, iconSize: 32),
             const SizedBox(height: 20),
-            const Text('AI Assistant', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white)),
+            const Text('AI Assistant', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.black)),
             const SizedBox(height: 10),
             const Text(
               'Get protocol recommendations, pad placement guidance, and session suggestions based on your discomfort areas.',
@@ -224,10 +224,7 @@ class _Bubble extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            gradient: isUser
-                ? const LinearGradient(colors: [ThemeConstants.accent, Color(0xFFE09060)])
-                : null,
-            color: isUser ? null : ThemeConstants.surface,
+            color: isUser ? ThemeConstants.accent : ThemeConstants.surface,
             borderRadius: BorderRadius.only(
               topLeft: const Radius.circular(16), topRight: const Radius.circular(16),
               bottomLeft: Radius.circular(isUser ? 16 : 4), bottomRight: Radius.circular(isUser ? 4 : 16),

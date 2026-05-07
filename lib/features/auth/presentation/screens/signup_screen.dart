@@ -39,17 +39,17 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Join Hydrawav3', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white)),
+                    const Text('Join Hydrawav3', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: ThemeConstants.textPrimary)),
                     const SizedBox(height: 4),
                     const Text('Create your account to get started', style: TextStyle(fontSize: 14, color: ThemeConstants.textSecondary)),
                     const SizedBox(height: 24),
-                    TextFormField(controller: _nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Full Name', prefixIcon: Icon(Icons.person_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+                    TextFormField(controller: _nameCtrl, style: const TextStyle(color: ThemeConstants.textPrimary), decoration: const InputDecoration(hintText: 'Full Name', prefixIcon: Icon(Icons.person_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _emailCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Email', prefixIcon: Icon(Icons.email_outlined, color: ThemeConstants.textTertiary, size: 20)), keyboardType: TextInputType.emailAddress, validator: (v) { if (v == null || !v.contains('@')) return 'Invalid email'; return null; }),
+                    TextFormField(controller: _emailCtrl, style: const TextStyle(color: ThemeConstants.textPrimary), decoration: const InputDecoration(hintText: 'Email', prefixIcon: Icon(Icons.email_outlined, color: ThemeConstants.textTertiary, size: 20)), keyboardType: TextInputType.emailAddress, validator: (v) { if (v == null || !v.contains('@')) return 'Invalid email'; return null; }),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _passCtrl, obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Password', prefixIcon: Icon(Icons.lock_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.length < 6) ? 'Min 6 characters' : null),
+                    TextFormField(controller: _passCtrl, obscureText: true, style: const TextStyle(color: ThemeConstants.textPrimary), decoration: const InputDecoration(hintText: 'Password', prefixIcon: Icon(Icons.lock_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => (v == null || v.length < 6) ? 'Min 6 characters' : null),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _confirmCtrl, obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Confirm Password', prefixIcon: Icon(Icons.lock_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => v != _passCtrl.text ? 'Passwords do not match' : null),
+                    TextFormField(controller: _confirmCtrl, obscureText: true, style: const TextStyle(color: ThemeConstants.textPrimary), decoration: const InputDecoration(hintText: 'Confirm Password', prefixIcon: Icon(Icons.lock_outline_rounded, color: ThemeConstants.textTertiary, size: 20)), validator: (v) => v != _passCtrl.text ? 'Passwords do not match' : null),
                     const SizedBox(height: 24),
                     SizedBox(height: 48, child: ElevatedButton(onPressed: () async {
                       if (!_formKey.currentState!.validate()) return;

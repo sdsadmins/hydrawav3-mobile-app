@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'core/storage/preferences.dart';
 import 'features/auth/presentation/providers/auth_provider.dart';
+import 'features/session/services/background_session_runtime.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +46,7 @@ class _AppBootstrapState extends ConsumerState<_AppBootstrap> {
     super.initState();
     Future.microtask(() {
       ref.read(authStateProvider.notifier).checkAuthStatus();
+      ref.read(backgroundSessionRuntimeProvider.notifier).initialize();
     });
   }
 

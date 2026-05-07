@@ -24,8 +24,11 @@ class GradientCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = gradientColors ??
-        [ThemeConstants.surface, ThemeConstants.surfaceVariant.withValues(alpha: 0.5)];
+    // We intentionally render a solid card (no gradient) to keep the UI clean and
+    // consistent with the app’s light background.
+    final bgColor = (gradientColors?.isNotEmpty ?? false)
+        ? gradientColors!.first
+        : ThemeConstants.surface;
 
     return Material(
       color: Colors.transparent,
@@ -36,11 +39,7 @@ class GradientCard extends StatelessWidget {
         child: Container(
           padding: padding ?? const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: colors,
-            ),
+            color: bgColor,
             borderRadius: BorderRadius.circular(borderRadius),
             border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
             boxShadow: showGlow
@@ -182,20 +181,15 @@ class _ShimmerBoxState extends State<ShimmerBox>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
+        final t = _controller.value;
+        final bump = (1 - (2 * (t - 0.5).abs())).clamp(0.0, 1.0);
+        final alpha = (0.35 + 0.25 * bump).clamp(0.0, 1.0);
         return Container(
           width: widget.width,
           height: widget.height,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(widget.borderRadius),
-            gradient: LinearGradient(
-              begin: Alignment(-1 + 2 * _controller.value, 0),
-              end: Alignment(-1 + 2 * _controller.value + 1, 0),
-              colors: [
-                ThemeConstants.surface,
-                ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
-                ThemeConstants.surface,
-              ],
-            ),
+            color: ThemeConstants.surfaceVariant.withValues(alpha: alpha),
           ),
         );
       },
@@ -253,15 +247,7 @@ class AccentDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 1,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            ThemeConstants.border.withValues(alpha: 0),
-            ThemeConstants.accent.withValues(alpha: 0.2),
-            ThemeConstants.border.withValues(alpha: 0),
-          ],
-        ),
-      ),
+      color: ThemeConstants.border.withValues(alpha: 0.7),
     );
   }
 }

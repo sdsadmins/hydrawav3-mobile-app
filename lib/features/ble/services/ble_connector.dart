@@ -171,7 +171,7 @@ class BleConnector {
       // Many UART-style bridges are flaky if you immediately discover services.
       // This matches the strict flow requested for Hydra devices.
       if (BleConstants.strictHydraGattProfile) {
-        await Future<void>.delayed(const Duration(seconds: 1));
+        await Future<void>.delayed(const Duration(milliseconds: 250));
       }
 
       // Request MTU
@@ -180,7 +180,8 @@ class BleConnector {
       } catch (_) {}
 
       // Discover services
-      await Future.delayed(const Duration(seconds: 2)); // 🔥 ADD THIS
+      // Keep this short; long delays make Connect feel unresponsive.
+      await Future.delayed(const Duration(milliseconds: 250));
       final services = await device.discoverServices();
       appLogger.i("🔥 SERVICES COUNT = ${services.length}");
 
@@ -220,7 +221,7 @@ class BleConnector {
 
       // Give the BLE stack time to settle CCCD state before enabling our
       // strict preferred notify characteristic.
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
       await _findCharacteristics(deviceId, services);
 
       _connectedDevices[deviceId] = device;
@@ -308,7 +309,7 @@ class BleConnector {
         // Enable notify on the strict preferred characteristic.
         await notifyChar.setNotifyValue(true);
         // Let the bridge/firmware + Android BLE stack finish CCCD setup.
-        await Future<void>.delayed(const Duration(milliseconds: 500));
+        await Future<void>.delayed(const Duration(milliseconds: 150));
         await _notifySubs[deviceId]?.cancel();
         _notifySubs[deviceId] = notifyChar.onValueReceived.listen((value) {
           _notificationController.add(
@@ -336,7 +337,7 @@ class BleConnector {
 
       // 🔥 TRY TO CONTINUE ANYWAY
       try {
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(milliseconds: 350));
 
         final services = await device.discoverServices();
 

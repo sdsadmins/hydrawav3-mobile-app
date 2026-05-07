@@ -29,9 +29,69 @@ class BleScanner {
   StreamSubscription<bool>? _isScanningSub;
   final _resultsController = StreamController<List<ScanResult>>.broadcast();
   bool _isScanning = false;
+  bool _autoScanEnabled = true;
 
   Stream<List<ScanResult>> get scanResults => _resultsController.stream;
   bool get isScanning => _isScanning;
+
+  /// Initialize Bluetooth state monitoring for auto-scan
+  void initializeAutoScan() {
+    if (_autoScanEnabled && _adapterSub == null) {
+      _adapterSub = FlutterBluePlus.adapterState.listen((state) {
+        appLogger.i('BLE: Bluetooth adapter state changed to: $state');
+        if (state == BluetoothAdapterState.on && !_isScanning) {
+          // Auto-start scan when Bluetooth turns on
+          appLogger.i('BLE: Bluetooth turned on, auto-starting scan');
+          Future.delayed(const Duration(milliseconds: 500), () {
+            startScan();
+          });
+        } else if (state == BluetoothAdapterState.off) {
+          // Stop scan when Bluetooth turns off
+          appLogger.i('BLE: Bluetooth turned off, stopping scan');
+          stopScan();
+        }
+      });
+    }
+  }
+
+  /// Start a single scan to discover new devices
+  Future<void> quickScanForNewDevices({Duration? timeout}) async {
+    if (_isScanning) return;
+
+    appLogger.i('BLE: Starting quick scan for new devices');
+
+    // Clear old results and do a fresh scan
+    final oldResults = <ScanResult>[];
+    _resultsController.add(oldResults);
+
+    await _scanSubscription?.cancel();
+    _scanSubscription = null;
+
+    await FlutterBluePlus.startScan(
+      timeout: timeout ?? const Duration(seconds: 10),
+      androidUsesFineLocation: true,
+    );
+
+    // Listen for results and stop when we get any
+    StreamSubscription<List<ScanResult>>? scanSub;
+    scanSub = FlutterBluePlus.onScanResults.listen((results) {
+      if (results.isNotEmpty) {
+        appLogger.i('BLE: Quick scan found ${results.length} devices');
+        scanSub?.cancel();
+        _scanSubscription = null;
+        _isScanning = false;
+        _globalScanActive = false;
+      }
+    }, onError: (error) {
+      appLogger.e('BLE: Quick scan error: $error');
+      scanSub?.cancel();
+      _scanSubscription = null;
+      _isScanning = false;
+      _globalScanActive = false;
+    });
+
+    _scanSubscription = scanSub;
+  }
 
   /// Start scanning for Hydrawav3 devices.
   Future<void> startScan({Duration? timeout}) async {

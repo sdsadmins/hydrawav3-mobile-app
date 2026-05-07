@@ -19,13 +19,7 @@ class PresetManagementScreen extends ConsumerWidget {
         slivers: [
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1E3040), ThemeConstants.background],
-                ),
-              ),
+              decoration: const BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -76,8 +70,9 @@ class PresetManagementScreen extends ConsumerWidget {
                         Container(
                           width: 48, height: 48,
                           decoration: BoxDecoration(
-                            gradient: empty ? null : const LinearGradient(colors: [ThemeConstants.accent, Color(0xFFE09060)]),
-                            color: empty ? ThemeConstants.surfaceVariant : null,
+                            color: empty
+                                ? ThemeConstants.surfaceVariant
+                                : ThemeConstants.accent,
                             borderRadius: BorderRadius.circular(12),
                             boxShadow: empty ? null : [BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.2), blurRadius: 8)],
                           ),

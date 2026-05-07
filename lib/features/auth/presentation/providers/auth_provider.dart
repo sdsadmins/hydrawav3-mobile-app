@@ -36,8 +36,7 @@ class AuthState {
       isLoading: isLoading ?? this.isLoading,
       user: user ?? this.user,
       error: error,
-      selectedOrgId:
-          selectedOrgId != null ? selectedOrgId : this.selectedOrgId,
+      selectedOrgId: selectedOrgId != null ? selectedOrgId : this.selectedOrgId,
       selectedOrgName:
           selectedOrgName != null ? selectedOrgName : this.selectedOrgName,
     );
@@ -62,8 +61,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           final biometricEnabled = await _biometricService.isEnabled();
 
           if (biometricEnabled) {
-            final authenticated =
-                await _biometricService.authenticate();
+            final authenticated = await _biometricService.authenticate();
 
             if (!authenticated) {
               state = state.copyWith(
@@ -78,15 +76,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
         try {
           final profile = await _repository.getProfile();
 
+          // Restore selected organization from storage
+          final selectedOrgId = await _repository.getSelectedOrgId();
+          final selectedOrgName = await _repository.getSelectedOrgName();
+
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
             user: profile,
+            selectedOrgId: selectedOrgId,
+            selectedOrgName: selectedOrgName,
           );
         } catch (_) {
+          // Restore selected organization even if profile fetch fails
+          final selectedOrgId = await _repository.getSelectedOrgId();
+          final selectedOrgName = await _repository.getSelectedOrgName();
+
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
+            selectedOrgId: selectedOrgId,
+            selectedOrgName: selectedOrgName,
           );
         }
       } else {
@@ -102,37 +112,43 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
     }
   }
-Future<void> login(LoginRequest request) async {
-  state = state.copyWith(isLoading: true, error: null);
 
-  try {
-    final profile = await _repository.login(request);
+  Future<void> login(LoginRequest request) async {
+    state = state.copyWith(isLoading: true, error: null);
 
-    state = state.copyWith(
-      isAuthenticated: true,
-      isLoading: false,
-      user: profile,
-      selectedOrgId: null, // ✅ FIXED
-    );
-  } catch (e) {
-    state = state.copyWith(
-      isLoading: false,
-      error: e.toString(),
-    );
+    try {
+      final profile = await _repository.login(request);
+
+      state = state.copyWith(
+        isAuthenticated: true,
+        isLoading: false,
+        user: profile,
+        selectedOrgId: null, // ✅ FIXED
+      );
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: e.toString(),
+      );
+    }
   }
-}
+
   Future<void> logout() async {
     await _repository.logout();
+    await _repository.clearSelectedOrganization();
     state = const AuthState();
   }
 
   /// ✅ ADD THIS (IMPORTANT 🔥)
-  void setOrganization(String orgId, String orgName) {
-  state = state.copyWith(
-    selectedOrgId: orgId,
-    selectedOrgName: orgName,
-  );
-}
+  Future<void> setOrganization(String orgId, String orgName) async {
+    // Persist the organization selection
+    await _repository.saveSelectedOrganization(orgId, orgName);
+
+    state = state.copyWith(
+      selectedOrgId: orgId,
+      selectedOrgName: orgName,
+    );
+  }
 
   /// 🎮 Demo mode
   void enterDemoMode() {
@@ -159,8 +175,7 @@ Future<void> login(LoginRequest request) async {
   }
 }
 
-final authStateProvider =
-    StateNotifierProvider<AuthNotifier, AuthState>((ref) {
+final authStateProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   return AuthNotifier(
     ref.read(authRepositoryProvider),
     ref.read(biometricServiceProvider),
