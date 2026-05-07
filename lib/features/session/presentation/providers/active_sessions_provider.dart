@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../domain/active_session_model.dart';
+import '../../services/background_session_runtime.dart';
 
 final activeSessionsProvider =
     StateNotifierProvider<ActiveSessionsNotifier, List<ActiveSession>>((ref) {
@@ -26,9 +28,10 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       final sessionsJson = _prefs.getString(_activeSessionsKey) ?? '[]';
       if (sessionsJson.isNotEmpty) {
         final List<dynamic> sessionsList = jsonDecode(sessionsJson);
-        final sessions = sessionsList
+        final restoredSessions = sessionsList
             .map((json) => ActiveSession.fromJson(json as Map<String, dynamic>))
             .toList();
+        final sessions = _pruneRestoredSessions(restoredSessions);
         state = sessions;
         appLogger.i('Loaded ${sessions.length} active sessions from storage');
       }
@@ -37,29 +40,76 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     }
   }
 
+  List<ActiveSession> _pruneRestoredSessions(List<ActiveSession> sessions) {
+    if (sessions.isEmpty) return sessions;
+
+    try {
+      final snapshotJson = _prefs.getString(liveSessionSnapshotPrefsKey);
+      if (snapshotJson == null || snapshotJson.isEmpty) {
+        if (sessions.isNotEmpty) {
+          appLogger.i(
+              'Dropping stale restored active sessions with no live snapshot');
+          unawaited(_prefs.remove(_activeSessionsKey));
+        }
+        return const [];
+      }
+
+      final snapshot = LiveSessionSnapshot.fromJson(
+        jsonDecode(snapshotJson) as Map<String, dynamic>,
+      );
+      final filtered = sessions
+          .where((session) => session.id == snapshot.sessionId)
+          .toList();
+      if (filtered.length != sessions.length) {
+        appLogger.i(
+          'Pruned restored active sessions to snapshot-backed session=${snapshot.sessionId}',
+        );
+        unawaited(_saveSessionsList(filtered));
+      }
+      return filtered;
+    } catch (e) {
+      appLogger.w('Failed to reconcile restored active sessions: $e');
+      return const [];
+    }
+  }
+
   Future<void> _saveActiveSessions() async {
+    await _saveSessionsList(state);
+  }
+
+  Future<void> _saveSessionsList(List<ActiveSession> sessions) async {
     try {
       final sessionsJson = jsonEncode(
-        state.map((session) => session.toJson()).toList(),
+        sessions.map((session) => session.toJson()).toList(),
       );
       await _prefs.setString(_activeSessionsKey, sessionsJson);
-      appLogger.i('Saved ${state.length} active sessions to storage');
+      appLogger.i('Saved ${sessions.length} active sessions to storage');
     } catch (e) {
       appLogger.e('Failed to save active sessions: $e');
     }
   }
 
   Future<String> createSession({
+    String? sessionId,
     required String protocolId,
     required String protocolName,
     required List<String> deviceIds,
     required String transport,
   }) async {
-    final sessionId = _uuid.v4();
+    if (sessionId != null) {
+      for (final session in state) {
+        if (session.id == sessionId) {
+          appLogger.i('Session already exists for ID, returning: $sessionId');
+          return sessionId;
+        }
+      }
+    }
+
+    final newSessionId = sessionId ?? _uuid.v4();
     final now = DateTime.now();
 
     final newSession = ActiveSession(
-      id: sessionId,
+      id: newSessionId,
       protocolId: protocolId,
       protocolName: protocolName,
       deviceIds: deviceIds,
@@ -74,8 +124,8 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     await _saveActiveSessions();
 
     appLogger.i(
-        'Created new active session: $sessionId with ${deviceIds.length} devices');
-    return sessionId;
+        'Created new active session: $newSessionId with ${deviceIds.length} devices');
+    return newSessionId;
   }
 
   Future<void> updateSessionStatus(

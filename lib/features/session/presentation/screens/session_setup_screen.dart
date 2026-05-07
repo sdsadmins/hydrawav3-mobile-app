@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/storage/local_db.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/hw_loading.dart';
-import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../protocols/domain/protocol_model.dart';
@@ -15,8 +15,8 @@ import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../presets/data/preset_repository.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
+import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../services/session_engine.dart';
-import '../providers/busy_devices_provider.dart';
 
 // This screen is the “web-like” setup:
 // 1) One card per device.
@@ -41,7 +41,6 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   final Map<String, String> _protocolIdByDeviceId = {};
   final Map<String, AdvancedSettings> _settingsByDeviceId = {};
   final Set<String> _runDeviceIds = <String>{};
-  String? _activeDeviceId;
   String? _delayedDeviceId;
   bool _showSavePreset = false;
   bool _starting = false;
@@ -124,8 +123,6 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   @override
   void initState() {
     super.initState();
-    _activeDeviceId =
-        widget.deviceIds.isNotEmpty ? widget.deviceIds.first : null;
     _runDeviceIds.addAll(widget.deviceIds);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadDeviceNames());
   }
@@ -501,7 +498,6 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                             picked;
                                         _settingsByDeviceId[deviceId] =
                                             _advancedDefaultsFromProtocol(p);
-                                        _activeDeviceId = deviceId;
                                         // Default advanced panel to collapsed on protocol change.
                                         _showAdvancedByDeviceId[deviceId] =
                                             false;
@@ -649,23 +645,18 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                       onPressed: _starting || !allSelected
                           ? null
                           : () async {
-                              // Check if any selected devices are actually in use by validating session engine state
-                              final engineState =
-                                  ref.read(sessionEngineProvider);
                               final currentSelectedDeviceIds = widget.deviceIds
                                   .where((id) => _runDeviceIds.contains(id))
                                   .toList();
-
-                              // Only consider devices busy if they're in the running session engine
+                              final busyDevices = ref
+                                  .read(activeSessionsProvider.notifier)
+                                  .getBusyDevices();
                               final conflictingDevices =
                                   currentSelectedDeviceIds
-                                      .where((deviceId) => engineState.deviceIds
-                                          .contains(deviceId))
+                                      .where(busyDevices.contains)
                                       .toList();
 
-                              if (conflictingDevices.isNotEmpty &&
-                                  engineState.status ==
-                                      session_model.SessionStatus.running) {
+                              if (conflictingDevices.isNotEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
@@ -678,9 +669,13 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               }
 
                               setState(() => _starting = true);
+                              String? sessionId;
                               try {
-                                final ctrl =
-                                    ref.read(sessionEngineProvider.notifier);
+                                sessionId = const Uuid().v4();
+                                final ctrl = ref.read(
+                                  sessionEngineFamilyProvider(sessionId)
+                                      .notifier,
+                                );
 
                                 final runIds = selectedDeviceIds;
                                 final firstId = runIds.first;
@@ -755,6 +750,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 context.push(
                                   RoutePaths.session,
                                   extra: {
+                                    'sessionId': sessionId,
                                     'protocolId': commonProtocol.id,
                                     'protocol': commonProtocol,
                                     'deviceIds': runIds,
@@ -771,6 +767,14 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                   },
                                 );
                               } catch (e) {
+                                if (sessionId != null) {
+                                  ref
+                                      .read(
+                                        sessionEngineFamilyProvider(sessionId)
+                                            .notifier,
+                                      )
+                                      .reset();
+                                }
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(content: Text('Start failed: $e')),
