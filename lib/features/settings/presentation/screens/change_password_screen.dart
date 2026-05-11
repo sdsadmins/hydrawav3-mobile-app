@@ -10,19 +10,40 @@ class ChangePasswordScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      appBar: AppBar(title: const Text('Change Password')),
+      appBar: AppBar(title: Text('Change Password')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextFormField(obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Current Password', prefixIcon: Icon(Icons.lock_outline_rounded, color: ThemeConstants.textTertiary, size: 20))),
+            TextFormField(
+                obscureText: true,
+                style: TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                    hintText: 'Current Password',
+                    prefixIcon: Icon(Icons.lock_outline_rounded,
+                        color: ThemeConstants.textTertiary, size: 20))),
             const SizedBox(height: 12),
-            TextFormField(obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'New Password', prefixIcon: Icon(Icons.lock_rounded, color: ThemeConstants.textTertiary, size: 20))),
+            TextFormField(
+                obscureText: true,
+                style: TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                    hintText: 'New Password',
+                    prefixIcon: Icon(Icons.lock_rounded,
+                        color: ThemeConstants.textTertiary, size: 20))),
             const SizedBox(height: 12),
-            TextFormField(obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(hintText: 'Confirm New Password', prefixIcon: Icon(Icons.lock_rounded, color: ThemeConstants.textTertiary, size: 20))),
+            TextFormField(
+                obscureText: true,
+                style: TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                    hintText: 'Confirm New Password',
+                    prefixIcon: Icon(Icons.lock_rounded,
+                        color: ThemeConstants.textTertiary, size: 20))),
             const SizedBox(height: 24),
-            SizedBox(height: 48, child: ElevatedButton(onPressed: () {}, child: const Text('Update Password'))),
+            SizedBox(
+                height: 48,
+                child: ElevatedButton(
+                    onPressed: () {}, child: Text('Update Password'))),
           ],
         ),
       ),

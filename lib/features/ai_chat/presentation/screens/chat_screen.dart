@@ -22,7 +22,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _listening = false;
 
   @override
-  void dispose() { _ctrl.dispose(); _scroll.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
 
   void _send() async {
     final text = _ctrl.text.trim();
@@ -36,18 +40,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final repo = ref.read(chatRepositoryProvider);
     final buf = StringBuffer();
     try {
-      msgs.state = [...msgs.state, ChatMessageModel(content: '', isUser: false)];
+      msgs.state = [
+        ...msgs.state,
+        ChatMessageModel(content: '', isUser: false)
+      ];
       await for (final chunk in repo.chat(text)) {
         buf.write(chunk);
         final u = List<ChatMessageModel>.from(msgs.state);
-        u[u.length - 1] = ChatMessageModel(content: buf.toString(), isUser: false);
+        u[u.length - 1] =
+            ChatMessageModel(content: buf.toString(), isUser: false);
         msgs.state = u;
         _scrollEnd();
       }
     } catch (_) {
       final u = List<ChatMessageModel>.from(msgs.state);
       u[u.length - 1] = ChatMessageModel(
-        content: 'I can help with protocol selection and pad placement. Connect to the backend for AI-powered responses.\n\nTry asking about:\n• Recommended protocols for specific pain areas\n• Pad placement guidance\n• Session type suggestions',
+        content:
+            'I can help with protocol selection and pad placement. Connect to the backend for AI-powered responses.\n\nTry asking about:\n• Recommended protocols for specific pain areas\n• Pad placement guidance\n• Session type suggestions',
         isUser: false,
       );
       msgs.state = u;
@@ -58,7 +67,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _scrollEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      if (_scroll.hasClients)
+        _scroll.animateTo(_scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
     });
   }
 
@@ -70,30 +81,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
-        title: const Text('AI Assistant'),
+        title: Text('AI Assistant'),
         actions: [
-          IconButton(icon: const Icon(Icons.delete_outline_rounded, color: ThemeConstants.textTertiary, size: 20), onPressed: () {
-            ref.read(chatMessagesProvider.notifier).state = [];
-            ref.read(chatRepositoryProvider).clearHistory();
-          }),
+          IconButton(
+              icon: Icon(Icons.delete_outline_rounded,
+                  color: ThemeConstants.textTertiary, size: 20),
+              onPressed: () {
+                ref.read(chatMessagesProvider.notifier).state = [];
+                ref.read(chatRepositoryProvider).clearHistory();
+              }),
         ],
       ),
       body: Column(
         children: [
-          Expanded(child: msgs.isEmpty ? _welcome() : ListView.builder(
-            controller: _scroll,
-            physics: const ClampingScrollPhysics(),
-            padding: const EdgeInsets.all(16),
-            itemCount: msgs.length,
-            itemBuilder: (c, i) => _Bubble(msg: msgs[i], index: i),
-          )),
+          Expanded(
+              child: msgs.isEmpty
+                  ? _welcome()
+                  : ListView.builder(
+                      controller: _scroll,
+                      physics: const ClampingScrollPhysics(),
+                      padding: const EdgeInsets.all(16),
+                      itemCount: msgs.length,
+                      itemBuilder: (c, i) => _Bubble(msg: msgs[i], index: i),
+                    )),
           // Input bar
           Container(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
             decoration: BoxDecoration(
               color: ThemeConstants.surface,
-              border: Border(top: BorderSide(color: ThemeConstants.border.withValues(alpha: 0.5))),
-              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, -2))],
+              border: Border(
+                  top: BorderSide(
+                      color: ThemeConstants.border.withValues(alpha: 0.5))),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 10,
+                    offset: const Offset(0, -2))
+              ],
             ),
             child: SafeArea(
               child: Row(children: [
@@ -101,28 +125,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 GestureDetector(
                   onTap: () async {
                     final v = ref.read(voiceInputServiceProvider);
-                    if (_listening) { await v.stopListening(); setState(() => _listening = false); }
-                    else { setState(() => _listening = true); await v.startListening((t) => _ctrl.text = t); }
+                    if (_listening) {
+                      await v.stopListening();
+                      setState(() => _listening = false);
+                    } else {
+                      setState(() => _listening = true);
+                      await v.startListening((t) => _ctrl.text = t);
+                    }
                   },
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _listening ? ThemeConstants.error.withValues(alpha: 0.15) : ThemeConstants.surfaceVariant,
+                      color: _listening
+                          ? ThemeConstants.error.withValues(alpha: 0.15)
+                          : ThemeConstants.surfaceVariant,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(_listening ? Icons.mic_rounded : Icons.mic_none_rounded, color: _listening ? ThemeConstants.error : ThemeConstants.textTertiary, size: 20),
+                    child: Icon(
+                        _listening ? Icons.mic_rounded : Icons.mic_none_rounded,
+                        color: _listening
+                            ? ThemeConstants.error
+                            : ThemeConstants.textTertiary,
+                        size: 20),
                   ),
                 ),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(
+                Expanded(
+                    child: TextField(
                   controller: _ctrl,
-                  style: const TextStyle(color: Colors.black, fontSize: 14),
+                  style: TextStyle(color: Colors.black, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'Ask about protocols, placement...',
-                    hintStyle: const TextStyle(color: ThemeConstants.textTertiary, fontSize: 14),
-                    filled: true, fillColor: ThemeConstants.surfaceVariant,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    hintStyle: TextStyle(
+                        color: ThemeConstants.textTertiary, fontSize: 14),
+                    filled: true,
+                    fillColor: ThemeConstants.surfaceVariant,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
                   ),
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => _send(),
@@ -136,11 +178,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     decoration: BoxDecoration(
                       color: ThemeConstants.accent,
                       borderRadius: BorderRadius.circular(10),
-                      boxShadow: [BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.25), blurRadius: 8)],
+                      boxShadow: [
+                        BoxShadow(
+                            color:
+                                ThemeConstants.accent.withValues(alpha: 0.25),
+                            blurRadius: 8)
+                      ],
                     ),
                     child: sending
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                        : const Icon(Icons.send_rounded, color: Colors.black, size: 20),
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black))
+                        : Icon(Icons.send_rounded,
+                            color: Colors.black, size: 20),
                   ),
                 ),
               ]),
@@ -159,16 +211,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             GlowIconBox(icon: Icons.smart_toy_outlined, size: 64, iconSize: 32),
             const SizedBox(height: 20),
-            const Text('AI Assistant', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.black)),
+            Text('AI Assistant',
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black)),
             const SizedBox(height: 10),
-            const Text(
+            Text(
               'Get protocol recommendations, pad placement guidance, and session suggestions based on your discomfort areas.',
-              style: TextStyle(fontSize: 14, color: ThemeConstants.textSecondary, height: 1.5),
+              style: TextStyle(
+                  fontSize: 14,
+                  color: ThemeConstants.textSecondary,
+                  height: 1.5),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             Wrap(
-              spacing: 8, runSpacing: 8,
+              spacing: 8,
+              runSpacing: 8,
               alignment: WrapAlignment.center,
               children: [
                 _SuggestionChip('Recommend a protocol'),
@@ -198,9 +258,14 @@ class _SuggestionChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: ThemeConstants.accent.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: ThemeConstants.accent.withValues(alpha: 0.15)),
+          border:
+              Border.all(color: ThemeConstants.accent.withValues(alpha: 0.15)),
         ),
-        child: Text(label, style: const TextStyle(fontSize: 13, color: ThemeConstants.accent, fontWeight: FontWeight.w500)),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 13,
+                color: ThemeConstants.accent,
+                fontWeight: FontWeight.w500)),
       ),
     );
   }
@@ -220,21 +285,34 @@ class _Bubble extends StatelessWidget {
       child: Align(
         alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
-          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+          constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.78),
           margin: const EdgeInsets.symmetric(vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: isUser ? ThemeConstants.accent : ThemeConstants.surface,
             borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(16), topRight: const Radius.circular(16),
-              bottomLeft: Radius.circular(isUser ? 16 : 4), bottomRight: Radius.circular(isUser ? 4 : 16),
+              topLeft: const Radius.circular(16),
+              topRight: const Radius.circular(16),
+              bottomLeft: Radius.circular(isUser ? 16 : 4),
+              bottomRight: Radius.circular(isUser ? 4 : 16),
             ),
             border: isUser ? null : Border.all(color: ThemeConstants.border),
-            boxShadow: isUser ? [BoxShadow(color: ThemeConstants.accent.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, 2))] : null,
+            boxShadow: isUser
+                ? [
+                    BoxShadow(
+                        color: ThemeConstants.accent.withValues(alpha: 0.15),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2))
+                  ]
+                : null,
           ),
           child: Text(
             msg.content.isEmpty ? '...' : msg.content,
-            style: TextStyle(color: isUser ? Colors.white : ThemeConstants.textPrimary, fontSize: 14, height: 1.4),
+            style: TextStyle(
+                color: isUser ? Colors.white : ThemeConstants.textPrimary,
+                fontSize: 14,
+                height: 1.4),
           ),
         ),
       ),

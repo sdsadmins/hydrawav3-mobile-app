@@ -28,10 +28,8 @@ class AuthTokens {
   });
 
   factory AuthTokens.fromJson(Map<String, dynamic> json) => AuthTokens(
-        accessToken:
-            (json['JWT_ACCESS_TOKEN'] as String).withoutBearerPrefix,
-        refreshToken:
-            (json['JWT_REFRESH_TOKEN'] as String).withoutBearerPrefix,
+        accessToken: (json['JWT_ACCESS_TOKEN'] as String).withoutBearerPrefix,
+        refreshToken: (json['JWT_REFRESH_TOKEN'] as String).withoutBearerPrefix,
       );
 }
 
@@ -79,15 +77,15 @@ class UserProfile {
         //     ?.map((e) => e as String)
         //     .toList(),
         roles: json['roles'] is List
-    ? (json['roles'] as List).map((e) => e.toString()).toList()
-    : json['roles'] != null
-        ? [json['roles'].toString()]
-        : null,
+            ? (json['roles'] as List).map((e) => e.toString()).toList()
+            : json['roles'] != null
+                ? [json['roles'].toString()]
+                : null,
         profilePicture: json['profilePicture'] as String?,
         // organizationId: json['organization']?['id']?.toString(),
         organizationId: json['organization'] is Map
-    ? json['organization']['id']?.toString()
-    : json['organization']?.toString(),
+            ? json['organization']['id']?.toString()
+            : json['organization']?.toString(),
         country: json['country'] as String?,
         state: json['state'] as String?,
         dob: json['dateOfBirth'] as String?,

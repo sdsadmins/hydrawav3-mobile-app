@@ -64,7 +64,7 @@ class HistoryListScreen extends ConsumerWidget {
           // Header
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(color: ThemeConstants.background),
+              decoration: BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -73,14 +73,14 @@ class HistoryListScreen extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Session History',
+                        Text('Session History',
                             style: TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
                                 color: ThemeConstants.textPrimary,
                                 letterSpacing: -0.5)),
                         const SizedBox(height: 4),
-                        const Text('Track your therapy progress',
+                        Text('Track your therapy progress',
                             style: TextStyle(
                                 fontSize: 14,
                                 color: ThemeConstants.textSecondary)),
@@ -220,7 +220,7 @@ class _ActiveSessionCard extends StatelessWidget {
                   color: ThemeConstants.accent.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.devices_rounded,
                   color: ThemeConstants.accent,
                 ),
@@ -232,7 +232,7 @@ class _ActiveSessionCard extends StatelessWidget {
                   children: [
                     Text(
                       session.protocolName,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
                         color: ThemeConstants.textPrimary,
@@ -241,7 +241,7 @@ class _ActiveSessionCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       '${session.deviceIds.length} device(s) • ${session.transport.toUpperCase()}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         color: ThemeConstants.textTertiary,
                       ),
@@ -249,7 +249,7 @@ class _ActiveSessionCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'Started ${_formatDate(session.createdAt)}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         color: ThemeConstants.textTertiary,
                       ),
@@ -324,7 +324,7 @@ class _ActiveSessionCard extends StatelessWidget {
                           name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: ThemeConstants.textPrimary,
@@ -403,7 +403,7 @@ class _ServiceLiveSessionCard extends StatelessWidget {
               color: ThemeConstants.warning.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.bluetooth_connected_rounded,
               color: ThemeConstants.warning,
             ),
@@ -415,7 +415,7 @@ class _ServiceLiveSessionCard extends StatelessWidget {
               children: [
                 Text(
                   snapshot.protocolName,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: ThemeConstants.textPrimary,
@@ -424,7 +424,7 @@ class _ServiceLiveSessionCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   '${snapshot.deviceIds.length} device(s) in background session',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     color: ThemeConstants.textTertiary,
                   ),
@@ -480,13 +480,13 @@ class _SummaryChip extends StatelessWidget {
             Icon(icon, color: ThemeConstants.accent, size: 18),
             const SizedBox(height: 8),
             Text(value,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: ThemeConstants.textPrimary)),
             const SizedBox(height: 2),
             Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 11, color: ThemeConstants.textTertiary)),
           ],
         ),
@@ -514,14 +514,14 @@ class _SessionCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(session.protocol,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: ThemeConstants.textPrimary)),
                 const SizedBox(height: 4),
                 Row(children: [
                   Text('${session.date}  ·  ${session.duration}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12, color: ThemeConstants.textTertiary)),
                 ]),
               ],
@@ -537,7 +537,7 @@ class _SessionCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text('-$improvement',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                         color: ThemeConstants.success)),
@@ -605,7 +605,7 @@ class _LiveSessionCard extends StatelessWidget {
               color: ThemeConstants.accent.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.graphic_eq_rounded,
               color: ThemeConstants.accent,
             ),
@@ -617,7 +617,7 @@ class _LiveSessionCard extends StatelessWidget {
               children: [
                 Text(
                   protocol?.templateName ?? 'Live Session',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: ThemeConstants.textPrimary,
@@ -626,7 +626,7 @@ class _LiveSessionCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   '${engine.deviceIds.length} device(s) connected',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     color: ThemeConstants.textTertiary,
                   ),

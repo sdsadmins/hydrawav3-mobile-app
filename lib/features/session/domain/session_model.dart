@@ -76,11 +76,10 @@ class TimerState {
     final r = totalDuration - elapsed;
     return r.isNegative ? Duration.zero : r;
   }
-  double get progress =>
-      totalDuration.inMilliseconds > 0
-          ? (elapsed.inMilliseconds / totalDuration.inMilliseconds)
-              .clamp(0.0, 1.0)
-          : 0;
+
+  double get progress => totalDuration.inMilliseconds > 0
+      ? (elapsed.inMilliseconds / totalDuration.inMilliseconds).clamp(0.0, 1.0)
+      : 0;
 
   TimerState copyWith({
     Duration? elapsed,
@@ -98,8 +97,7 @@ class TimerState {
       currentRepetition: currentRepetition ?? this.currentRepetition,
       totalCycles: totalCycles ?? this.totalCycles,
       isRunning: isRunning ?? this.isRunning,
-      lastVisualCycleIndex:
-          lastVisualCycleIndex ?? this.lastVisualCycleIndex,
+      lastVisualCycleIndex: lastVisualCycleIndex ?? this.lastVisualCycleIndex,
     );
   }
 }

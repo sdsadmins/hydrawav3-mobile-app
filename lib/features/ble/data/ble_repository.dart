@@ -105,7 +105,8 @@ class BleRepository {
           break;
         }
       }
-      systemDevice ??= BluetoothDevice(remoteId: DeviceIdentifier(device.macAddress));
+      systemDevice ??=
+          BluetoothDevice(remoteId: DeviceIdentifier(device.macAddress));
 
       appLogger.i('BLE: Auto-reconnecting to ${device.name}...');
       await _connector.connect(systemDevice);

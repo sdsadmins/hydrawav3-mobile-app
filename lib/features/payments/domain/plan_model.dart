@@ -30,13 +30,10 @@ class SubscriptionPlan {
             : null,
       );
 
-  bool get isPaid =>
-      status == 'active' &&
-      name.toLowerCase() != 'free';
+  bool get isPaid => status == 'active' && name.toLowerCase() != 'free';
 
   bool get isExpired =>
-      currentPeriodEnd != null &&
-      currentPeriodEnd!.isBefore(DateTime.now());
+      currentPeriodEnd != null && currentPeriodEnd!.isBefore(DateTime.now());
 }
 
 class Product {

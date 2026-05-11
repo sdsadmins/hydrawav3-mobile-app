@@ -484,7 +484,8 @@ class BleConnector {
 
   /// Write control bytes (PLAY/PAUSE/STOP/RESUME) to control characteristic.
   Future<bool> writeToDevice(String deviceId, List<int> data) async {
-    final control = _controlCharacteristics[deviceId] ?? _writeCharacteristics[deviceId];
+    final control =
+        _controlCharacteristics[deviceId] ?? _writeCharacteristics[deviceId];
     final preferWithoutResponse =
         (control?.properties.writeWithoutResponse ?? false) &&
             data.length <= 20;
@@ -609,7 +610,8 @@ class BleConnector {
           }
           if (preferredJson != null && charUuid == preferredJson) {
             _jsonCharacteristics[deviceId] = char;
-            appLogger.d('BLE: Found preferred JSON characteristic for $deviceId');
+            appLogger
+                .d('BLE: Found preferred JSON characteristic for $deviceId');
           }
           if (preferredNotify != null && charUuid == preferredNotify) {
             final canNotify =
@@ -650,7 +652,8 @@ class BleConnector {
       }
 
       final hasWrite = _writeCharacteristics.containsKey(deviceId);
-      final hasJson = preferredJson == null || _jsonCharacteristics.containsKey(deviceId);
+      final hasJson =
+          preferredJson == null || _jsonCharacteristics.containsKey(deviceId);
       final hasNotify = _notifyCharacteristics.containsKey(deviceId);
       if (!hasWrite || !hasJson || !hasNotify) {
         throw Exception(

@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/theme_mode_provider.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../../core/network/dio_client.dart'; // ✅ ADD
@@ -72,7 +73,7 @@ class SettingsScreen extends ConsumerWidget {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: ThemeConstants.surface,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
@@ -89,7 +90,7 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'Select Organization',
               style: TextStyle(
                 fontSize: 20,
@@ -98,7 +99,7 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Choose the organization you want to work with',
               style: TextStyle(
                 fontSize: 14,
@@ -116,13 +117,13 @@ class SettingsScreen extends ConsumerWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.error_outline_rounded,
                       color: ThemeConstants.error,
                       size: 48,
                     ),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'Failed to load organizations',
                       style: TextStyle(
                         color: ThemeConstants.textPrimary,
@@ -136,7 +137,7 @@ class SettingsScreen extends ConsumerWidget {
                       error.toString().contains('DioException')
                           ? 'Network error. Please check your connection.'
                           : 'Please try again later.',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: ThemeConstants.textSecondary,
                         fontSize: 14,
                       ),
@@ -160,8 +161,8 @@ class SettingsScreen extends ConsumerWidget {
                               ref.read(authStateProvider));
                         }
                       },
-                      icon: const Icon(Icons.refresh_rounded, size: 18),
-                      label: const Text('Retry'),
+                      icon: Icon(Icons.refresh_rounded, size: 18),
+                      label: Text('Retry'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: ThemeConstants.accent,
                         foregroundColor: Colors.white,
@@ -261,7 +262,7 @@ class SettingsScreen extends ConsumerWidget {
                                     const SizedBox(height: 2),
                                     Text(
                                       org['description'],
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 13,
                                         color: ThemeConstants.textSecondary,
                                       ),
@@ -295,6 +296,8 @@ class SettingsScreen extends ConsumerWidget {
     final user = ref.watch(authStateProvider).user;
     final auth = ref.watch(authStateProvider); // ✅ ADD
     final orgAsync = ref.watch(organizationProvider); // ✅ ADD
+    final themeMode = ref.watch(themeModeProvider);
+    final isDarkMode = themeMode == ThemeMode.dark;
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: CustomScrollView(
@@ -303,7 +306,7 @@ class SettingsScreen extends ConsumerWidget {
           // Gradient header with profile
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(color: ThemeConstants.background),
+              decoration: BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -312,7 +315,7 @@ class SettingsScreen extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Settings',
+                        Text('Settings',
                             style: TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
@@ -344,7 +347,7 @@ class SettingsScreen extends ConsumerWidget {
                                   user?.displayName.isNotEmpty == true
                                       ? user!.displayName[0].toUpperCase()
                                       : 'U',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       color: ThemeConstants.textPrimary,
                                       fontSize: 22,
                                       fontWeight: FontWeight.w700),
@@ -356,19 +359,19 @@ class SettingsScreen extends ConsumerWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(user?.displayName ?? 'User',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.w600,
                                           color: ThemeConstants.textPrimary)),
                                   if (user?.email != null)
                                     Text(user!.email!,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                             fontSize: 13,
                                             color:
                                                 ThemeConstants.textTertiary)),
                                 ],
                               )),
-                              const Icon(Icons.chevron_right_rounded,
+                              Icon(Icons.chevron_right_rounded,
                                   color: ThemeConstants.textTertiary, size: 20),
                             ],
                           ),
@@ -406,9 +409,23 @@ class SettingsScreen extends ConsumerWidget {
                     ])),
                 const SizedBox(height: 16),
 
-                // Device
+                // Appearance
                 AnimatedEntrance(
                     index: 2,
+                    child: _SettingsGroup(title: 'APPEARANCE', items: [
+                      _Item(Icons.dark_mode_outlined, 'Dark Mode',
+                          trailing: Switch.adaptive(
+                              value: isDarkMode,
+                              onChanged: (value) => ref
+                                  .read(themeModeProvider.notifier)
+                                  .toggleDarkMode(value),
+                              activeColor: ThemeConstants.accent)),
+                    ])),
+                const SizedBox(height: 16),
+
+                // Device
+                AnimatedEntrance(
+                    index: 3,
                     child: _SettingsGroup(title: 'DEVICE', items: [
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
@@ -419,7 +436,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // General
                 AnimatedEntrance(
-                    index: 3,
+                    index: 4,
                     child: _SettingsGroup(title: 'GENERAL', items: [
                       _Item(Icons.notifications_outlined, 'Notifications'),
                       _Item(Icons.shield_outlined, 'Privacy & Security'),
@@ -432,7 +449,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // Legal
                 AnimatedEntrance(
-                    index: 4,
+                    index: 5,
                     child: _SettingsGroup(title: 'LEGAL', items: [
                       _Item(Icons.privacy_tip_outlined, 'Privacy Policy',
                           onTap: () => launchUrl(
@@ -446,7 +463,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 /// ✅ SWITCH ORGANIZATION (NEW SECTION)
                 AnimatedEntrance(
-                  index: 5,
+                  index: 6,
                   child: _SettingsGroup(
                     title: 'ORGANIZATION',
                     items: [
@@ -462,7 +479,7 @@ class SettingsScreen extends ConsumerWidget {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                           error: (_, __) =>
-                              const Icon(Icons.error, color: Colors.red),
+                              Icon(Icons.error, color: Colors.red),
                           data: (orgs) {
                             String orgName = 'None';
                             if (auth.selectedOrgId != null) {
@@ -479,7 +496,7 @@ class SettingsScreen extends ConsumerWidget {
                             }
                             return Text(
                               orgName,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
                                 color: ThemeConstants.textSecondary,
                               ),
@@ -493,7 +510,7 @@ class SettingsScreen extends ConsumerWidget {
                 const SizedBox(height: 20),
                 // Logout
                 AnimatedEntrance(
-                    index: 6,
+                    index: 7,
                     child: Container(
                       decoration: BoxDecoration(
                         color: Colors.red.withValues(alpha: 0.08),
@@ -548,7 +565,7 @@ class SettingsScreen extends ConsumerWidget {
                     s.data != null
                         ? 'Version ${s.data!.version} (Build ${s.data!.buildNumber})'
                         : '',
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12, color: ThemeConstants.textTertiary),
                   )),
                 ),
@@ -572,7 +589,7 @@ class _SubscriptionCard extends StatelessWidget {
         children: [
           const GlowIconBox(icon: Icons.workspace_premium_rounded),
           const SizedBox(width: 14),
-          const Expanded(
+          Expanded(
               child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -598,7 +615,7 @@ class _SubscriptionCard extends StatelessWidget {
                     blurRadius: 8)
               ],
             ),
-            child: const Text('Upgrade',
+            child: Text('Upgrade',
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -673,11 +690,11 @@ class _Item extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(
               child: Text(title,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 14, color: ThemeConstants.textPrimary))),
           trailing ??
               (onTap != null
-                  ? const Icon(Icons.chevron_right_rounded,
+                  ? Icon(Icons.chevron_right_rounded,
                       color: ThemeConstants.textTertiary, size: 18)
                   : const SizedBox.shrink()),
         ]),

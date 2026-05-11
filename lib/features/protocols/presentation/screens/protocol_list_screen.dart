@@ -108,7 +108,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
           /// 🔥 HEADER
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(color: ThemeConstants.background),
+              decoration: BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -121,7 +121,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            Text(
                               'Home',
                               style: TextStyle(
                                 fontSize: 28,
@@ -136,7 +136,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                             /// ✅ SHOW ORG NAME ONLY
                             Text(
                               auth.selectedOrgName ?? 'No Organization',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
                                 color: ThemeConstants.accent,
                                 fontWeight: FontWeight.w500,
@@ -145,7 +145,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
 
                             const SizedBox(height: 6),
 
-                            const Text(
+                            Text(
                               'Select a protocol to begin',
                               style: TextStyle(
                                 fontSize: 14,
@@ -434,6 +434,10 @@ class _ActiveDevicesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cardColor = Theme.of(context).brightness == Brightness.dark
+        ? ThemeConstants.surface
+        : Colors.white;
+
     bool isWifiConnectedStatus(String? s) {
       final v = (s ?? '').trim().toLowerCase();
       if (v.isEmpty) return true; // backend often omits status
@@ -470,7 +474,7 @@ class _ActiveDevicesCard extends StatelessWidget {
     return GradientCard(
       showGlow: true,
       padding: const EdgeInsets.all(16),
-      gradientColors: const [Colors.white, Colors.white],
+      gradientColors: [cardColor, cardColor],
       child: Stack(
         children: [
           Positioned(
@@ -494,10 +498,10 @@ class _ActiveDevicesCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.bolt_rounded,
+                  Icon(Icons.bolt_rounded,
                       color: ThemeConstants.accent, size: 18),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Active Devices',
                       maxLines: 1,
@@ -519,7 +523,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                     ),
                     child: Text(
                       '$connectedCount Connected',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                         color: ThemeConstants.textSecondary,
@@ -531,7 +535,7 @@ class _ActiveDevicesCard extends StatelessWidget {
               const SizedBox(height: 14),
               if (connectedCount == 0) ...[
                 const SizedBox(height: 6),
-                const Center(
+                Center(
                   child: Text(
                     'No devices connected',
                     style: TextStyle(
@@ -561,7 +565,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                           )
                         ],
                       ),
-                      child: const Text(
+                      child: Text(
                         'Connect Device',
                         style: TextStyle(
                           fontSize: 13,
@@ -587,7 +591,7 @@ class _ActiveDevicesCard extends StatelessWidget {
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: onContinueTap,
-                      child: const Text('Choose Protocol'),
+                      child: Text('Choose Protocol'),
                     ),
                   ),
                 ],
@@ -696,7 +700,7 @@ class _MixedConnectedDevicesList extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               '+$remaining more',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 color: ThemeConstants.textTertiary,
               ),
@@ -755,7 +759,7 @@ class _ConnectedDeviceRow extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: ThemeConstants.textPrimary,
@@ -872,6 +876,9 @@ class _ProtocolCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cardColor = Theme.of(context).brightness == Brightness.dark
+        ? ThemeConstants.surface
+        : Colors.white;
     final goalAndDuration = [
       if (protocol.goalTagName?.trim().isNotEmpty ?? false)
         protocol.goalTagName!.trim(),
@@ -882,7 +889,7 @@ class _ProtocolCard extends StatelessWidget {
       onTap: () => context
           .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
       showGlow: true,
-      gradientColors: const [Colors.white, Colors.white],
+      gradientColors: [cardColor, cardColor],
       padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -897,7 +904,7 @@ class _ProtocolCard extends StatelessWidget {
                   children: [
                     Text(
                       protocol.templateName,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: ThemeConstants.textPrimary,
@@ -907,7 +914,7 @@ class _ProtocolCard extends StatelessWidget {
                     if (protocol.description.isNotEmpty)
                       Text(
                         protocol.description,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           color: ThemeConstants.textSecondary,
                           height: 1.3,
@@ -919,7 +926,7 @@ class _ProtocolCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         goalAndDuration,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           color: ThemeConstants.textSecondary,
                           height: 1.25,
@@ -931,7 +938,7 @@ class _ProtocolCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded,
+              Icon(Icons.chevron_right_rounded,
                   color: ThemeConstants.textTertiary, size: 20),
             ],
           ),

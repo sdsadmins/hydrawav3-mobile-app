@@ -21,9 +21,8 @@ class BleDeviceListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final device = scanResult.device;
-    final name = device.platformName.isNotEmpty
-        ? device.platformName
-        : 'Unknown Device';
+    final name =
+        device.platformName.isNotEmpty ? device.platformName : 'Unknown Device';
     final isConnected = status == BleConnectionStatus.connected;
     final isConnecting = status == BleConnectionStatus.connecting;
 
@@ -52,11 +51,11 @@ class BleDeviceListTile extends StatelessWidget {
             : isConnected
                 ? TextButton(
                     onPressed: onDisconnect,
-                    child: const Text('Disconnect'),
+                    child: Text('Disconnect'),
                   )
                 : TextButton(
                     onPressed: onConnect,
-                    child: const Text('Connect'),
+                    child: Text('Connect'),
                   ),
       ),
     );

@@ -678,7 +678,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       appBar: AppBar(
         title: Text('Session(${widget.deviceIds.length} Devices)'),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
+          icon: Icon(Icons.arrow_back_rounded),
           onPressed: () async {
             // Save or update session to active sessions before going back
             if (status != SessionStatus.idle) {
@@ -772,7 +772,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                             color: ThemeConstants.success,
                             shape: BoxShape.circle)),
                     const SizedBox(width: 8),
@@ -780,7 +780,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       widget.transport == 'wifi'
                           ? '${widget.deviceIds.length} WiFi device(s) selected'
                           : '${widget.deviceIds.length} device(s) connected',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: ThemeConstants.textSecondary,
                         fontSize: 13,
                       ),
@@ -807,11 +807,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     required Color sunColor,
     required SessionEngine ctrl,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? ThemeConstants.surface : Colors.white;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: ThemeConstants.borderLight),
       ),
@@ -821,7 +823,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: ThemeConstants.textPrimary,
               fontWeight: FontWeight.w700,
               fontSize: 13,
@@ -833,7 +835,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               protocolName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 color: ThemeConstants.textSecondary,
                 fontWeight: FontWeight.w500,
                 fontSize: 11,
@@ -867,7 +869,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     children: [
                       Text(
                         timer.remaining.formatted,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 38,
                           fontWeight: FontWeight.w700,
                           color: ThemeConstants.textPrimary,
@@ -911,7 +913,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             const SizedBox(height: 8),
             Text(
               'Cycle ${padCycleIdx + 1}/$totalCycles',
-              style: const TextStyle(
+              style: TextStyle(
                 color: ThemeConstants.textTertiary,
                 fontSize: 12,
               ),
@@ -929,6 +931,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     SessionStatus status,
     SessionEngine ctrl,
   ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
     if (status == SessionStatus.running) {
       return Row(
         children: [
@@ -938,11 +942,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               child: OutlinedButton(
                 onPressed: () => ctrl.pauseDevice(deviceId),
                 style: OutlinedButton.styleFrom(
-                  backgroundColor: Colors.white,
+                  backgroundColor: softSurface,
                   foregroundColor: ThemeConstants.textPrimary,
-                  side: const BorderSide(color: ThemeConstants.borderLight),
+                  side: BorderSide(color: ThemeConstants.borderLight),
                 ),
-                child: const Text('Pause'),
+                child: Text('Pause'),
               ),
             ),
           ),
@@ -956,7 +960,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
                 ),
-                child: const Text('Stop'),
+                child: Text('Stop'),
               ),
             ),
           ),
@@ -975,7 +979,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   backgroundColor: ThemeConstants.accent,
                   foregroundColor: ThemeConstants.textPrimary,
                 ),
-                child: const Text('Resume'),
+                child: Text('Resume'),
               ),
             ),
           ),
@@ -989,7 +993,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
                 ),
-                child: const Text('Stop'),
+                child: Text('Stop'),
               ),
             ),
           ),
@@ -1057,7 +1061,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               },
               style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.success),
-              child: const Text('Done'))),
+              child: Text('Done'))),
     };
   }
 

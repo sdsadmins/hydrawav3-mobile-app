@@ -20,13 +20,12 @@ class SessionHistoryItem {
       id: json['_id'] as String? ?? json['id'] as String?,
       clientId: json['clientId'] as String?,
       protocols: (json['protocols'] as List<dynamic>?)
-              ?.map(
-                  (e) => HistoryProtocol.fromJson(e as Map<String, dynamic>))
+              ?.map((e) => HistoryProtocol.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
       discomfortAreas: (json['discomfortAreas'] as List<dynamic>?)
-              ?.map((e) =>
-                  HistoryDiscomfort.fromJson(e as Map<String, dynamic>))
+              ?.map(
+                  (e) => HistoryDiscomfort.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
       sessionNotes: json['sessionNotes'] as String?,
@@ -79,8 +78,8 @@ class HistoryDiscomfort {
 
   factory HistoryDiscomfort.fromJson(Map<String, dynamic> json) {
     return HistoryDiscomfort(
-      bodyPart: json['discompfortbodyPart'] as String? ??
-          json['bodyPart'] as String?,
+      bodyPart:
+          json['discompfortbodyPart'] as String? ?? json['bodyPart'] as String?,
       side: json['side'] as String?,
       discomfortBefore: json['discomfortBefore'] as int?,
       discomfortAfter: json['discomfortAfter'] as int?,

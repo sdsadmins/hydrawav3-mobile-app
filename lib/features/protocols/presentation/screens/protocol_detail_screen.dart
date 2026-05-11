@@ -130,6 +130,9 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(protocolDetailProvider(widget.protocolId));
+    final cardColor = Theme.of(context).brightness == Brightness.dark
+        ? ThemeConstants.surface
+        : Colors.white;
     final protocolsAsync = ref.watch(protocolListProvider);
     final target = ref.watch(sessionTargetProvider);
     final connectionStates = ref.watch(bleConnectionStatesProvider);
@@ -143,7 +146,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      appBar: AppBar(title: const Text('Protocol Details')),
+      appBar: AppBar(title: Text('Protocol Details')),
       body: async.when(
         loading: () => const HwLoading(),
         error: (e, _) => HwErrorWidget(
@@ -178,15 +181,15 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(p.templateName,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: ThemeConstants.textPrimary,
                           letterSpacing: -0.3)),
                   if (p.description.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(p.description,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 14,
                             color: ThemeConstants.textSecondary,
                             height: 1.5)),
@@ -219,7 +222,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //     child: Column(
               //       crossAxisAlignment: CrossAxisAlignment.start,
               //       children: [
-              //         const Text(
+              //         Text(
               //           'Selected Devices',
               //           style: TextStyle(
               //             fontSize: 15,
@@ -232,7 +235,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //           target.deviceIds.isEmpty
               //               ? 'No devices selected. Go to Devices screen and connect devices.'
               //               : '${target.deviceIds.length} selected (${target.transport.name.toUpperCase()})',
-              //           style: const TextStyle(
+              //           style: TextStyle(
               //             fontSize: 12,
               //             color: ThemeConstants.textSecondary,
               //           ),
@@ -255,7 +258,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //                     ),
               //                     child: Text(
               //                       id,
-              //                       style: const TextStyle(
+              //                       style: TextStyle(
               //                         fontSize: 11,
               //                         color: Colors.black,
               //                       ),
@@ -273,17 +276,17 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               AnimatedEntrance(
                 index: 3,
                 child: GradientCard(
-                  gradientColors: const [Colors.white, Colors.white],
+                  gradientColors: [cardColor, cardColor],
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      Text(
                         'Web Payload Mapping',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: ThemeConstants.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -310,7 +313,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //               setState(() => _showAdvanced = !_showAdvanced),
               //           child: Row(
               //             children: [
-              //               const Icon(
+              //               Icon(
               //                 Icons.settings_rounded,
               //                 color: ThemeConstants.accent,
               //                 size: 20,
@@ -346,7 +349,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //                     crossAxisAlignment: CrossAxisAlignment.start,
               //                     children: [
               //                       if (target.deviceIds.length > 1) ...[
-              //                         const Text(
+              //                         Text(
               //                           'Editing Settings For Device',
               //                           style: TextStyle(
               //                             color: ThemeConstants.textSecondary,
@@ -438,7 +441,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //                                           overflow: TextOverflow
               //                                               .ellipsis,
               //                                           maxLines: 1,
-              //                                           style: const TextStyle(
+              //                                           style: TextStyle(
               //                                             fontSize: 13,
               //                                             fontWeight:
               //                                                 FontWeight.w600,
@@ -522,7 +525,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: GradientCard(
-                          gradientColors: const [Colors.white, Colors.white],
+                          gradientColors: [cardColor, cardColor],
                           padding: const EdgeInsets.all(16),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -534,10 +537,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                                     iconSize: 18),
                                 const SizedBox(width: 12),
                                 Text('Cycle ${i + 1} (C${i + 1})',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.w600,
-                                        color: Colors.black)),
+                                        color: ThemeConstants.textPrimary)),
                               ]),
                               const SizedBox(height: 12),
                               _R('Duration (cycleDurations)',
@@ -950,7 +953,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //             context: context,
               //             showDragHandle: true,
               //             backgroundColor: ThemeConstants.surface,
-              //             shape: const RoundedRectangleBorder(
+              //             shape: RoundedRectangleBorder(
               //               borderRadius:
               //                   BorderRadius.vertical(top: Radius.circular(18)),
               //             ),
@@ -962,7 +965,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //                   mainAxisSize: MainAxisSize.min,
               //                   crossAxisAlignment: CrossAxisAlignment.start,
               //                   children: [
-              //                     const Text(
+              //                     Text(
               //                       'Start session using',
               //                       style: TextStyle(
               //                         fontSize: 18,
@@ -972,26 +975,26 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //                     ),
               //                     const SizedBox(height: 10),
               //                     ListTile(
-              //                       leading: const Icon(Icons.bluetooth_rounded,
+              //                       leading: Icon(Icons.bluetooth_rounded,
               //                           color: Colors.black),
-              //                       title: const Text('Bluetooth (BLE)',
+              //                       title: Text('Bluetooth (BLE)',
               //                           style: TextStyle(color: Colors.black)),
               //                       subtitle: Text(
               //                         '${connectedIds.length} connected',
-              //                         style: const TextStyle(
+              //                         style: TextStyle(
               //                           color: ThemeConstants.textSecondary,
               //                         ),
               //                       ),
               //                       onTap: () => Navigator.of(ctx).pop('ble'),
               //                     ),
               //                     ListTile(
-              //                       leading: const Icon(Icons.wifi_rounded,
+              //                       leading: Icon(Icons.wifi_rounded,
               //                           color: Colors.black),
-              //                       title: const Text('WiFi (MQTT/API)',
+              //                       title: Text('WiFi (MQTT/API)',
               //                           style: TextStyle(color: Colors.black)),
               //                       subtitle: Text(
               //                         '${wifiDevices.length} available',
-              //                         style: const TextStyle(
+              //                         style: TextStyle(
               //                           color: ThemeConstants.textSecondary,
               //                         ),
               //                       ),
@@ -1077,7 +1080,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
     isScrollControlled: true,
     showDragHandle: true,
     backgroundColor: ThemeConstants.surface,
-    shape: const RoundedRectangleBorder(
+    shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
     ),
     builder: (ctx) {
@@ -1092,7 +1095,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Select WiFi devices',
                       style: TextStyle(
                         fontSize: 18,
@@ -1101,7 +1104,7 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'These are backend-registered sensors (MQTT/API).',
                       style: TextStyle(
                         fontSize: 13,
@@ -1123,14 +1126,14 @@ Future<List<DeviceInfo>?> _pickWifiDevices(
                             contentPadding: EdgeInsets.zero,
                             title: Text(
                               d.name,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: Colors.black,
                                 fontSize: 13,
                               ),
                             ),
                             subtitle: Text(
                               d.macAddress,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: ThemeConstants.textSecondary,
                                 fontSize: 11,
                               ),
@@ -1344,7 +1347,7 @@ Future<List<String>?> _pickConnectedDevices(
     isScrollControlled: true,
     showDragHandle: true,
     backgroundColor: ThemeConstants.surface,
-    shape: const RoundedRectangleBorder(
+    shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
     ),
     builder: (ctx) {
@@ -1359,7 +1362,7 @@ Future<List<String>?> _pickConnectedDevices(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Select connected devices',
                       style: TextStyle(
                         fontSize: 18,
@@ -1368,7 +1371,7 @@ Future<List<String>?> _pickConnectedDevices(
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'Choose one or more devices for this session.',
                       style: TextStyle(
                         fontSize: 13,
@@ -1390,12 +1393,12 @@ Future<List<String>?> _pickConnectedDevices(
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(
                                   id,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: Colors.black,
                                     fontSize: 13,
                                   ),
                                 ),
-                                subtitle: const Text(
+                                subtitle: Text(
                                   'Connected',
                                   style: TextStyle(
                                     color: ThemeConstants.textSecondary,
@@ -1415,7 +1418,7 @@ Future<List<String>?> _pickConnectedDevices(
                             }),
                             const SizedBox(height: 8),
                             if (selectedIds.isNotEmpty) ...[
-                              const Text(
+                              Text(
                                 'Payload preview (first selected device):',
                                 style: TextStyle(
                                   fontSize: 12,
@@ -1452,7 +1455,7 @@ Future<List<String>?> _pickConnectedDevices(
                                           runtimeDeviceId: runtimeDeviceId,
                                         ),
                                       ),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 11,
                                         color: Colors.black,
                                         fontFamily: 'monospace',
@@ -1539,7 +1542,7 @@ class _R extends StatelessWidget {
               child: Text(
                 l,
                 softWrap: true,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   color: ThemeConstants.textSecondary,
                 ),
@@ -1552,10 +1555,10 @@ class _R extends StatelessWidget {
                 v,
                 softWrap: true,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black,
+                  color: ThemeConstants.textPrimary,
                 ),
               ),
             ),
@@ -1613,7 +1616,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             children: [
               Text(
                 label.toUpperCase(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                   color: ThemeConstants.textSecondary,
@@ -1661,7 +1664,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             children: [
               Text(
                 label.toUpperCase(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                   color: ThemeConstants.textSecondary,
@@ -1707,7 +1710,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             Expanded(
               child: Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.black,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -1729,7 +1732,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Vibration mode (web fields) — web order: vibration first.
-        const Text(
+        Text(
           'VIBRATION MODE',
           style: TextStyle(
             fontSize: 11,
@@ -1875,13 +1878,13 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         // Start Delay — show always, device picker only for multi-device.
         Container(
           padding: const EdgeInsets.only(top: 12),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(top: BorderSide(color: ThemeConstants.border)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'START DELAY',
                 style: TextStyle(
                   fontSize: 11,
@@ -1894,7 +1897,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
+                  Text(
                     'Delay',
                     style: TextStyle(
                       color: Colors.black,
@@ -1904,7 +1907,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                   ),
                   Text(
                     '${settings.startDelay}s',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: ThemeConstants.accent,
                       fontWeight: FontWeight.w800,
                     ),
@@ -1922,7 +1925,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               ),
               if (isMulti && settings.startDelay > 0) ...[
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'Delay which device?',
                   style: TextStyle(
                     fontSize: 11,
@@ -2013,7 +2016,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           onTap: onToggleSavePreset,
           child: Row(
             children: [
-              const Icon(Icons.save_rounded,
+              Icon(Icons.save_rounded,
                   size: 16, color: ThemeConstants.textSecondary),
               const SizedBox(width: 8),
               Text(
@@ -2090,7 +2093,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             ),
             error: (e, _) => Text(
               'Failed to load presets: $e',
-              style: const TextStyle(color: ThemeConstants.error, fontSize: 12),
+              style: TextStyle(color: ThemeConstants.error, fontSize: 12),
             ),
           ),
         ],

@@ -6,7 +6,7 @@ class TemperatureSlider extends StatelessWidget {
   final String label;
   final double value;
   final ValueChanged<double> onChanged;
-  final Color activeColor;
+  final Color? activeColor;
   final double min;
   final double max;
 
@@ -15,7 +15,7 @@ class TemperatureSlider extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
-    this.activeColor = ThemeConstants.accent,
+    this.activeColor,
     this.min = 0,
     this.max = 100,
   });
@@ -43,7 +43,7 @@ class TemperatureSlider extends StatelessWidget {
           min: min,
           max: max,
           divisions: (max - min).toInt(),
-          activeColor: activeColor,
+          activeColor: activeColor ?? ThemeConstants.accent,
           onChanged: onChanged,
         ),
       ],

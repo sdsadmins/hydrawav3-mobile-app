@@ -234,6 +234,7 @@ class _AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     int idx = 0;
     if (location.startsWith(RoutePaths.devices)) idx = 1;
     if (location.startsWith(RoutePaths.history)) idx = 2;
@@ -242,14 +243,27 @@ class _AppShell extends StatelessWidget {
     return Scaffold(
       body: child,
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: ThemeConstants.surface,
-          border:
-              Border(top: BorderSide(color: ThemeConstants.border, width: 1)),
+        decoration: BoxDecoration(
+          color: isDark ? ThemeConstants.background : ThemeConstants.surface,
+          border: Border(
+            top: BorderSide(
+              color: isDark
+                  ? ThemeConstants.border.withValues(alpha: 0.55)
+                  : ThemeConstants.border,
+              width: 1,
+            ),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.06),
+              blurRadius: 20,
+              offset: const Offset(0, -4),
+            ),
+          ],
         ),
         child: SafeArea(
           child: SizedBox(
-            height: 60,
+            height: 72,
             child: Row(
               children: [
                 _NavTab(
@@ -301,27 +315,37 @@ class _NavTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final inactiveColor =
+        isDark ? ThemeConstants.textSecondary : ThemeConstants.textTertiary;
+
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(active ? activeIcon : icon,
-                size: 22,
-                color: active
-                    ? ThemeConstants.accent
-                    : ThemeConstants.textTertiary),
-            const SizedBox(height: 4),
-            Text(label,
-                style: TextStyle(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  active ? activeIcon : icon,
+                  size: 22,
+                  color: active ? ThemeConstants.accent : inactiveColor,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  style: TextStyle(
                     fontSize: 11,
-                    fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                    color: active
-                        ? ThemeConstants.accent
-                        : ThemeConstants.textTertiary)),
-          ],
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    color: active ? ThemeConstants.accent : inactiveColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

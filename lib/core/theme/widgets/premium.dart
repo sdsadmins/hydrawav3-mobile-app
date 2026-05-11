@@ -41,7 +41,8 @@ class GradientCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
+            border:
+                Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
             boxShadow: showGlow
                 ? [
                     BoxShadow(
@@ -228,10 +229,14 @@ class StatChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: c),
           const SizedBox(width: 6),
-          Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: c)),
           if (label != null) ...[
             const SizedBox(width: 4),
-            Text(label!, style: const TextStyle(fontSize: 11, color: ThemeConstants.textTertiary)),
+            Text(label!,
+                style: TextStyle(
+                    fontSize: 11, color: ThemeConstants.textTertiary)),
           ],
         ],
       ),
@@ -268,7 +273,7 @@ class SectionHeader extends StatelessWidget {
         children: [
           Text(
             title.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: ThemeConstants.textTertiary,
