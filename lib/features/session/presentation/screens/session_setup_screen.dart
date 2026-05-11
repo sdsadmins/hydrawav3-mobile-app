@@ -8,6 +8,7 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/storage/local_db.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/hw_loading.dart';
+import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../protocols/domain/protocol_model.dart';
@@ -26,11 +27,13 @@ import '../../services/session_engine.dart';
 class SessionSetupScreen extends ConsumerStatefulWidget {
   final List<String> deviceIds;
   final String transport; // 'ble' or 'wifi'
+  final String? goalTagId;
 
   const SessionSetupScreen({
     super.key,
     required this.deviceIds,
     this.transport = 'ble',
+    this.goalTagId,
   });
 
   @override
@@ -39,6 +42,7 @@ class SessionSetupScreen extends ConsumerStatefulWidget {
 
 class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   final Map<String, String> _protocolIdByDeviceId = {};
+  final Map<String, Protocol> _selectedProtocolByDeviceId = {};
   final Map<String, AdvancedSettings> _settingsByDeviceId = {};
   final Set<String> _runDeviceIds = <String>{};
   String? _delayedDeviceId;
@@ -160,7 +164,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final protocolsAsync = ref.watch(protocolListProvider);
+    final protocolsAsync = ref.watch(protocolSelectionOptionsProvider(null));
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -191,6 +195,9 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
             required String? currentId,
           }) async {
             String query = '';
+            String? selectedGoalTagId = widget.goalTagId?.trim().isEmpty ?? true
+                ? null
+                : widget.goalTagId!.trim();
             return showModalBottomSheet<String>(
               context: context,
               showDragHandle: true,
@@ -203,172 +210,344 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                 top: false,
                 child: StatefulBuilder(
                   builder: (ctx, setSheetState) {
-                    final list = query.trim().isEmpty
-                        ? protocols
-                        : protocols
-                            .where((p) =>
-                                p.templateName
-                                    .toLowerCase()
-                                    .contains(query.toLowerCase()) ||
-                                p.description
-                                    .toLowerCase()
-                                    .contains(query.toLowerCase()))
-                            .toList();
-                    return Padding(
-                      padding: EdgeInsets.only(
-                        left: 16,
-                        right: 16,
-                        bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
-                        top: 8,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                    return Consumer(
+                      builder: (context, ref, _) {
+                        final goalTagsAsync = ref.watch(goalTagListProvider);
+                        final filteredProtocolsAsync = ref.watch(
+                          protocolSelectionOptionsProvider(selectedGoalTagId),
+                        );
+
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
+                            top: 8,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Expanded(
-                                child: Text(
-                                  'Select protocol',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                    color: ThemeConstants.textPrimary,
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      'Select protocol',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                        color: ThemeConstants.textPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      color: ThemeConstants.textTertiary,
+                                    ),
+                                    tooltip: 'Close',
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                autofocus: true,
+                                onChanged: (v) =>
+                                    setSheetState(() => query = v.trim()),
+                                style: const TextStyle(
+                                  color: ThemeConstants.textPrimary,
+                                  fontSize: 14,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Search protocols...',
+                                  hintStyle: const TextStyle(
+                                    color: ThemeConstants.textTertiary,
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.search_rounded,
+                                    color: ThemeConstants.textTertiary,
+                                  ),
+                                  filled: true,
+                                  fillColor: ThemeConstants.surfaceVariant
+                                      .withValues(alpha: 0.7),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: const BorderSide(
+                                      color: ThemeConstants.border,
+                                    ),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: const BorderSide(
+                                      color: ThemeConstants.border,
+                                    ),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 12,
                                   ),
                                 ),
                               ),
-                              IconButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                icon: const Icon(
-                                  Icons.close_rounded,
-                                  color: ThemeConstants.textTertiary,
-                                ),
-                                tooltip: 'Close',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            autofocus: true,
-                            onChanged: (v) =>
-                                setSheetState(() => query = v.trim()),
-                            style: const TextStyle(
-                              color: ThemeConstants.textPrimary,
-                              fontSize: 14,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Search protocols...',
-                              hintStyle: const TextStyle(
-                                color: ThemeConstants.textTertiary,
-                              ),
-                              prefixIcon: const Icon(
-                                Icons.search_rounded,
-                                color: ThemeConstants.textTertiary,
-                              ),
-                              filled: true,
-                              fillColor: ThemeConstants.surfaceVariant
-                                  .withValues(alpha: 0.7),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: ThemeConstants.border,
+                              const SizedBox(height: 12),
+                              const Text(
+                                'Filter by goal',
+                                style: TextStyle(
+                                  color: ThemeConstants.textSecondary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: ThemeConstants.border,
-                                ),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 12,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Flexible(
-                            child: ListView.separated(
-                              shrinkWrap: true,
-                              physics: const ClampingScrollPhysics(),
-                              itemCount: list.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (ctx, i) {
-                                final p = list[i];
-                                final selected = p.id == currentId;
-                                return InkWell(
-                                  borderRadius: BorderRadius.circular(14),
-                                  onTap: () => Navigator.of(ctx).pop(p.id),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: selected
-                                          ? ThemeConstants.accent
-                                              .withValues(alpha: 0.14)
-                                          : ThemeConstants.surface,
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: selected
-                                            ? ThemeConstants.accent
-                                            : ThemeConstants.border,
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: 38,
+                                child: goalTagsAsync.when(
+                                  loading: () => ListView(
+                                    scrollDirection: Axis.horizontal,
+                                    children: const [
+                                      _GoalFilterChip(
+                                        label: 'All',
+                                        selected: true,
+                                      ),
+                                    ],
+                                  ),
+                                  error: (e, _) => const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Failed to load goals',
+                                      style: TextStyle(
+                                        color: ThemeConstants.error,
+                                        fontSize: 12,
                                       ),
                                     ),
-                                    child: Row(
+                                  ),
+                                  data: (goalTags) {
+                                    final activeGoalTags = goalTags
+                                        .where((goal) => goal.isActive)
+                                        .toList();
+
+                                    return ListView(
+                                      scrollDirection: Axis.horizontal,
                                       children: [
-                                        Icon(
-                                          selected
-                                              ? Icons.check_circle_rounded
-                                              : Icons.science_outlined,
-                                          size: 18,
-                                          color: selected
-                                              ? ThemeConstants.accent
-                                              : ThemeConstants.textTertiary,
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(right: 8),
+                                          child: _GoalFilterChip(
+                                            label: 'All',
+                                            selected: selectedGoalTagId == null,
+                                            onTap: () => setSheetState(
+                                              () => selectedGoalTagId = null,
+                                            ),
+                                          ),
                                         ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                p.templateName,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  color: ThemeConstants
-                                                      .textPrimary,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w800,
-                                                ),
+                                        ...activeGoalTags.map(
+                                          (goal) => Padding(
+                                            padding:
+                                                const EdgeInsets.only(right: 8),
+                                            child: _GoalFilterChip(
+                                              label: goal.name,
+                                              selected:
+                                                  selectedGoalTagId == goal.id,
+                                              onTap: () => setSheetState(
+                                                () =>
+                                                    selectedGoalTagId = goal.id,
                                               ),
-                                              if (p.description.isNotEmpty) ...[
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  p.description,
-                                                  maxLines: 2,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    color: ThemeConstants
-                                                        .textSecondary,
-                                                    fontSize: 12,
-                                                    height: 1.25,
-                                                  ),
-                                                ),
-                                              ],
-                                            ],
+                                            ),
                                           ),
                                         ),
                                       ],
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Flexible(
+                                child: filteredProtocolsAsync.when(
+                                  loading: () => const Center(
+                                    child: Padding(
+                                      padding:
+                                          EdgeInsets.symmetric(vertical: 24),
+                                      child: HwLoading(),
                                     ),
                                   ),
-                                );
-                              },
-                            ),
+                                  error: (e, _) => Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 24,
+                                      ),
+                                      child: Text(
+                                        'Failed to load protocols: $e',
+                                        style: const TextStyle(
+                                          color: ThemeConstants.error,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ),
+                                  data: (filteredProtocols) {
+                                    final list = query.trim().isEmpty
+                                        ? filteredProtocols
+                                        : filteredProtocols
+                                            .where((p) =>
+                                                p.templateName
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()) ||
+                                                p.description
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()) ||
+                                                (p.goalTagName ?? '')
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()))
+                                            .toList();
+
+                                    if (list.isEmpty) {
+                                      return const Center(
+                                        child: Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            vertical: 24,
+                                          ),
+                                          child: Text(
+                                            'No protocols found for this goal.',
+                                            style: TextStyle(
+                                              color:
+                                                  ThemeConstants.textSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }
+
+                                    return ListView.separated(
+                                      shrinkWrap: true,
+                                      physics: const ClampingScrollPhysics(),
+                                      itemCount: list.length,
+                                      separatorBuilder: (_, __) =>
+                                          const SizedBox(height: 8),
+                                      itemBuilder: (ctx, i) {
+                                        final p = list[i];
+                                        final selected = p.id == currentId;
+                                        return InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          onTap: () =>
+                                              Navigator.of(ctx).pop(p.id),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(14),
+                                            decoration: BoxDecoration(
+                                              color: selected
+                                                  ? ThemeConstants.accent
+                                                      .withValues(alpha: 0.14)
+                                                  : ThemeConstants.surface,
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: selected
+                                                    ? ThemeConstants.accent
+                                                    : ThemeConstants.border,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  selected
+                                                      ? Icons
+                                                          .check_circle_rounded
+                                                      : Icons.science_outlined,
+                                                  size: 18,
+                                                  color: selected
+                                                      ? ThemeConstants.accent
+                                                      : ThemeConstants
+                                                          .textTertiary,
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        p.templateName,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                          color: ThemeConstants
+                                                              .textPrimary,
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                        ),
+                                                      ),
+                                                      if (p.description
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Text(
+                                                          p.description,
+                                                          maxLines: 2,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style:
+                                                              const TextStyle(
+                                                            color: ThemeConstants
+                                                                .textSecondary,
+                                                            fontSize: 12,
+                                                            height: 1.25,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      if ((p.goalTagName
+                                                                  ?.isNotEmpty ??
+                                                              false) ||
+                                                          p.totalDuration !=
+                                                              null) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Text(
+                                                          [
+                                                            if (p.goalTagName
+                                                                    ?.isNotEmpty ??
+                                                                false)
+                                                              p.goalTagName!,
+                                                            if (p.totalDuration !=
+                                                                null)
+                                                              p.totalDuration!
+                                                                  .formatted,
+                                                          ].join(' - '),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style:
+                                                              const TextStyle(
+                                                            color: ThemeConstants
+                                                                .textSecondary,
+                                                            fontSize: 12,
+                                                            height: 1.25,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -403,11 +582,8 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                       final isIncluded = _runDeviceIds.contains(deviceId);
                       final selectedProtocolId =
                           _protocolIdByDeviceId[deviceId];
-                      final selectedProtocol = selectedProtocolId == null
-                          ? null
-                          : protocols.firstWhere(
-                              (p) => p.id == selectedProtocolId,
-                            );
+                      final selectedProtocol =
+                          _selectedProtocolByDeviceId[deviceId];
                       final settings = _settingsByDeviceId[deviceId];
                       final showAdvanced =
                           _showAdvancedByDeviceId[deviceId] ?? false;
@@ -491,17 +667,29 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                         currentId: selectedProtocolId,
                                       );
                                       if (!mounted || picked == null) return;
-                                      final p = protocols
-                                          .firstWhere((x) => x.id == picked);
-                                      setState(() {
-                                        _protocolIdByDeviceId[deviceId] =
-                                            picked;
-                                        _settingsByDeviceId[deviceId] =
-                                            _advancedDefaultsFromProtocol(p);
-                                        // Default advanced panel to collapsed on protocol change.
-                                        _showAdvancedByDeviceId[deviceId] =
-                                            false;
-                                      });
+                                      try {
+                                        final p = await ref.read(
+                                          protocolDetailProvider(picked).future,
+                                        );
+                                        if (!mounted) return;
+                                        setState(() {
+                                          _protocolIdByDeviceId[deviceId] =
+                                              picked;
+                                          _selectedProtocolByDeviceId[
+                                              deviceId] = p;
+                                          _settingsByDeviceId[deviceId] =
+                                              _advancedDefaultsFromProtocol(p);
+                                          // Default advanced panel to collapsed on protocol change.
+                                          _showAdvancedByDeviceId[deviceId] =
+                                              false;
+                                        });
+                                      } catch (e) {
+                                        if (!context.mounted) return;
+                                        context.showSnackBar(
+                                          'Failed to load protocol details: $e',
+                                          isError: true,
+                                        );
+                                      }
                                     },
                               child: Container(
                                 width: double.infinity,
@@ -798,6 +986,47 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _GoalFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _GoalFilterChip({
+    required this.label,
+    required this.selected,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : ThemeConstants.surfaceVariant.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color:
+                selected ? ThemeConstants.accent : ThemeConstants.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }

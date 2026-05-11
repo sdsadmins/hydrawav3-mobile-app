@@ -321,13 +321,22 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
       if (encoded == null || encoded.isEmpty) return;
       final json = jsonDecode(encoded) as Map<String, dynamic>;
       final snapshot = LiveSessionSnapshot.fromJson(json);
-      final elapsed =
+      if (snapshot.transport == 'ble') {
+        appLogger.i(
+          'Dropping stale BLE live session snapshot on cold launch '
+          '(session=${snapshot.sessionId})',
+        );
+        await prefs.remove(liveSessionSnapshotPrefsKey);
+        state = const BackgroundSessionState(status: 'stopped');
+        return;
+      }
+      final int elapsed =
           (DateTime.now().millisecondsSinceEpoch - snapshot.startedAtEpochMs)
               .clamp(0, 1 << 31);
       state = state.copyWith(
         status: 'running',
         startedAtEpochMs: snapshot.startedAtEpochMs,
-        elapsedMs: elapsed as int,
+        elapsedMs: elapsed,
         snapshot: snapshot,
       );
     } catch (e, st) {

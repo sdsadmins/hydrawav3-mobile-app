@@ -19,17 +19,18 @@ class ProtocolRemoteSource {
   Future<List<Protocol>> getProtocols({
     int page = 1,
     int perPage = 50,
-    String? orgId, // ✅ ADDED
+    String? orgId,
   }) async {
     try {
       appLogger.i(
-          '🔄 Protocol: Fetching protocols from API (page=$page, perPage=$perPage)...');
+        'Protocol: Fetching protocols from API (page=$page, perPage=$perPage)...',
+      );
       final response = await _dio.get(
         ApiEndpoints.protocols,
         queryParameters: {
           'page': page,
           'perPage': perPage,
-          if (orgId != null) 'orgId': orgId, // ✅ ADDED
+          if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
         },
       );
 
@@ -40,28 +41,97 @@ class ProtocolRemoteSource {
           .map((e) => Protocol.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
-      appLogger.e('❌ Protocol: API error (status: ${e.response?.statusCode})');
-      appLogger.e('   Message: ${e.response?.data?['message'] ?? e.message}');
-      appLogger.e('   Full error: ${e.response?.data}');
+      appLogger.e('Protocol: API error (status: ${e.response?.statusCode})');
+      appLogger.e('Message: ${e.response?.data?['message'] ?? e.message}');
+      appLogger.e('Full error: ${e.response?.data}');
       throw ServerException(
         e.response?.data?['message'] ?? 'Failed to fetch protocols',
         statusCode: e.response?.statusCode,
       );
     } catch (e) {
-      appLogger.e('❌ Protocol: Parsing error: $e');
+      appLogger.e('Protocol: Parsing error: $e');
       rethrow;
+    }
+  }
+
+  Future<List<ProtocolSelectionOption>> getProtocolsWithGoalTag(
+    String goalTagId, {
+    String? orgId,
+  }) async {
+    try {
+      appLogger.i(
+        'Protocol: Fetching protocols for goal tag $goalTagId...',
+      );
+      final response = await _dio.get(
+        ApiEndpoints.protocolsWithGoalTag,
+        queryParameters: {
+          'goalTagId': goalTagId,
+          if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
+          if (orgId != null && orgId.isNotEmpty) 'organizationId': orgId,
+          if (orgId != null && orgId.isNotEmpty) 'organisationId': orgId,
+        },
+      );
+
+      final data = response.data;
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+
+      return items
+          .map(
+            (e) => ProtocolSelectionOption.fromGoalTagJson(
+              e as Map<String, dynamic>,
+            ),
+          )
+          .toList();
+    } on DioException catch (e) {
+      appLogger.e(
+        'Protocol: Goal-tag API error (status: ${e.response?.statusCode})',
+      );
+      appLogger.e('Message: ${e.response?.data?['message'] ?? e.message}');
+      appLogger.e('Full error: ${e.response?.data}');
+      throw ServerException(
+        e.response?.data?['message'] ??
+            'Failed to fetch protocols with goal tag',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<List<GoalTagOption>> getGoalTags({
+    int page = 1,
+    int perPage = 100,
+  }) async {
+    try {
+      final response = await _dio.get(
+        ApiEndpoints.goalTags,
+        queryParameters: {
+          'page': page,
+          'perPage': perPage,
+        },
+      );
+
+      final data = response.data;
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+
+      return items
+          .map((e) => GoalTagOption.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } on DioException catch (e) {
+      throw ServerException(
+        e.response?.data?['message'] ?? 'Failed to fetch goal tags',
+        statusCode: e.response?.statusCode,
+      );
     }
   }
 
   Future<Protocol> getProtocol(
     String id, {
-    String? orgId, // ✅ ADDED
+    String? orgId,
   }) async {
     try {
       final response = await _dio.get(
         ApiEndpoints.protocolById(id),
         queryParameters: {
-          if (orgId != null) 'orgId': orgId, // ✅ ADDED
+          if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
         },
       );
 
@@ -72,7 +142,8 @@ class ProtocolRemoteSource {
       );
     } on DioException catch (e) {
       appLogger.e(
-          '❌ Protocol: Failed to fetch protocol $id (status: ${e.response?.statusCode})');
+        'Protocol: Failed to fetch protocol $id (status: ${e.response?.statusCode})',
+      );
       throw ServerException(
         e.response?.data?['message'] ?? 'Failed to fetch protocol',
         statusCode: e.response?.statusCode,

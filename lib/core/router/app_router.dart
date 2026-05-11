@@ -118,9 +118,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           final deviceIds =
               extra?['deviceIds'] as List<String>? ?? const <String>[];
           final transport = extra?['transport'] as String? ?? 'ble';
+          final goalTagId = extra?['goalTagId'] as String?;
           return SessionSetupScreen(
             deviceIds: deviceIds,
             transport: transport,
+            goalTagId: goalTagId,
           );
         },
       ),

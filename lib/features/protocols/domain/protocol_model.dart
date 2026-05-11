@@ -1,6 +1,7 @@
 class Protocol {
   final String id;
   final String templateName;
+  final String? goalTagName;
   final int sessions;
   final List<ProtocolCycle> cycles;
   final double hotdrop;
@@ -17,6 +18,7 @@ class Protocol {
   const Protocol({
     required this.id,
     required this.templateName,
+    this.goalTagName,
     this.sessions = 1,
     this.cycles = const [],
     this.hotdrop = 0,
@@ -39,6 +41,7 @@ class Protocol {
     return Protocol(
       id: data['_id'] as String? ?? data['id'] as String? ?? '',
       templateName: data['template_name'] as String? ?? '',
+      goalTagName: _parseGoalTagName(data),
       sessions: data['sessions'] as int? ?? 1,
       cycles: (data['cycles'] as List<dynamic>?)
               ?.map((e) => ProtocolCycle.fromJson(e as Map<String, dynamic>))
@@ -73,9 +76,27 @@ class Protocol {
     return rawDeviceId is String ? rawDeviceId : null;
   }
 
+  static String? _parseGoalTagName(Map<String, dynamic> json) {
+    final directGoalTagName = json['goalTagName'] ?? json['goal_tag_name'];
+    if (directGoalTagName is String && directGoalTagName.trim().isNotEmpty) {
+      return directGoalTagName.trim();
+    }
+
+    final rawGoalTag = json['goalTag'] ?? json['goal_tag'];
+    if (rawGoalTag is Map<String, dynamic>) {
+      final name = rawGoalTag['name'];
+      if (name is String && name.trim().isNotEmpty) {
+        return name.trim();
+      }
+    }
+
+    return null;
+  }
+
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = {
       'template_name': templateName,
+      if (goalTagName != null) 'goalTagName': goalTagName,
       'sessions': sessions,
       'cycles': cycles.map((c) => c.toJson()).toList(),
       'hotdrop': hotdrop,
@@ -94,6 +115,28 @@ class Protocol {
     return data;
   }
 
+  Protocol copyWith({
+    String? goalTagName,
+  }) {
+    return Protocol(
+      id: id,
+      templateName: templateName,
+      goalTagName: goalTagName ?? this.goalTagName,
+      sessions: sessions,
+      cycles: cycles,
+      hotdrop: hotdrop,
+      colddrop: colddrop,
+      vibmin: vibmin,
+      vibmax: vibmax,
+      cycle1: cycle1,
+      cycle5: cycle5,
+      edgecycleduration: edgecycleduration,
+      sessionPause: sessionPause,
+      description: description,
+      deviceId: deviceId,
+    );
+  }
+
   /// Total duration in seconds across all cycles and sessions.
   int get totalDurationSeconds {
     int cycleDuration = 0;
@@ -105,6 +148,71 @@ class Protocol {
   }
 
   Duration get totalDuration => Duration(seconds: totalDurationSeconds);
+}
+
+class ProtocolSelectionOption {
+  final String id;
+  final String templateName;
+  final String description;
+  final String? goalTagName;
+  final int? durationSeconds;
+
+  const ProtocolSelectionOption({
+    required this.id,
+    required this.templateName,
+    this.description = '',
+    this.goalTagName,
+    this.durationSeconds,
+  });
+
+  factory ProtocolSelectionOption.fromProtocol(Protocol protocol) {
+    return ProtocolSelectionOption(
+      id: protocol.id,
+      templateName: protocol.templateName,
+      description: protocol.description,
+      durationSeconds: protocol.totalDurationSeconds,
+    );
+  }
+
+  factory ProtocolSelectionOption.fromGoalTagJson(Map<String, dynamic> json) {
+    final data = json['data'] is Map<String, dynamic>
+        ? json['data'] as Map<String, dynamic>
+        : json;
+
+    return ProtocolSelectionOption(
+      id: data['_id'] as String? ?? data['id'] as String? ?? '',
+      templateName: data['template_name'] as String? ?? '',
+      goalTagName: data['goalTagName'] as String?,
+      durationSeconds: (data['duration'] as num?)?.toInt(),
+    );
+  }
+
+  Duration? get totalDuration =>
+      durationSeconds == null ? null : Duration(seconds: durationSeconds!);
+}
+
+class GoalTagOption {
+  final String id;
+  final String name;
+  final bool isActive;
+
+  const GoalTagOption({
+    required this.id,
+    required this.name,
+    this.isActive = true,
+  });
+
+  factory GoalTagOption.fromJson(Map<String, dynamic> json) {
+    final data = json['data'] is Map<String, dynamic>
+        ? json['data'] as Map<String, dynamic>
+        : json;
+
+    return GoalTagOption(
+      id: data['_id'] as String? ?? data['id'] as String? ?? '',
+      name: data['name'] as String? ?? '',
+      isActive: data['isActive'] as bool? ?? true,
+    );
+  }
 }
 
 class ProtocolCycle {

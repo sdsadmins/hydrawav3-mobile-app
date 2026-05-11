@@ -199,9 +199,9 @@ class _ActiveSessionCard extends StatelessWidget {
             'advancedSettingsByDevice': {},
             'delayedDeviceId': null,
             'protocolByDeviceId': {},
-            // We are coming from History while engine is already running/paused.
-            // Skip bootstrap so SessionScreen uses the current engine state.
-            'skipEngineBootstrap': true,
+            // Let SessionScreen verify whether an engine already exists or
+            // needs to be bootstrapped for this session.
+            'skipEngineBootstrap': false,
             'sessionClockAnchorMs': session.createdAt.millisecondsSinceEpoch,
           },
         );

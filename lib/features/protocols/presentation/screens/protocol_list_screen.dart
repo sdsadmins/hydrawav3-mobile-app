@@ -24,12 +24,28 @@ final homePairedDevicesProvider = StreamProvider<List<PairedDevice>>((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
 });
 
-class ProtocolListScreen extends ConsumerWidget {
+class ProtocolListScreen extends ConsumerStatefulWidget {
   const ProtocolListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProtocolListScreen> createState() => _ProtocolListScreenState();
+}
+
+class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
+  String? _selectedGoalTagId;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedGoalTagId = _selectedGoalTagId?.trim().isEmpty ?? true
+        ? null
+        : _selectedGoalTagId!.trim();
     final protocolsAsync = ref.watch(protocolListProvider);
+    final goalTagsAsync = ref.watch(goalTagListProvider);
+    final filteredProtocolIdsAsync = selectedGoalTagId == null
+        ? const AsyncValue.data(<String>{})
+        : ref
+            .watch(protocolSelectionOptionsProvider(selectedGoalTagId))
+            .whenData((protocols) => protocols.map((p) => p.id).toSet());
     final auth = ref.watch(authStateProvider);
     final connectionStates = ref.watch(bleConnectionStatesProvider);
     final connectedIds = connectionStates.maybeWhen(
@@ -119,7 +135,7 @@ class ProtocolListScreen extends ConsumerWidget {
 
                             /// ✅ SHOW ORG NAME ONLY
                             Text(
-                              auth.selectedOrgName ?? "No Organization",
+                              auth.selectedOrgName ?? 'No Organization',
                               style: const TextStyle(
                                 fontSize: 13,
                                 color: ThemeConstants.accent,
@@ -190,11 +206,77 @@ class ProtocolListScreen extends ConsumerWidget {
           const SliverPadding(
             padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
             sliver: SliverToBoxAdapter(
-              child: SectionHeader(title: 'All Protocols'),
+              child: SectionHeader(title: 'Protocols'),
             ),
           ),
 
           /// 🔥 LIST
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 38,
+                    child: goalTagsAsync.when(
+                      loading: () => ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: const [
+                          _GoalFilterChip(
+                            label: 'All',
+                            selected: true,
+                          ),
+                        ],
+                      ),
+                      error: (e, _) => const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Failed to load goals',
+                          style: TextStyle(
+                            color: ThemeConstants.error,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      data: (goalTags) {
+                        final activeGoalTags =
+                            goalTags.where((goal) => goal.isActive).toList();
+
+                        return ListView(
+                          scrollDirection: Axis.horizontal,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: _GoalFilterChip(
+                                label: 'All',
+                                selected: selectedGoalTagId == null,
+                                onTap: () =>
+                                    setState(() => _selectedGoalTagId = null),
+                              ),
+                            ),
+                            ...activeGoalTags.map(
+                              (goal) => Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: _GoalFilterChip(
+                                  label: goal.name,
+                                  selected: selectedGoalTagId == goal.id,
+                                  onTap: () => setState(
+                                    () => _selectedGoalTagId = goal.id,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
           protocolsAsync.when(
             loading: () => const SliverFillRemaining(
               child: HwLoading(message: 'Loading protocols...'),
@@ -215,28 +297,115 @@ class ProtocolListScreen extends ConsumerWidget {
                 );
               }
 
-              return SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      return AnimatedEntrance(
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _ProtocolCard(
-                            protocol: protocols[index],
-                          ),
+              if (selectedGoalTagId != null) {
+                return filteredProtocolIdsAsync.when(
+                  loading: () => const SliverFillRemaining(
+                    child: HwLoading(message: 'Filtering protocols...'),
+                  ),
+                  error: (e, _) => SliverFillRemaining(
+                    child: HwErrorWidget(
+                      message: e.toString(),
+                      onRetry: () => ref.invalidate(
+                        protocolSelectionOptionsProvider(selectedGoalTagId),
+                      ),
+                    ),
+                  ),
+                  data: (filteredProtocolIds) {
+                    final visibleProtocols = protocols
+                        .where((protocol) =>
+                            filteredProtocolIds.contains(protocol.id))
+                        .toList();
+
+                    if (visibleProtocols.isEmpty) {
+                      return const SliverFillRemaining(
+                        child: HwEmptyState(
+                          icon: Icons.filter_alt_off_rounded,
+                          title: 'No Protocols For This Goal',
                         ),
                       );
-                    },
-                    childCount: protocols.length,
-                  ),
-                ),
-              );
+                    }
+
+                    return _ProtocolList(protocols: visibleProtocols);
+                  },
+                );
+              }
+
+              return _ProtocolList(protocols: protocols);
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProtocolList extends StatelessWidget {
+  final List<Protocol> protocols;
+
+  const _ProtocolList({required this.protocols});
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            return AnimatedEntrance(
+              index: index,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _ProtocolCard(
+                  protocol: protocols[index],
+                ),
+              ),
+            );
+          },
+          childCount: protocols.length,
+        ),
+      ),
+    );
+  }
+}
+
+class _GoalFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _GoalFilterChip({
+    required this.label,
+    required this.selected,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent
+              : ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected
+                ? ThemeConstants.textPrimary
+                : ThemeConstants.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
@@ -732,9 +901,15 @@ class _ProtocolCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final goalAndDuration = [
+      if (protocol.goalTagName?.trim().isNotEmpty ?? false)
+        protocol.goalTagName!.trim(),
+      protocol.totalDuration.formatted,
+    ].join(' - ');
+
     return GradientCard(
-      onTap: () => context.push(
-          '${RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)}'),
+      onTap: () => context
+          .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
       showGlow: true,
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -768,6 +943,19 @@ class _ProtocolCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
+                    if (goalAndDuration.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        goalAndDuration,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: ThemeConstants.textSecondary,
+                          height: 1.25,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
               ),

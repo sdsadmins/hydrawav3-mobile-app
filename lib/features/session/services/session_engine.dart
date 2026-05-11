@@ -1076,11 +1076,68 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     )) {
       _timer?.cancel();
       _timer = null;
+      _stopwatch.stop();
     }
+    final overallStatus = _deriveOverallStatus(statuses);
     state = state.copyWith(
       deviceStatuses: statuses,
-      status: _deriveOverallStatus(statuses),
+      status: overallStatus,
     );
+    if (overallStatus == SessionStatus.stopped ||
+        overallStatus == SessionStatus.completed) {
+      unawaited(_syncBackgroundRuntime('stopped'));
+    }
+  }
+
+  Future<void> handleBleDisconnect(String deviceId) async {
+    if (!_isActive) return;
+    if (state.transport != SessionTransport.ble) return;
+
+    final currentStatus = state.deviceStatuses[deviceId];
+    if (currentStatus == null) return;
+    if (currentStatus == SessionStatus.stopped ||
+        currentStatus == SessionStatus.completed) {
+      return;
+    }
+
+    appLogger.w(
+      'Session: Marking device=$deviceId as stopped after BLE disconnect '
+      '(session=$sessionId)',
+    );
+
+    _deviceStopwatches[deviceId]?.stop();
+
+    final updatedTimers = Map<String, TimerState>.from(state.deviceTimers);
+    final disconnectedTimer = updatedTimers[deviceId];
+    if (disconnectedTimer != null) {
+      updatedTimers[deviceId] = disconnectedTimer.copyWith(isRunning: false);
+    }
+
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = SessionStatus.stopped;
+    final hasLiveDevices = statuses.values.any(
+      (status) =>
+          status == SessionStatus.running || status == SessionStatus.paused,
+    );
+    final overallStatus =
+        hasLiveDevices ? _deriveOverallStatus(statuses) : SessionStatus.stopped;
+
+    if (!hasLiveDevices) {
+      _timer?.cancel();
+      _timer = null;
+      _stopwatch.stop();
+    }
+
+    state = state.copyWith(
+      deviceTimers: updatedTimers,
+      deviceStatuses: statuses,
+      status: overallStatus,
+      error: 'BLE device disconnected: $deviceId',
+    );
+
+    if (!hasLiveDevices) {
+      unawaited(_syncBackgroundRuntime('stopped'));
+    }
   }
 
   SessionRecord? getSessionRecord({
@@ -1202,6 +1259,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       newVisual = 0;
     }
 
+    final overallStatus = _deriveOverallStatus(updatedStatuses);
+
     try {
       state = state.copyWith(
         timer: state.timer.copyWith(
@@ -1209,14 +1268,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           currentCycleIndex: _cycleIndex,
           currentRepetition: _repetition,
           lastVisualCycleIndex: newVisual,
-          isRunning: state.status == SessionStatus.running,
+          isRunning: overallStatus == SessionStatus.running,
         ),
         deviceTimers: updatedTimers,
         deviceStatuses: updatedStatuses,
-        status: _deriveOverallStatus(updatedStatuses),
+        status: overallStatus,
       );
     } catch (e) {
       appLogger.d('Session: tick state update ignored (notifier disposed)');
+    }
+
+    if (overallStatus == SessionStatus.completed ||
+        overallStatus == SessionStatus.stopped) {
+      _timer?.cancel();
+      _timer = null;
+      _stopwatch.stop();
+      unawaited(_syncBackgroundRuntime('stopped'));
     }
   }
 
