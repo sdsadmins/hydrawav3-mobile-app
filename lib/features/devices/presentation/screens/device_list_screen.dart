@@ -273,14 +273,17 @@ class DeviceListScreen extends ConsumerWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
+                loading: () => SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Center(
                       child: SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ThemeConstants.accent,
+                        ),
                       ),
                     ),
                   ),
@@ -365,14 +368,17 @@ class DeviceListScreen extends ConsumerWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
+                loading: () => SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Center(
                       child: SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ThemeConstants.accent,
+                        ),
                       ),
                     ),
                   ),
@@ -614,14 +620,16 @@ class DeviceListScreen extends ConsumerWidget {
                             }).toList(),
                           );
                         },
-                        loading: () => const Padding(
+                        loading: () => Padding(
                           padding: EdgeInsets.symmetric(vertical: 16),
                           child: Center(
                               child: SizedBox(
                                   width: 20,
                                   height: 20,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2))),
+                                    strokeWidth: 2,
+                                    color: ThemeConstants.accent,
+                                  ))),
                         ),
                         error: (e, _) => Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -635,14 +643,17 @@ class DeviceListScreen extends ConsumerWidget {
                   ),
                 );
               },
-              loading: () => const SliverToBoxAdapter(
+              loading: () => SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Center(
                     child: SizedBox(
                       width: 20,
                       height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ThemeConstants.accent,
+                      ),
                     ),
                   ),
                 ),
@@ -1031,10 +1042,13 @@ class _AvailableDeviceRow extends StatelessWidget {
                 border: Border.all(color: ThemeConstants.border),
               ),
               child: isLoading
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ThemeConstants.accent,
+                      ),
                     )
                   : Text(
                       buttonLabel,
