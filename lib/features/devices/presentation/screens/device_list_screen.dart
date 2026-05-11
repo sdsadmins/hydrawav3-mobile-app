@@ -798,15 +798,16 @@ class _ConnectedGradientCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: ThemeConstants.accent,
+        color: ThemeConstants.surface,
         borderRadius: BorderRadius.circular(18),
-        border:
-            Border.all(color: ThemeConstants.accent.withValues(alpha: 0.65)),
+        border: Border.all(
+          color: ThemeConstants.borderLight.withValues(alpha: 0.95),
+        ),
         boxShadow: [
           BoxShadow(
-            color: ThemeConstants.accent.withValues(alpha: 0.30),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            color: ThemeConstants.accent.withValues(alpha: 0.12),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -820,7 +821,7 @@ class _ConnectedGradientCard extends StatelessWidget {
               child: Icon(
                 typeIcon,
                 size: 96,
-                color: Colors.white.withValues(alpha: 0.10),
+                color: ThemeConstants.accentLight.withValues(alpha: 0.22),
               ),
             ),
             Column(
@@ -899,10 +900,10 @@ class _ConnectedGradientCard extends StatelessWidget {
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.12),
+                            color: ThemeConstants.accent,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: Colors.black.withValues(alpha: 0.10),
+                              color: ThemeConstants.accent.withValues(alpha: 0.9),
                             ),
                           ),
                           child: Center(
@@ -923,10 +924,10 @@ class _ConnectedGradientCard extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.12),
+                        color: ThemeConstants.background,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Colors.black.withValues(alpha: 0.10),
+                          color: ThemeConstants.borderLight,
                         ),
                       ),
                       child: const Icon(Icons.settings_rounded,

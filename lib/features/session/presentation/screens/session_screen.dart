@@ -811,9 +811,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: ThemeConstants.surface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.border),
+        border: Border.all(color: ThemeConstants.borderLight),
       ),
       child: Column(
         children: [
@@ -937,6 +937,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               height: 44,
               child: OutlinedButton(
                 onPressed: () => ctrl.pauseDevice(deviceId),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: ThemeConstants.textPrimary,
+                  side: const BorderSide(color: ThemeConstants.borderLight),
+                ),
                 child: const Text('Pause'),
               ),
             ),
@@ -949,6 +954,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 onPressed: () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
+                  foregroundColor: ThemeConstants.textPrimary,
                 ),
                 child: const Text('Stop'),
               ),
@@ -965,6 +971,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               height: 44,
               child: ElevatedButton(
                 onPressed: () => ctrl.resumeDevice(deviceId),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ThemeConstants.accent,
+                  foregroundColor: ThemeConstants.textPrimary,
+                ),
                 child: const Text('Resume'),
               ),
             ),
@@ -977,6 +987,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 onPressed: () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
+                  foregroundColor: ThemeConstants.textPrimary,
                 ),
                 child: const Text('Stop'),
               ),

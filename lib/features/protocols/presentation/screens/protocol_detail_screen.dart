@@ -273,6 +273,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               AnimatedEntrance(
                 index: 3,
                 child: GradientCard(
+                  gradientColors: const [Colors.white, Colors.white],
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -521,6 +522,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: GradientCard(
+                          gradientColors: const [Colors.white, Colors.white],
                           padding: const EdgeInsets.all(16),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,

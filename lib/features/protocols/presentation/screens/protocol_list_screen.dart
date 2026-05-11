@@ -467,15 +467,10 @@ class _ActiveDevicesCard extends StatelessWidget {
     );
     final connectedCount = connectedBleIds.length + connectedWifiMacs.length;
 
-    final bannerGradient = [
-      ThemeConstants.surface,
-      ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
-    ];
-
     return GradientCard(
       showGlow: true,
       padding: const EdgeInsets.all(16),
-      gradientColors: bannerGradient,
+      gradientColors: const [Colors.white, Colors.white],
       child: Stack(
         children: [
           Positioned(
@@ -518,10 +513,9 @@ class _ActiveDevicesCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color:
-                          ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
+                      color: ThemeConstants.surface,
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: ThemeConstants.border),
+                      border: Border.all(color: ThemeConstants.borderLight),
                     ),
                     child: Text(
                       '$connectedCount Connected',
@@ -612,12 +606,10 @@ class _ConnEntry {
   final String id;
   final String name;
   final _ConnType type;
-  final String trailing;
   const _ConnEntry({
     required this.id,
     required this.name,
     required this.type,
-    required this.trailing,
   });
 }
 
@@ -669,7 +661,6 @@ class _MixedConnectedDevicesList extends StatelessWidget {
           id: id,
           name: bleNameFor(id),
           type: _ConnType.ble,
-          trailing: batteryMap[id] != null ? '${batteryMap[id]}%' : '--',
         ),
       ),
       ...connectedWifiMacs.map(
@@ -677,7 +668,6 @@ class _MixedConnectedDevicesList extends StatelessWidget {
           id: mac,
           name: wifiNameFor(mac),
           type: _ConnType.wifi,
-          trailing: '--',
         ),
       ),
     ];
@@ -694,7 +684,6 @@ class _MixedConnectedDevicesList extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 10),
             child: _ConnectedDeviceRow(
               name: e.name,
-              trailing: e.trailing,
               showPulse: true,
               leadingIcon: e.type == _ConnType.ble
                   ? Icons.bluetooth_connected_rounded
@@ -726,12 +715,10 @@ class _ConnectedDeviceView {
 
 class _ConnectedDeviceRow extends StatelessWidget {
   final String name;
-  final String trailing;
   final IconData? leadingIcon;
   final bool showPulse;
   const _ConnectedDeviceRow({
     required this.name,
-    required this.trailing,
     this.leadingIcon,
     this.showPulse = false,
   });
@@ -745,10 +732,11 @@ class _ConnectedDeviceRow extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.06),
+            color: ThemeConstants.surface,
             borderRadius: BorderRadius.circular(14),
-            border:
-                Border.all(color: ThemeConstants.border.withValues(alpha: 0.7)),
+            border: Border.all(
+              color: ThemeConstants.borderLight.withValues(alpha: 0.85),
+            ),
           ),
           child: Row(
             children: [
@@ -774,23 +762,6 @@ class _ConnectedDeviceRow extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.battery_full,
-                      size: 16, color: ThemeConstants.textSecondary),
-                  const SizedBox(width: 6),
-                  Text(
-                    trailing,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: ThemeConstants.textSecondary,
-                    ),
-                  ),
-                ],
-              )
             ],
           ),
         ),
@@ -911,6 +882,7 @@ class _ProtocolCard extends StatelessWidget {
       onTap: () => context
           .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
       showGlow: true,
+      gradientColors: const [Colors.white, Colors.white],
       padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
