@@ -42,4 +42,3 @@ final wifiDevicesByOrgProvider = FutureProvider<List<DeviceInfo>>((ref) async {
   final repo = ref.read(deviceRepositoryProvider);
   return repo.getDevicesByOrg(orgId);
 });
-

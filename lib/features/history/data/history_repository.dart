@@ -27,8 +27,7 @@ class HistoryRepository {
         _isOnline = isOnline;
 
   /// Watch local sessions (always available, offline-safe).
-  Stream<List<LocalSession>> watchLocalSessions() =>
-      _db.watchLocalSessions();
+  Stream<List<LocalSession>> watchLocalSessions() => _db.watchLocalSessions();
 
   /// Get remote history for a client (online only).
   Future<List<SessionHistoryItem>> getClientHistory(

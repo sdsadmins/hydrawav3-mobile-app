@@ -25,18 +25,18 @@ class OrganizationDropdown extends ConsumerWidget {
       },
       child: Row(
         children: [
-          const Icon(Icons.business, color: Colors.black, size: 18),
+          Icon(Icons.business, color: Colors.black, size: 18),
           const SizedBox(width: 6),
           Text(
             auth.selectedOrgName ?? 'Select Org',
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.black,
               fontSize: 13,
               fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(width: 4),
-          const Icon(Icons.keyboard_arrow_down, color: Colors.black, size: 16),
+          Icon(Icons.keyboard_arrow_down, color: Colors.black, size: 16),
         ],
       ),
       itemBuilder: (context) => [

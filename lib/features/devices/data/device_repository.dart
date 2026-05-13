@@ -27,8 +27,7 @@ class DeviceRepository {
         _db = db;
 
   /// Get all registered devices from backend.
-  Future<List<DeviceInfo>> getRegisteredDevices() =>
-      _remoteSource.getDevices();
+  Future<List<DeviceInfo>> getRegisteredDevices() => _remoteSource.getDevices();
 
   /// Get devices for a specific organization.
   Future<List<DeviceInfo>> getDevicesByOrg(String orgId) =>
@@ -57,8 +56,7 @@ class DeviceRepository {
       _remoteSource.updateDevice(sensorId: sensorId, name: newName);
 
   /// Watch paired devices from local DB.
-  Stream<List<PairedDevice>> watchPairedDevices() =>
-      _db.watchPairedDevices();
+  Stream<List<PairedDevice>> watchPairedDevices() => _db.watchPairedDevices();
 
   /// Remove a paired device.
   Future<void> forgetDevice(String macAddress) =>

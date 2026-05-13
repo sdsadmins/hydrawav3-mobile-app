@@ -15,9 +15,11 @@ class HwLoading extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
-            width: size, height: size,
-            child: const CircularProgressIndicator(
-              strokeWidth: 2.5, color: ThemeConstants.accent,
+            width: size,
+            height: size,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: ThemeConstants.accent,
             ),
           ),
           if (message != null) ...[
@@ -37,7 +39,11 @@ class HwEmptyState extends StatelessWidget {
   final Widget? action;
 
   const HwEmptyState({
-    super.key, required this.icon, required this.title, this.subtitle, this.action,
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.action,
   });
 
   @override
@@ -50,10 +56,14 @@ class HwEmptyState extends StatelessWidget {
           children: [
             Icon(icon, size: 48, color: ThemeConstants.textTertiary),
             const SizedBox(height: ThemeConstants.spacingMd),
-            Text(title, style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
+            Text(title,
+                style: Theme.of(context).textTheme.titleMedium,
+                textAlign: TextAlign.center),
             if (subtitle != null) ...[
               const SizedBox(height: ThemeConstants.spacingSm),
-              Text(subtitle!, style: Theme.of(context).textTheme.bodyMedium, textAlign: TextAlign.center),
+              Text(subtitle!,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  textAlign: TextAlign.center),
             ],
             if (action != null) ...[
               const SizedBox(height: ThemeConstants.spacingLg),
@@ -80,15 +90,18 @@ class HwErrorWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 48, color: ThemeConstants.error),
+            Icon(Icons.error_outline_rounded,
+                size: 48, color: ThemeConstants.error),
             const SizedBox(height: ThemeConstants.spacingMd),
-            Text(message, style: Theme.of(context).textTheme.bodyLarge, textAlign: TextAlign.center),
+            Text(message,
+                style: Theme.of(context).textTheme.bodyLarge,
+                textAlign: TextAlign.center),
             if (onRetry != null) ...[
               const SizedBox(height: ThemeConstants.spacingMd),
               TextButton.icon(
                 onPressed: onRetry,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
+                icon: Icon(Icons.refresh_rounded),
+                label: Text('Retry'),
               ),
             ],
           ],

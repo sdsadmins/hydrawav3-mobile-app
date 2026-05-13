@@ -50,7 +50,7 @@ class DeviceListScreen extends ConsumerWidget {
         slivers: [
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(color: ThemeConstants.background),
+              decoration: BoxDecoration(color: ThemeConstants.background),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -59,7 +59,7 @@ class DeviceListScreen extends ConsumerWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Column(
+                        Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text('Devices',
@@ -97,20 +97,20 @@ class DeviceListScreen extends ConsumerWidget {
                                       ),
                                     ],
                                   ),
-                                  child: const Row(
+                                  child: Row(
                                     children: [
-                                      Icon(Icons.check_rounded,
-                                          size: 18,
-                                          color: ThemeConstants.textPrimary),
-                                      SizedBox(width: 6),
                                       Text(
-                                        'Done',
+                                        'Next',
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
                                           color: ThemeConstants.textPrimary,
                                         ),
                                       ),
+                                      SizedBox(width: 6),
+                                      Icon(Icons.arrow_forward_rounded,
+                                          size: 18,
+                                          color: ThemeConstants.textPrimary),
                                     ],
                                   ),
                                 ),
@@ -273,14 +273,17 @@ class DeviceListScreen extends ConsumerWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
+                loading: () => SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Center(
                       child: SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ThemeConstants.accent,
+                        ),
                       ),
                     ),
                   ),
@@ -290,7 +293,7 @@ class DeviceListScreen extends ConsumerWidget {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Text(
                       'Failed to load WiFi devices: $e',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         color: ThemeConstants.textSecondary,
                       ),
@@ -299,7 +302,7 @@ class DeviceListScreen extends ConsumerWidget {
                 ),
                 data: (list) {
                   if (list.isEmpty) {
-                    return const SliverToBoxAdapter(
+                    return SliverToBoxAdapter(
                       child: Padding(
                         padding: EdgeInsets.only(top: 8, bottom: 8),
                         child: Text(
@@ -365,14 +368,17 @@ class DeviceListScreen extends ConsumerWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
               sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
+                loading: () => SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Center(
                       child: SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ThemeConstants.accent,
+                        ),
                       ),
                     ),
                   ),
@@ -382,7 +388,7 @@ class DeviceListScreen extends ConsumerWidget {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Text(
                       'Failed to load WiFi devices: $e',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         color: ThemeConstants.textSecondary,
                       ),
@@ -614,19 +620,21 @@ class DeviceListScreen extends ConsumerWidget {
                             }).toList(),
                           );
                         },
-                        loading: () => const Padding(
+                        loading: () => Padding(
                           padding: EdgeInsets.symmetric(vertical: 16),
                           child: Center(
                               child: SizedBox(
                                   width: 20,
                                   height: 20,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2))),
+                                    strokeWidth: 2,
+                                    color: ThemeConstants.accent,
+                                  ))),
                         ),
                         error: (e, _) => Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           child: Text('Scan error: $e',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 13,
                                   color: ThemeConstants.textSecondary)),
                         ),
@@ -635,19 +643,22 @@ class DeviceListScreen extends ConsumerWidget {
                   ),
                 );
               },
-              loading: () => const SliverToBoxAdapter(
+              loading: () => SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Center(
                     child: SizedBox(
                       width: 20,
                       height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ThemeConstants.accent,
+                      ),
                     ),
                   ),
                 ),
               ),
-              error: (e, _) => const SliverToBoxAdapter(
+              error: (e, _) => SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Text(
@@ -798,15 +809,16 @@ class _ConnectedGradientCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: ThemeConstants.accent,
+        color: ThemeConstants.surface,
         borderRadius: BorderRadius.circular(18),
-        border:
-            Border.all(color: ThemeConstants.accent.withValues(alpha: 0.65)),
+        border: Border.all(
+          color: ThemeConstants.borderLight.withValues(alpha: 0.95),
+        ),
         boxShadow: [
           BoxShadow(
-            color: ThemeConstants.accent.withValues(alpha: 0.30),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            color: ThemeConstants.accent.withValues(alpha: 0.12),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -820,7 +832,7 @@ class _ConnectedGradientCard extends StatelessWidget {
               child: Icon(
                 typeIcon,
                 size: 96,
-                color: Colors.white.withValues(alpha: 0.10),
+                color: ThemeConstants.accentLight.withValues(alpha: 0.22),
               ),
             ),
             Column(
@@ -857,12 +869,12 @@ class _ConnectedGradientCard extends StatelessWidget {
                     //   // child: Row(
                     //   //   mainAxisSize: MainAxisSize.min,
                     //   //   // children: [
-                    //   //   //   const Icon(Icons.battery_full,
+                    //   //   //   Icon(Icons.battery_full,
                     //   //   //       size: 14, color: ThemeConstants.textPrimary),
                     //   //   //   const SizedBox(width: 6),
                     //   //   //   Text(
                     //   //   //     batteryText,
-                    //   //   //     style: const TextStyle(
+                    //   //   //     style: TextStyle(
                     //   //   //       fontSize: 12,
                     //   //   //       fontWeight: FontWeight.w700,
                     //   //   //       color: ThemeConstants.textPrimary,
@@ -876,7 +888,7 @@ class _ConnectedGradientCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: ThemeConstants.textPrimary,
@@ -899,16 +911,17 @@ class _ConnectedGradientCard extends StatelessWidget {
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.12),
+                            color: ThemeConstants.accent,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: Colors.black.withValues(alpha: 0.10),
+                              color:
+                                  ThemeConstants.accent.withValues(alpha: 0.9),
                             ),
                           ),
                           child: Center(
                             child: Text(
                               primaryActionLabel,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: ThemeConstants.textPrimary,
@@ -923,13 +936,13 @@ class _ConnectedGradientCard extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.12),
+                        color: ThemeConstants.background,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Colors.black.withValues(alpha: 0.10),
+                          color: ThemeConstants.borderLight,
                         ),
                       ),
-                      child: const Icon(Icons.settings_rounded,
+                      child: Icon(Icons.settings_rounded,
                           color: ThemeConstants.textPrimary, size: 20),
                     ),
                   ],
@@ -997,7 +1010,7 @@ class _AvailableDeviceRow extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
                     color: ThemeConstants.textPrimary,
@@ -1009,7 +1022,7 @@ class _AvailableDeviceRow extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   softWrap: true,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     color: ThemeConstants.textSecondary,
                     height: 1.2,
@@ -1029,14 +1042,17 @@ class _AvailableDeviceRow extends StatelessWidget {
                 border: Border.all(color: ThemeConstants.border),
               ),
               child: isLoading
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ThemeConstants.accent,
+                      ),
                     )
                   : Text(
                       buttonLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                         color: ThemeConstants.textPrimary,
@@ -1080,7 +1096,7 @@ class _EmptyDashed extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: ThemeConstants.textSecondary,
@@ -1090,7 +1106,7 @@ class _EmptyDashed extends StatelessWidget {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 color: ThemeConstants.textTertiary,
               ),

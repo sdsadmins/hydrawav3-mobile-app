@@ -18,10 +18,13 @@ import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../services/session_engine.dart';
 import '../../domain/session_model.dart';
 import '../../../ble/data/ble_repository.dart';
+import '../../../ble/domain/ble_device_model.dart';
+import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../../session/services/background_session_runtime.dart';
 
 class SessionScreen extends ConsumerStatefulWidget {
   final String? sessionId;
@@ -66,7 +69,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
   ProviderSubscription<SessionEngineState>? _engineSub;
+  ProviderSubscription<AsyncValue<Map<String, BleConnectionStatus>>>?
+      _bleConnectionSub;
   bool _startingSession = false;
+  bool _terminalSessionCleanupInFlight = false;
   String? _activeSessionId;
   late final String _engineKey;
 
@@ -110,6 +116,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         } else if (!nowActive && wasActive) {
           // Avoid setState while route is being popped/unmounted.
           _stopBackendPadPolling(fromDispose: true);
+          unawaited(_handleTerminalSessionState(next));
+        } else if (!nowActive &&
+            (nextS == SessionStatus.stopped ||
+                nextS == SessionStatus.completed)) {
+          unawaited(_handleTerminalSessionState(next));
+        }
+      },
+    );
+
+    _bleConnectionSub =
+        ref.listenManual<AsyncValue<Map<String, BleConnectionStatus>>>(
+      bleConnectionStatesProvider,
+      (prev, next) {
+        if (!mounted || widget.transport != 'ble') return;
+        final previousStates = prev?.valueOrNull;
+        final nextStates = next.valueOrNull;
+        if (previousStates == null || nextStates == null) return;
+
+        for (final deviceId in widget.deviceIds) {
+          final previousStatus = previousStates[deviceId];
+          final currentStatus = nextStates[deviceId];
+          if (!_isDisconnectTransition(previousStatus, currentStatus)) {
+            continue;
+          }
+          unawaited(_handleBleDisconnect(deviceId));
         }
       },
     );
@@ -278,6 +309,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   void dispose() {
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
+    _bleConnectionSub?.close();
     // ⚠️ DO NOT use ref in dispose() - widget is already unmounted
     // Session engine cleanup happens automatically
     super.dispose();
@@ -497,6 +529,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     }
   }
 
+  Future<void> _handleBleDisconnect(String deviceId) async {
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
+    final isLive = engine.status == SessionStatus.running ||
+        engine.status == SessionStatus.paused;
+    if (!isLive) return;
+
+    await ref
+        .read(sessionEngineFamilyProvider(_engineKey).notifier)
+        .handleBleDisconnect(deviceId);
+  }
+
   Future<void> _syncEngineStateToActiveSessions(
       SessionEngineState engine) async {
     if (_activeSessionId == null) return;
@@ -530,6 +573,47 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           engine.protocol?.templateName ?? widget.protocol?.templateName,
     );
     await _syncEngineStateToActiveSessions(engine);
+  }
+
+  Future<void> _handleTerminalSessionState(SessionEngineState engine) async {
+    if (_terminalSessionCleanupInFlight) return;
+    if (_activeSessionId == null) return;
+    if (engine.status != SessionStatus.stopped &&
+        engine.status != SessionStatus.completed) {
+      return;
+    }
+
+    _terminalSessionCleanupInFlight = true;
+    final trackedSessionId = _activeSessionId!;
+    try {
+      await _syncEngineStateToActiveSessions(engine);
+      await ref
+          .read(activeSessionsProvider.notifier)
+          .removeSession(trackedSessionId);
+      await ref
+          .read(backgroundSessionRuntimeProvider.notifier)
+          .stopService(sessionId: trackedSessionId);
+      _activeSessionId = null;
+      appLogger.i(
+        'Removed terminal active session immediately: $trackedSessionId '
+        '(status=${engine.status})',
+      );
+    } finally {
+      _terminalSessionCleanupInFlight = false;
+    }
+  }
+
+  bool _isDisconnectTransition(
+    BleConnectionStatus? previous,
+    BleConnectionStatus? current,
+  ) {
+    if (current != BleConnectionStatus.disconnected &&
+        current != BleConnectionStatus.error) {
+      return false;
+    }
+    return previous == BleConnectionStatus.connected ||
+        previous == BleConnectionStatus.connecting ||
+        previous == BleConnectionStatus.disconnecting;
   }
 
   @override
@@ -594,7 +678,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       appBar: AppBar(
         title: Text('Session(${widget.deviceIds.length} Devices)'),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
+          icon: Icon(Icons.arrow_back_rounded),
           onPressed: () async {
             // Save or update session to active sessions before going back
             if (status != SessionStatus.idle) {
@@ -688,7 +772,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                             color: ThemeConstants.success,
                             shape: BoxShape.circle)),
                     const SizedBox(width: 8),
@@ -696,7 +780,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       widget.transport == 'wifi'
                           ? '${widget.deviceIds.length} WiFi device(s) selected'
                           : '${widget.deviceIds.length} device(s) connected',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: ThemeConstants.textSecondary,
                         fontSize: 13,
                       ),
@@ -723,13 +807,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     required Color sunColor,
     required SessionEngine ctrl,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? ThemeConstants.surface : Colors.white;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: ThemeConstants.surface,
+        color: cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.border),
+        border: Border.all(color: ThemeConstants.borderLight),
       ),
       child: Column(
         children: [
@@ -737,7 +823,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: ThemeConstants.textPrimary,
               fontWeight: FontWeight.w700,
               fontSize: 13,
@@ -749,7 +835,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               protocolName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 color: ThemeConstants.textSecondary,
                 fontWeight: FontWeight.w500,
                 fontSize: 11,
@@ -783,7 +869,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     children: [
                       Text(
                         timer.remaining.formatted,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 38,
                           fontWeight: FontWeight.w700,
                           color: ThemeConstants.textPrimary,
@@ -827,7 +913,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             const SizedBox(height: 8),
             Text(
               'Cycle ${padCycleIdx + 1}/$totalCycles',
-              style: const TextStyle(
+              style: TextStyle(
                 color: ThemeConstants.textTertiary,
                 fontSize: 12,
               ),
@@ -845,6 +931,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     SessionStatus status,
     SessionEngine ctrl,
   ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
     if (status == SessionStatus.running) {
       return Row(
         children: [
@@ -853,7 +941,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               height: 44,
               child: OutlinedButton(
                 onPressed: () => ctrl.pauseDevice(deviceId),
-                child: const Text('Pause'),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: softSurface,
+                  foregroundColor: ThemeConstants.textPrimary,
+                  side: BorderSide(color: ThemeConstants.borderLight),
+                ),
+                child: Text('Pause'),
               ),
             ),
           ),
@@ -865,8 +958,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 onPressed: () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
+                  foregroundColor: ThemeConstants.textPrimary,
                 ),
-                child: const Text('Stop'),
+                child: Text('Stop'),
               ),
             ),
           ),
@@ -881,7 +975,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               height: 44,
               child: ElevatedButton(
                 onPressed: () => ctrl.resumeDevice(deviceId),
-                child: const Text('Resume'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ThemeConstants.accent,
+                  foregroundColor: ThemeConstants.textPrimary,
+                ),
+                child: Text('Resume'),
               ),
             ),
           ),
@@ -893,8 +991,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 onPressed: () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
+                  foregroundColor: ThemeConstants.textPrimary,
                 ),
-                child: const Text('Stop'),
+                child: Text('Stop'),
               ),
             ),
           ),
@@ -962,7 +1061,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               },
               style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.success),
-              child: const Text('Done'))),
+              child: Text('Done'))),
     };
   }
 

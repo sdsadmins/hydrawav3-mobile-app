@@ -2,13 +2,13 @@ class ApiEndpoints {
   ApiEndpoints._();
 
 //   Auth
-static const String profileMe = "/profile/me";
-static const String changePassword = "/profile/me/password";
-static const String forgotPassword = "/profile/me/forget-password";
+  static const String profileMe = "/profile/me";
+  static const String changePassword = "/profile/me/password";
+  static const String forgotPassword = "/profile/me/forget-password";
 
 // /changed
 // static const String login = '/auth/login';
-static const String login = '/auth/login';
+  static const String login = '/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
@@ -17,7 +17,7 @@ static const String login = '/auth/login';
   // Auth
 
   static const String refreshToken = '/auth/refreshToken';
-static const String baseUrl = "http://54.241.236.53:8080";
+  static const String baseUrl = "http://54.241.236.53:8080";
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';
@@ -41,7 +41,9 @@ static const String baseUrl = "http://54.241.236.53:8080";
 
   // Protocols
   static const String protocols = '/protocols';
+  static const String protocolsWithGoalTag = '/protocols/with-goal-tag';
   static String protocolById(String id) => '/protocols/$id';
+  static const String goalTags = '/goal-tag';
 
   // Intake / Sessions
   static const String intake = '/intake';

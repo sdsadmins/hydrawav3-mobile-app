@@ -32,7 +32,8 @@ class PresetRepository {
     AdvancedSettings advancedSettings = const AdvancedSettings(),
   }) async {
     final canAdd = await canAddPreset();
-    if (!canAdd) throw Exception('Maximum ${AppConstants.maxPresets} presets allowed');
+    if (!canAdd)
+      throw Exception('Maximum ${AppConstants.maxPresets} presets allowed');
 
     final presets = await _db.getAllPresets();
     final sortOrder = presets.isEmpty ? 0 : presets.last.sortOrder + 1;
@@ -62,8 +63,7 @@ class PresetRepository {
       deviceIds: deviceIds != null
           ? Value(jsonEncode(deviceIds))
           : const Value.absent(),
-      protocolId:
-          protocolId != null ? Value(protocolId) : const Value.absent(),
+      protocolId: protocolId != null ? Value(protocolId) : const Value.absent(),
       advancedSettingsJson: advancedSettings != null
           ? Value(advancedSettings.encode())
           : const Value.absent(),

@@ -6,57 +6,61 @@ import '../constants/theme_constants.dart';
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get lightTheme => _theme;
+  static ThemeData get lightTheme => _theme(Brightness.light);
+  static ThemeData get darkTheme => _theme(Brightness.dark);
 
-  static ThemeData get darkTheme => _theme; // kept for compatibility
+  static ThemeData _theme(Brightness brightness) {
+    final colors = ThemeConstants.paletteFor(brightness);
+    final isDark = brightness == Brightness.dark;
 
-  static ThemeData get _theme {
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.light,
-      scaffoldBackgroundColor: ThemeConstants.background,
-      colorScheme: const ColorScheme.light(
-        primary: ThemeConstants.accent,
-        secondary: ThemeConstants.accentLight,
-        background: ThemeConstants.background,
-        surface: ThemeConstants.surface,
-        error: ThemeConstants.error,
+      brightness: brightness,
+      scaffoldBackgroundColor: colors.background,
+      colorScheme: ColorScheme(
+        brightness: brightness,
+        primary: colors.accent,
         onPrimary: Colors.black,
-        onBackground: ThemeConstants.textPrimary,
-        onSurface: ThemeConstants.textPrimary,
+        secondary: colors.accentLight,
+        onSecondary: colors.textPrimary,
+        error: ThemeConstants.error,
+        onError: Colors.white,
+        surface: colors.surface,
+        onSurface: colors.textPrimary,
       ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: ThemeConstants.background,
-        foregroundColor: ThemeConstants.textPrimary,
+      appBarTheme: AppBarTheme(
+        backgroundColor: colors.background,
+        foregroundColor: colors.textPrimary,
         elevation: 0,
         centerTitle: false,
-        systemOverlayStyle: SystemUiOverlayStyle.dark,
+        systemOverlayStyle:
+            isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
         titleTextStyle: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.w700,
-          color: ThemeConstants.textPrimary,
+          color: colors.textPrimary,
           letterSpacing: -0.3,
         ),
       ),
       cardTheme: CardThemeData(
-        color: ThemeConstants.surface,
+        color: colors.surface,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-          side: const BorderSide(color: ThemeConstants.border, width: 1),
+          side: BorderSide(color: colors.border, width: 1),
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: ThemeConstants.accent,
+          backgroundColor: colors.accent,
           foregroundColor: Colors.black,
           minimumSize: const Size(double.infinity, 52),
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
           ),
-          textStyle: const TextStyle(
+          textStyle: TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w600,
           ),
@@ -64,51 +68,75 @@ class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: ThemeConstants.accent,
+          foregroundColor: colors.accent,
           minimumSize: const Size(double.infinity, 52),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
           ),
-          side: const BorderSide(color: ThemeConstants.border),
+          side: BorderSide(color: colors.border),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: ThemeConstants.surface,
+        fillColor: colors.surface,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-          borderSide: const BorderSide(color: ThemeConstants.border),
+          borderSide: BorderSide(color: colors.border),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-          borderSide: const BorderSide(color: ThemeConstants.border),
+          borderSide: BorderSide(color: colors.border),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-          borderSide: const BorderSide(color: ThemeConstants.accent, width: 1.5),
+          borderSide: BorderSide(color: colors.accent, width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ThemeConstants.radiusMd),
-          borderSide: const BorderSide(color: ThemeConstants.error),
+          borderSide: BorderSide(color: ThemeConstants.error),
         ),
-        hintStyle: const TextStyle(color: ThemeConstants.textTertiary),
-        labelStyle: const TextStyle(color: ThemeConstants.textSecondary),
+        hintStyle: TextStyle(color: colors.textTertiary),
+        labelStyle: TextStyle(color: colors.textSecondary),
+        prefixIconColor: colors.textTertiary,
       ),
-      dividerTheme: const DividerThemeData(
-        color: ThemeConstants.border,
+      dividerTheme: DividerThemeData(
+        color: colors.border,
         thickness: 1,
       ),
-      textTheme: const TextTheme(
-        headlineLarge: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: ThemeConstants.textPrimary, letterSpacing: -0.5),
-        headlineMedium: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: ThemeConstants.textPrimary, letterSpacing: -0.3),
-        titleLarge: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: ThemeConstants.textPrimary),
-        titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: ThemeConstants.textPrimary),
-        bodyLarge: TextStyle(fontSize: 15, color: ThemeConstants.textPrimary),
-        bodyMedium: TextStyle(fontSize: 14, color: ThemeConstants.textSecondary),
-        bodySmall: TextStyle(fontSize: 12, color: ThemeConstants.textTertiary),
-        labelLarge: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: ThemeConstants.textSecondary, letterSpacing: 0.5),
+      textTheme: TextTheme(
+        headlineLarge: TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w700,
+          color: colors.textPrimary,
+          letterSpacing: -0.5,
+        ),
+        headlineMedium: TextStyle(
+          fontSize: 24,
+          fontWeight: FontWeight.w700,
+          color: colors.textPrimary,
+          letterSpacing: -0.3,
+        ),
+        titleLarge: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: colors.textPrimary,
+        ),
+        titleMedium: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: colors.textPrimary,
+        ),
+        bodyLarge: TextStyle(fontSize: 15, color: colors.textPrimary),
+        bodyMedium: TextStyle(fontSize: 14, color: colors.textSecondary),
+        bodySmall: TextStyle(fontSize: 12, color: colors.textTertiary),
+        labelLarge: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: colors.textSecondary,
+          letterSpacing: 0.5,
+        ),
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {

@@ -29,6 +29,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   List<ScanResult> _discoveredDevices = [];
   String? _selectedDeviceMac;
 
+  Color _onAccent(BuildContext context) =>
+      Theme.of(context).colorScheme.onPrimary;
+
   @override
   void dispose() {
     _serialCtrl.dispose();
@@ -160,24 +163,24 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: isSelected
-              ? ThemeConstants.accent.withOpacity(0.2)
-              : Colors.white.withOpacity(0.05),
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : ThemeConstants.surfaceVariant.withValues(alpha: 0.4),
           border: Border.all(
-            color: isSelected
-                ? ThemeConstants.accent
-                : Colors.white.withOpacity(0.1),
+            color: isSelected ? ThemeConstants.accent : ThemeConstants.border,
             width: isSelected ? 2 : 1,
           ),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(14),
         ),
         child: Row(
           children: [
             Icon(
               Icons.bluetooth_connected,
-              color: isSelected ? ThemeConstants.accent : Colors.white60,
+              color: isSelected
+                  ? ThemeConstants.accent
+                  : ThemeConstants.textTertiary,
               size: 20,
             ),
             const SizedBox(width: 12),
@@ -187,9 +190,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                 children: [
                   Text(
                     deviceName.isEmpty ? 'Unknown Device' : deviceName,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 13, 
+                    style: TextStyle(
+                      color: ThemeConstants.textPrimary,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                     maxLines: 1,
@@ -198,8 +201,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   const SizedBox(height: 4),
                   Text(
                     macAddress,
-                    style: const TextStyle(
-                      color: Colors.black54,
+                    style: TextStyle(
+                      color: ThemeConstants.textSecondary,
                       fontSize: 11,
                     ),
                     maxLines: 1,
@@ -209,8 +212,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               ),
             ),
             if (isSelected)
-              Icon(Icons.check_circle,
-                  color: ThemeConstants.accent, size: 20),
+              Icon(Icons.check_circle, color: ThemeConstants.accent, size: 20),
           ],
         ),
       ),
@@ -233,6 +235,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
                     color: ThemeConstants.surface,
+                    border: Border.all(
+                      color: ThemeConstants.border.withValues(alpha: 0.85),
+                    ),
                     borderRadius:
                         const BorderRadius.vertical(top: Radius.circular(20)),
                   ),
@@ -244,16 +249,17 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Expanded(
+                          Expanded(
                             child: Text('Register New Hardware',
                                 style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w700,
-                                    color: Colors.black),
+                                    color: ThemeConstants.textPrimary),
                                 textAlign: TextAlign.center),
                           ),
-                          IconButton( 
-                            icon: const Icon(Icons.close, color: Colors.black),
+                          IconButton(
+                            icon: Icon(Icons.close,
+                                color: ThemeConstants.textSecondary),
                             onPressed: () => Navigator.of(context).pop(),
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
@@ -273,13 +279,15 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                     vertical: 12, horizontal: 16),
                                 decoration: BoxDecoration(
                                   color: _isAutoScan
-                                      ? Colors.black
-                                      : Colors.transparent,
+                                      ? ThemeConstants.accent
+                                          .withValues(alpha: 0.18)
+                                      : ThemeConstants.surfaceVariant
+                                          .withValues(alpha: 0.28),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: _isAutoScan
-                                        ? Colors.transparent
-                                        : Colors.black12,
+                                        ? ThemeConstants.accent
+                                        : ThemeConstants.border,
                                   ),
                                 ),
                                 child: Text('AUTO SCAN (BLE)',
@@ -287,8 +295,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
                                         color: _isAutoScan
-                                            ? Colors.white
-                                            : Colors.black54),  
+                                            ? ThemeConstants.accent
+                                            : ThemeConstants.textSecondary),
                                     textAlign: TextAlign.center),
                               ),
                             ),
@@ -303,13 +311,15 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                     vertical: 12, horizontal: 16),
                                 decoration: BoxDecoration(
                                   color: !_isAutoScan
-                                      ? Colors.black
-                                      : Colors.transparent,
+                                      ? ThemeConstants.accent
+                                          .withValues(alpha: 0.18)
+                                      : ThemeConstants.surfaceVariant
+                                          .withValues(alpha: 0.28),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: !_isAutoScan
-                                        ? Colors.transparent
-                                        : Colors.black12, 
+                                        ? ThemeConstants.accent
+                                        : ThemeConstants.border,
                                   ),
                                 ),
                                 child: Text('MANUAL ENTRY',
@@ -317,8 +327,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
                                         color: !_isAutoScan
-                                            ? Colors.white
-                                            : Colors.black54),
+                                            ? ThemeConstants.accent
+                                            : ThemeConstants.textSecondary),
                                     textAlign: TextAlign.center),
                               ),
                             ),
@@ -328,98 +338,62 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       const SizedBox(height: 24),
                       // Content based on selected tab
                       if (_isAutoScan) ...[
-                        // Filter buttons
-                        Row(
-                          children: [
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () => setModalState(
-                                    () => _isHydrawav3Only = true),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10, horizontal: 12),
-                                  decoration: BoxDecoration(
-                                    color: _isHydrawav3Only
-                                        ? ThemeConstants.accent
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: _isHydrawav3Only
-                                          ? ThemeConstants.accent
-                                          : Colors.white12,
+                        // Device filter toggle
+                        Container(
+                          height: 34,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: ThemeConstants.surface,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: ThemeConstants.border),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.verified_rounded,
+                                size: 14,
+                                color: _isHydrawav3Only
+                                    ? ThemeConstants.accent
+                                    : ThemeConstants.textTertiary,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Hydrawav3',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: _isHydrawav3Only
+                                      ? ThemeConstants.accent
+                                      : ThemeConstants.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              SizedBox(
+                                width: 34,
+                                height: 22,
+                                child: FittedBox(
+                                  fit: BoxFit.contain,
+                                  alignment: Alignment.centerRight,
+                                  child: Switch.adaptive(
+                                    value: _isHydrawav3Only,
+                                    activeColor: ThemeConstants.accent,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    onChanged: (value) => setModalState(
+                                      () => _isHydrawav3Only = value,
                                     ),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.shield_rounded,
-                                          size: 16,
-                                          color: _isHydrawav3Only
-                                              ? Colors.black
-                                              : Colors.white60),
-                                      const SizedBox(width: 6),
-                                      Text('Hydrawav3',
-                                          style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600,
-                                              color: _isHydrawav3Only
-                                                  ? Colors.white
-                                                  : Colors.black54),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                    ],
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () => setModalState(
-                                    () => _isHydrawav3Only = false),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10, horizontal: 12),
-                                  decoration: BoxDecoration(
-                                    color: !_isHydrawav3Only
-                                        ? ThemeConstants.accent
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: !_isHydrawav3Only
-                                          ? ThemeConstants.accent
-                                          : Colors.white12,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.signal_cellular_alt,
-                                          size: 16,
-                                          color: !_isHydrawav3Only
-                                              ? Colors.black
-                                              : Colors.white60),
-                                      const SizedBox(width: 6),
-                                      Text('All Devices',
-                                          style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600,
-                                              color: !_isHydrawav3Only
-                                                  ? Colors.black
-                                                  : Colors.white60),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 40),
                         // BLE Discovery - Devices List or Discovery State
                         if (_isScanning)
-                          const SizedBox(
+                          SizedBox(
                             height: 200,
                             child: Center(
                               child: Column(
@@ -427,15 +401,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                 children: [
                                   CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    valueColor:
-                                        AlwaysStoppedAnimation<Color>(
-                                            Colors.black),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        ThemeConstants.accent),
                                   ),
                                   SizedBox(height: 16),
                                   Text(
                                     'Scanning for devices...',
                                     style: TextStyle(
-                                      color: Colors.black87,
+                                      color: ThemeConstants.textSecondary,
                                       fontSize: 14,
                                     ),
                                   ),
@@ -446,19 +419,19 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                         else if (_getFilteredDevices().isEmpty)
                           Center(
                             child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 40),
+                              padding: const EdgeInsets.symmetric(vertical: 40),
                               child: Column(
                                 children: [
                                   Icon(Icons.bluetooth,
                                       size: 60,
-                                      color: Colors.black.withOpacity(0.3)),
+                                      color: ThemeConstants.textTertiary
+                                          .withValues(alpha: 0.55)),
                                   const SizedBox(height: 24),
-                                  const Text(
+                                  Text(
                                     'NO DEVICES DETECTED IN IMMEDIATE RANGE.',
                                     style: TextStyle(
                                         fontSize: 14,
-                                        color: Colors.black54,
+                                        color: ThemeConstants.textSecondary,
                                         fontWeight: FontWeight.w500),
                                     textAlign: TextAlign.center,
                                   ),
@@ -500,11 +473,11 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16)),
                               ),
-                              child: const Text('REGISTER ASSET',
+                              child: Text('REGISTER ASSET',
                                   style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w700,
-                                      color: Colors.black)),    
+                                      color: _onAccent(context))),
                             ),
                           )
                         else
@@ -516,7 +489,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                   _isScanning ? null : () => _startBleScan(),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: ThemeConstants.accent,
-                                disabledBackgroundColor: Colors.white12,
+                                disabledBackgroundColor:
+                                    ThemeConstants.surfaceVariant,
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16)),
                               ),
@@ -525,8 +499,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                       fontSize: 14,
                                       fontWeight: FontWeight.w700,
                                       color: _isScanning
-                                          ? Colors.black54
-                                          : Colors.black)),
+                                          ? ThemeConstants.textTertiary
+                                          : _onAccent(context))),
                             ),
                           ),
                       ] else ...[
@@ -535,13 +509,17 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 20),
                           decoration: BoxDecoration(
-                            color: ThemeConstants.accent.withOpacity(0.12),
+                            color: ThemeConstants.accent.withValues(alpha: 0.1),
+                            border: Border.all(
+                              color:
+                                  ThemeConstants.accent.withValues(alpha: 0.22),
+                            ),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
+                              Text(
                                 'MANUAL ENTRY IS RESTRICTED TO VERIFIED CLINICAL MAC IDENTIFIERS ONLY.',
                                 style: TextStyle(
                                     fontSize: 12,
@@ -558,72 +536,80 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Text('HARDWARE FRIENDLY NAME',
+                              Text('HARDWARE FRIENDLY NAME',
                                   style: TextStyle(
                                       fontSize: 11,
-                                      color: Colors.black54,
+                                      color: ThemeConstants.textSecondary,
                                       fontWeight: FontWeight.w600,
                                       letterSpacing: 0.3)),
                               const SizedBox(height: 8),
                               TextFormField(
                                 controller: _nameCtrl,
-                                        style: const TextStyle(color: Colors.black),
+                                style:
+                                    TextStyle(color: ThemeConstants.textPrimary),
                                 decoration: InputDecoration(
                                   hintText: 'e.g. Clinical_Sun_A',
-                                  hintStyle: const TextStyle(
-                                      color: Colors.black38, fontSize: 14),
+                                  hintStyle: TextStyle(
+                                      color: ThemeConstants.textTertiary,
+                                      fontSize: 14),
                                   filled: true,
-                                  fillColor: Colors.black.withOpacity(0.05),
+                                  fillColor: ThemeConstants.surfaceVariant
+                                      .withValues(alpha: 0.42),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
                                     borderSide: BorderSide(
-                                        color: Colors.black.withOpacity(0.1)),
+                                        color: ThemeConstants.border),
                                   ),
                                   enabledBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
                                     borderSide: BorderSide(
-                                        color: Colors.black.withOpacity(0.1)),
+                                        color: ThemeConstants.border),
                                   ),
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 10),
                                 ),
-                                validator: (v) => (v == null || v.trim().isEmpty)
-                                    ? 'Required'
-                                    : null,
+                                validator: (v) =>
+                                    (v == null || v.trim().isEmpty)
+                                        ? 'Required'
+                                        : null,
                               ),
                               const SizedBox(height: 20),
-                              const Text('MAC IDENTIFIER (XX:XX:XX:XX:XX:XX)',
+                              Text('MAC IDENTIFIER (XX:XX:XX:XX:XX:XX)',
                                   style: TextStyle(
                                       fontSize: 11,
-                                      color: Colors.black54,
+                                      color: ThemeConstants.textSecondary,
                                       fontWeight: FontWeight.w600,
                                       letterSpacing: 0.3)),
                               const SizedBox(height: 8),
                               TextFormField(
                                 controller: _serialCtrl,
-                                style: const TextStyle(color: Colors.black),
+                                style:
+                                    TextStyle(color: ThemeConstants.textPrimary),
                                 decoration: InputDecoration(
                                   hintText: '00:00:00:00:00:00',
-                                  hintStyle: const TextStyle(
-                                      color: Colors.black38, fontSize: 14),
+                                  hintStyle: TextStyle(
+                                      color: ThemeConstants.textTertiary,
+                                      fontSize: 14),
                                   filled: true,
-                                  fillColor: Colors.black.withOpacity(0.05),
+                                  fillColor: ThemeConstants.surfaceVariant
+                                      .withValues(alpha: 0.42),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
                                     borderSide: BorderSide(
-                                        color: Colors.black.withOpacity(0.1)),
+                                        color: ThemeConstants.border),
                                   ),
                                   enabledBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(8),
                                     borderSide: BorderSide(
-                                        color: Colors.black.withOpacity(0.1)),
+                                        color: ThemeConstants.border),
                                   ),
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 10),
                                 ),
-                                validator: (v) => (v == null || v.trim().isEmpty)
-                                    ? 'Required'
-                                    : null,
+                                validator: (v) =>
+                                    (v == null || v.trim().isEmpty)
+                                        ? 'Required'
+                                        : null,
                               ),
                               const SizedBox(height: 24),
                               SizedBox(
@@ -645,12 +631,12 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                           width: 20,
                                           child: CircularProgressIndicator(
                                               strokeWidth: 2,
-                                                      color: Colors.black))
-                                      : const Text('REGISTER ASSET',
+                                              color: Colors.black))
+                                      : Text('REGISTER ASSET',
                                           style: TextStyle(
                                               fontSize: 14,
                                               fontWeight: FontWeight.w700,
-                                              color: Colors.black)),
+                                              color: _onAccent(context))),
                                 ),
                               ),
                             ],
@@ -675,7 +661,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           Icon(icon, size: 20, color: ThemeConstants.textSecondary),
           const SizedBox(height: 6),
           Text(label,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11,
                   color: ThemeConstants.textTertiary,
                   fontWeight: FontWeight.w600)),
@@ -698,7 +684,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: ThemeConstants.accent.withOpacity(0.12),
+                    color: ThemeConstants.accent.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Icon(Icons.memory,
@@ -708,10 +694,10 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                 Expanded(
                   child: Text(
                     device.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
-                        color: Colors.black),
+                        color: ThemeConstants.textPrimary),
                   ),
                 ),
               ],
@@ -721,13 +707,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               decoration: BoxDecoration(
-                color: ThemeConstants.accent.withOpacity(0.12),
+                color: ThemeConstants.surfaceVariant.withValues(alpha: 0.48),
+                border: Border.all(color: ThemeConstants.border),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('HARDWARE MAC',
+                  Text('HARDWARE MAC',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
@@ -735,9 +722,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           color: ThemeConstants.textTertiary)),
                   const SizedBox(height: 8),
                   Text(device.macAddress,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 14,
-                          color: Colors.black,
+                          color: ThemeConstants.textPrimary,
                           fontWeight: FontWeight.w600)),
                 ],
               ),
@@ -776,16 +763,17 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text('DEVICES FLEET',
                             style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.black)),
+                                color: ThemeConstants.textPrimary)),
                         SizedBox(height: 8),
                         Text(
                             'Manage clinical hardware connections and firmware protocols.',
-                            style: TextStyle(color: Colors.black87)),
+                            style:
+                                TextStyle(color: ThemeConstants.textSecondary)),
                       ],
                     ),
                   ),
@@ -793,8 +781,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                     height: 48,
                     child: ElevatedButton.icon(
                       onPressed: _showCreateSheet,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Register Device'),
+                      icon: Icon(Icons.add),
+                      label: Text('Register Device'),
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size(0, 48),
                         padding: const EdgeInsets.symmetric(
@@ -809,17 +797,23 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               ),
               const SizedBox(height: 24),
               Container(
+                decoration: BoxDecoration(
+                  color: ThemeConstants.surface,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: ThemeConstants.border),
+                ),
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (value) =>
                       setState(() => _searchText = value.trim()),
+                  style: TextStyle(color: ThemeConstants.textPrimary),
                   decoration: InputDecoration(
                     hintText:
                         'Filter by hardware name, MAC ID or protocol type...',
-                    hintStyle:
-                        const TextStyle(color: ThemeConstants.textTertiary),
-                    prefixIcon: const Icon(Icons.search,
-                        color: ThemeConstants.textTertiary),
+                    hintStyle: TextStyle(color: ThemeConstants.textTertiary),
+                    prefixIcon:
+                        Icon(Icons.search, color: ThemeConstants.textTertiary),
+                    filled: false,
                     border: InputBorder.none,
                   ),
                 ),
@@ -846,7 +840,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                             _searchText.isEmpty
                                 ? 'No registered devices found.'
                                 : 'No devices match your search.',
-                            style: const TextStyle(color: Colors.black87),
+                            style:
+                                TextStyle(color: ThemeConstants.textSecondary),
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -861,14 +856,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           _buildDeviceCard(filteredDevices[index]),
                     );
                   },
-                  loading: () => const Center(
+                  loading: () => Center(
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.black87)),
+                          strokeWidth: 2, color: ThemeConstants.accent)),
                   error: (error, stack) => Center(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       child: Text('Unable to load devices: ${error.toString()}',
-                                    style: const TextStyle(color: Colors.black87),
+                          style: TextStyle(color: ThemeConstants.textSecondary),
                           textAlign: TextAlign.center),
                     ),
                   ),

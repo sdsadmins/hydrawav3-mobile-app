@@ -24,8 +24,7 @@ class HwCard extends StatelessWidget {
       color: color,
       elevation: elevation,
       child: Padding(
-        padding: padding ??
-            const EdgeInsets.all(ThemeConstants.spacingMd),
+        padding: padding ?? const EdgeInsets.all(ThemeConstants.spacingMd),
         child: child,
       ),
     );

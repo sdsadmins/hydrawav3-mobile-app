@@ -28,8 +28,7 @@ class HistoryRemoteSource {
       final data = response.data;
       final List<dynamic> items = data is List ? data : (data['data'] ?? []);
       return items
-          .map((e) =>
-              SessionHistoryItem.fromJson(e as Map<String, dynamic>))
+          .map((e) => SessionHistoryItem.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
       throw ServerException(

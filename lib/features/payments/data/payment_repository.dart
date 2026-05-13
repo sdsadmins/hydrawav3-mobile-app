@@ -29,8 +29,7 @@ class PaymentRepository {
 
   Future<SubscriptionPlan> getCurrentPlan(String orgId) async {
     try {
-      final response =
-          await _dio.get(ApiEndpoints.currentPlan(orgId));
+      final response = await _dio.get(ApiEndpoints.currentPlan(orgId));
       return SubscriptionPlan.fromJson(response.data);
     } on DioException catch (e) {
       // Default to free plan if no plan found

@@ -57,6 +57,15 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       final snapshot = LiveSessionSnapshot.fromJson(
         jsonDecode(snapshotJson) as Map<String, dynamic>,
       );
+      if (snapshot.transport == 'ble') {
+        appLogger.i(
+          'Dropping restored BLE active sessions after cold launch '
+          '(session=${snapshot.sessionId})',
+        );
+        unawaited(_prefs.remove(_activeSessionsKey));
+        unawaited(_prefs.remove(liveSessionSnapshotPrefsKey));
+        return const [];
+      }
       final filtered = sessions
           .where((session) => session.id == snapshot.sessionId)
           .toList();

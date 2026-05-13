@@ -42,7 +42,7 @@ class _SelectOrganizationPageState
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: Container(
-        decoration: const BoxDecoration(color: ThemeConstants.background),
+        decoration: BoxDecoration(color: ThemeConstants.background),
         child: SafeArea(
           child: orgAsync.when(
             loading: () => const Center(
@@ -52,7 +52,7 @@ class _SelectOrganizationPageState
               child: Text(
                 'Failed to load organizations\n$e',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: ThemeConstants.textPrimary),
+                style: TextStyle(color: ThemeConstants.textPrimary),
               ),
             ),
             data: (orgs) {
@@ -72,7 +72,7 @@ class _SelectOrganizationPageState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             /// 🔥 TITLE
-                            const Text(
+                            Text(
                               "Select Your Organization",
                               style: TextStyle(
                                 fontSize: 24,
@@ -83,7 +83,7 @@ class _SelectOrganizationPageState
 
                             const SizedBox(height: 8),
 
-                            const Text(
+                            Text(
                               "Choose the organization you want to work with.\nEasily collaborate, manage files, and stay in sync.",
                               style: TextStyle(
                                 fontSize: 13,
@@ -152,7 +152,7 @@ class _SelectOrganizationPageState
                                           color: Colors.white
                                               .withValues(alpha: 0.1),
                                         ),
-                                        child: const Icon(
+                                        child: Icon(
                                           Icons.business,
                                           color: ThemeConstants.textPrimary,
                                           size: 26,
@@ -162,7 +162,7 @@ class _SelectOrganizationPageState
                                       Expanded(
                                         child: Text(
                                           org['name'] ?? 'Organization',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
                                             color: ThemeConstants.textPrimary,
@@ -173,12 +173,12 @@ class _SelectOrganizationPageState
                                         duration:
                                             const Duration(milliseconds: 300),
                                         child: isSelected
-                                            ? const Icon(
+                                            ? Icon(
                                                 Icons.check_circle,
                                                 color:
                                                     ThemeConstants.textPrimary,
                                               )
-                                            : const Icon(
+                                            : Icon(
                                                 Icons.arrow_forward_ios,
                                                 color:
                                                     ThemeConstants.textTertiary,

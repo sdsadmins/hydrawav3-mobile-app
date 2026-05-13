@@ -33,15 +33,15 @@ class AdvancedSettingsNotifier extends StateNotifier<AdvancedSettings> {
   void setCycle1(bool value) => state = state.copyWith(cycle1Initiation: value);
   void setCycle5(bool value) => state = state.copyWith(cycle5Completion: value);
 
-  void setStartDelay(int seconds) => state = state.copyWith(startDelay: seconds);
+  void setStartDelay(int seconds) =>
+      state = state.copyWith(startDelay: seconds);
   void setFlipSettings(bool value) =>
       state = state.copyWith(flipSettings: value);
 
   void setVibMin(double value) => state = state.copyWith(vibMin: value);
   void setVibMax(double value) => state = state.copyWith(vibMax: value);
 
-  void loadFromJson(String jsonStr) =>
-      state = AdvancedSettings.decode(jsonStr);
+  void loadFromJson(String jsonStr) => state = AdvancedSettings.decode(jsonStr);
 
   void reset() => state = const AdvancedSettings();
 }

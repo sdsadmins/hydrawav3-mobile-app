@@ -57,6 +57,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authStateProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     /// ✅ ONLY ERROR HANDLING
     ref.listen<AuthState>(authStateProvider, (_, next) {
@@ -73,7 +74,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: Container(
-        decoration: const BoxDecoration(color: ThemeConstants.background),
+        decoration: BoxDecoration(color: ThemeConstants.background),
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
@@ -88,46 +89,56 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     AnimatedEntrance(
                       child: Column(
                         children: [
-                          Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              SvgPicture.asset(
-                                'assets/images/Hydrawav3_Black_Logo.svg',
-                                height: 120,
-                                fit: BoxFit.contain,
-                              ),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: ThemeConstants.accent,
-                                    borderRadius: BorderRadius.circular(12),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: ThemeConstants.accent
-                                            .withValues(alpha: 0.3),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 2),
+                          SizedBox(
+                            width: 340,
+                            height: 120,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                isDark
+                                    ? Image.asset(
+                                        'assets/images/White_Hydrawav3_Logo.png',
+                                        height: 62,
+                                        fit: BoxFit.contain,
+                                      )
+                                    : SvgPicture.asset(
+                                        'assets/images/Hydrawav3_Black_Logo.svg',
+                                        height: 120,
+                                        fit: BoxFit.contain,
                                       ),
-                                    ],
-                                  ),
-                                  child: const Text(
-                                    'BETA',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 1.2,
+                                Positioned(
+                                  top: 6,
+                                  right: 0,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: ThemeConstants.accent,
+                                      borderRadius: BorderRadius.circular(12),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: ThemeConstants.accent
+                                              .withValues(alpha: 0.3),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Text(
+                                      'BETA',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.2,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -149,7 +160,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               TextFormField(
                                 controller: _userCtrl,
                                 decoration:
-                                    const InputDecoration(hintText: 'Username'),
+                                    InputDecoration(hintText: 'Username'),
                                 validator: (v) => (v == null || v.isEmpty)
                                     ? 'Required'
                                     : null,
@@ -190,7 +201,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               const SizedBox(height: 14),
                               GestureDetector(
                                 onTap: _openOnboarding,
-                                child: const Text.rich(
+                                child: Text.rich(
                                   TextSpan(
                                     text: "Don't have an account? ",
                                     style: TextStyle(
@@ -258,7 +269,7 @@ class _GradientCTA extends StatelessWidget {
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(label, style: const TextStyle(color: Colors.white)),
+                    Text(label, style: TextStyle(color: Colors.white)),
                     const SizedBox(width: 8),
                   ],
                 ),

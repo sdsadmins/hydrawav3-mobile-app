@@ -50,8 +50,7 @@ class ChatRepository implements ChatEngine {
       }
 
       // Add complete assistant message to history
-      _history
-          .add(ChatMessageModel(content: buffer.toString(), isUser: false));
+      _history.add(ChatMessageModel(content: buffer.toString(), isUser: false));
     } catch (e) {
       appLogger.e('Chat error: $e');
       rethrow;

@@ -11,17 +11,32 @@ class SessionDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      appBar: AppBar(title: const Text('Session Details'), actions: [
-        IconButton(icon: const Icon(Icons.share_rounded, color: ThemeConstants.accent), onPressed: () {}),
+      appBar: AppBar(title: Text('Session Details'), actions: [
+        IconButton(
+            icon: Icon(Icons.share_rounded, color: ThemeConstants.accent),
+            onPressed: () {}),
       ]),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Session Summary', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
+          Text('Session Summary',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white)),
           const SizedBox(height: 12),
-          _Card(children: [_Row('Date', 'Loading...'), _Row('Duration', 'Loading...'), _Row('Protocol', 'Loading...'), _Row('Device', 'Loading...')]),
+          _Card(children: [
+            _Row('Date', 'Loading...'),
+            _Row('Duration', 'Loading...'),
+            _Row('Protocol', 'Loading...'),
+            _Row('Device', 'Loading...')
+          ]),
           const SizedBox(height: 16),
-          const Text('Discomfort Tracking', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
+          Text('Discomfort Tracking',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white)),
           const SizedBox(height: 12),
           _Card(children: [_Row('Before', 'N/A'), _Row('After', 'N/A')]),
         ],
@@ -36,11 +51,24 @@ class _Card extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(color: ThemeConstants.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: ThemeConstants.border)),
-      child: Column(children: children.asMap().entries.map((e) => Column(children: [
-        e.value,
-        if (e.key < children.length - 1) const Divider(height: 1, indent: 16, endIndent: 16, color: ThemeConstants.border),
-      ])).toList()),
+      decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ThemeConstants.border)),
+      child: Column(
+          children: children
+              .asMap()
+              .entries
+              .map((e) => Column(children: [
+                    e.value,
+                    if (e.key < children.length - 1)
+                      Divider(
+                          height: 1,
+                          indent: 16,
+                          endIndent: 16,
+                          color: ThemeConstants.border),
+                  ]))
+              .toList()),
     );
   }
 }
@@ -53,8 +81,14 @@ class _Row extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: ThemeConstants.textSecondary)),
-        Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white)),
+        Text(label,
+            style:
+                TextStyle(fontSize: 14, color: ThemeConstants.textSecondary)),
+        Text(value,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Colors.white)),
       ]),
     );
   }

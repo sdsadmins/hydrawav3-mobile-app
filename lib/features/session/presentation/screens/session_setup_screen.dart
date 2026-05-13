@@ -7,7 +7,8 @@ import 'package:uuid/uuid.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/storage/local_db.dart';
 import '../../../../core/router/route_names.dart';
-import '../../../../core/theme/widgets/hw_loading.dart';
+import '../../../../core/theme/widgets/premium.dart';
+import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../protocols/domain/protocol_model.dart';
@@ -26,11 +27,13 @@ import '../../services/session_engine.dart';
 class SessionSetupScreen extends ConsumerStatefulWidget {
   final List<String> deviceIds;
   final String transport; // 'ble' or 'wifi'
+  final String? goalTagId;
 
   const SessionSetupScreen({
     super.key,
     required this.deviceIds,
     this.transport = 'ble',
+    this.goalTagId,
   });
 
   @override
@@ -39,6 +42,7 @@ class SessionSetupScreen extends ConsumerStatefulWidget {
 
 class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   final Map<String, String> _protocolIdByDeviceId = {};
+  final Map<String, Protocol> _selectedProtocolByDeviceId = {};
   final Map<String, AdvancedSettings> _settingsByDeviceId = {};
   final Set<String> _runDeviceIds = <String>{};
   String? _delayedDeviceId;
@@ -160,17 +164,17 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final protocolsAsync = ref.watch(protocolListProvider);
+    final protocolsAsync = ref.watch(protocolSelectionOptionsProvider(null));
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
         backgroundColor: ThemeConstants.surface,
         foregroundColor: ThemeConstants.textPrimary,
-        title: const Text('Session Setup'),
+        title: Text('Session Setup'),
       ),
       body: protocolsAsync.when(
-        loading: () => const Center(child: HwLoading()),
+        loading: () => const _SessionSetupSkeleton(),
         error: (e, _) => Center(
           child: Text('Failed to load protocols: $e'),
         ),
@@ -191,184 +195,345 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
             required String? currentId,
           }) async {
             String query = '';
+            String? selectedGoalTagId = widget.goalTagId?.trim().isEmpty ?? true
+                ? null
+                : widget.goalTagId!.trim();
             return showModalBottomSheet<String>(
               context: context,
               showDragHandle: true,
               isScrollControlled: true,
               backgroundColor: ThemeConstants.surface,
-              shape: const RoundedRectangleBorder(
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
               ),
               builder: (ctx) => SafeArea(
                 top: false,
                 child: StatefulBuilder(
                   builder: (ctx, setSheetState) {
-                    final list = query.trim().isEmpty
-                        ? protocols
-                        : protocols
-                            .where((p) =>
-                                p.templateName
-                                    .toLowerCase()
-                                    .contains(query.toLowerCase()) ||
-                                p.description
-                                    .toLowerCase()
-                                    .contains(query.toLowerCase()))
-                            .toList();
-                    return Padding(
-                      padding: EdgeInsets.only(
-                        left: 16,
-                        right: 16,
-                        bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
-                        top: 8,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                    return Consumer(
+                      builder: (context, ref, _) {
+                        final goalTagsAsync = ref.watch(goalTagListProvider);
+                        final filteredProtocolsAsync = ref.watch(
+                          protocolSelectionOptionsProvider(selectedGoalTagId),
+                        );
+
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
+                            top: 8,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Expanded(
-                                child: Text(
-                                  'Select protocol',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                    color: ThemeConstants.textPrimary,
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Select protocol',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w800,
+                                        color: ThemeConstants.textPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                    icon: Icon(
+                                      Icons.close_rounded,
+                                      color: ThemeConstants.textTertiary,
+                                    ),
+                                    tooltip: 'Close',
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                autofocus: true,
+                                onChanged: (v) =>
+                                    setSheetState(() => query = v.trim()),
+                                style: TextStyle(
+                                  color: ThemeConstants.textPrimary,
+                                  fontSize: 14,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Search protocols...',
+                                  hintStyle: TextStyle(
+                                    color: ThemeConstants.textTertiary,
+                                  ),
+                                  prefixIcon: Icon(
+                                    Icons.search_rounded,
+                                    color: ThemeConstants.textTertiary,
+                                  ),
+                                  filled: true,
+                                  fillColor: ThemeConstants.surfaceVariant
+                                      .withValues(alpha: 0.7),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: ThemeConstants.border,
+                                    ),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: ThemeConstants.border,
+                                    ),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 12,
                                   ),
                                 ),
                               ),
-                              IconButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                icon: const Icon(
-                                  Icons.close_rounded,
-                                  color: ThemeConstants.textTertiary,
-                                ),
-                                tooltip: 'Close',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            autofocus: true,
-                            onChanged: (v) =>
-                                setSheetState(() => query = v.trim()),
-                            style: const TextStyle(
-                              color: ThemeConstants.textPrimary,
-                              fontSize: 14,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Search protocols...',
-                              hintStyle: const TextStyle(
-                                color: ThemeConstants.textTertiary,
-                              ),
-                              prefixIcon: const Icon(
-                                Icons.search_rounded,
-                                color: ThemeConstants.textTertiary,
-                              ),
-                              filled: true,
-                              fillColor: ThemeConstants.surfaceVariant
-                                  .withValues(alpha: 0.7),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: ThemeConstants.border,
+                              const SizedBox(height: 12),
+                              Text(
+                                'Filter by goal',
+                                style: TextStyle(
+                                  color: ThemeConstants.textSecondary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                  color: ThemeConstants.border,
-                                ),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 12,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Flexible(
-                            child: ListView.separated(
-                              shrinkWrap: true,
-                              physics: const ClampingScrollPhysics(),
-                              itemCount: list.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (ctx, i) {
-                                final p = list[i];
-                                final selected = p.id == currentId;
-                                return InkWell(
-                                  borderRadius: BorderRadius.circular(14),
-                                  onTap: () => Navigator.of(ctx).pop(p.id),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: selected
-                                          ? ThemeConstants.accent
-                                              .withValues(alpha: 0.14)
-                                          : ThemeConstants.surface,
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: selected
-                                            ? ThemeConstants.accent
-                                            : ThemeConstants.border,
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: 38,
+                                child: goalTagsAsync.when(
+                                  loading: () =>
+                                      const _GoalFilterChipSkeletonList(),
+                                  error: (e, _) => const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Failed to load goals',
+                                      style: TextStyle(
+                                        color: ThemeConstants.error,
+                                        fontSize: 12,
                                       ),
                                     ),
-                                    child: Row(
+                                  ),
+                                  data: (goalTags) {
+                                    final activeGoalTags = goalTags
+                                        .where((goal) => goal.isActive)
+                                        .toList();
+
+                                    return ListView(
+                                      scrollDirection: Axis.horizontal,
                                       children: [
-                                        Icon(
-                                          selected
-                                              ? Icons.check_circle_rounded
-                                              : Icons.science_outlined,
-                                          size: 18,
-                                          color: selected
-                                              ? ThemeConstants.accent
-                                              : ThemeConstants.textTertiary,
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(right: 8),
+                                          child: _GoalFilterChip(
+                                            label: 'All',
+                                            selected: selectedGoalTagId == null,
+                                            onTap: () => setSheetState(
+                                              () => selectedGoalTagId = null,
+                                            ),
+                                          ),
                                         ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                p.templateName,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  color: ThemeConstants
-                                                      .textPrimary,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w800,
-                                                ),
+                                        ...activeGoalTags.map(
+                                          (goal) => Padding(
+                                            padding:
+                                                const EdgeInsets.only(right: 8),
+                                            child: _GoalFilterChip(
+                                              label: goal.name,
+                                              selected:
+                                                  selectedGoalTagId == goal.id,
+                                              onTap: () => setSheetState(
+                                                () =>
+                                                    selectedGoalTagId = goal.id,
                                               ),
-                                              if (p.description.isNotEmpty) ...[
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  p.description,
-                                                  maxLines: 2,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    color: ThemeConstants
-                                                        .textSecondary,
-                                                    fontSize: 12,
-                                                    height: 1.25,
-                                                  ),
-                                                ),
-                                              ],
-                                            ],
+                                            ),
                                           ),
                                         ),
                                       ],
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Flexible(
+                                child: filteredProtocolsAsync.when(
+                                  loading: () =>
+                                      const _ProtocolPickerListSkeleton(),
+                                  error: (e, _) => Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 24,
+                                      ),
+                                      child: Text(
+                                        'Failed to load protocols: $e',
+                                        style: TextStyle(
+                                          color: ThemeConstants.error,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
                                     ),
                                   ),
-                                );
-                              },
-                            ),
+                                  data: (filteredProtocols) {
+                                    final list = query.trim().isEmpty
+                                        ? filteredProtocols
+                                        : filteredProtocols
+                                            .where((p) =>
+                                                p.templateName
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()) ||
+                                                p.description
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()) ||
+                                                (p.goalTagName ?? '')
+                                                    .toLowerCase()
+                                                    .contains(
+                                                        query.toLowerCase()))
+                                            .toList();
+
+                                    if (list.isEmpty) {
+                                      return Center(
+                                        child: Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            vertical: 24,
+                                          ),
+                                          child: Text(
+                                            'No protocols found for this goal.',
+                                            style: TextStyle(
+                                              color:
+                                                  ThemeConstants.textSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }
+
+                                    return ListView.separated(
+                                      shrinkWrap: true,
+                                      physics: const ClampingScrollPhysics(),
+                                      itemCount: list.length,
+                                      separatorBuilder: (_, __) =>
+                                          const SizedBox(height: 8),
+                                      itemBuilder: (ctx, i) {
+                                        final p = list[i];
+                                        final selected = p.id == currentId;
+                                        return InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                          onTap: () =>
+                                              Navigator.of(ctx).pop(p.id),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(14),
+                                            decoration: BoxDecoration(
+                                              color: selected
+                                                  ? ThemeConstants.accent
+                                                      .withValues(alpha: 0.14)
+                                                  : ThemeConstants.surface,
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: selected
+                                                    ? ThemeConstants.accent
+                                                    : ThemeConstants.border,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  selected
+                                                      ? Icons
+                                                          .check_circle_rounded
+                                                      : Icons.science_outlined,
+                                                  size: 18,
+                                                  color: selected
+                                                      ? ThemeConstants.accent
+                                                      : ThemeConstants
+                                                          .textTertiary,
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        p.templateName,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          color: ThemeConstants
+                                                              .textPrimary,
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                        ),
+                                                      ),
+                                                      if (p.description
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Text(
+                                                          p.description,
+                                                          maxLines: 2,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: TextStyle(
+                                                            color: ThemeConstants
+                                                                .textSecondary,
+                                                            fontSize: 12,
+                                                            height: 1.25,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      if ((p.goalTagName
+                                                                  ?.isNotEmpty ??
+                                                              false) ||
+                                                          p.totalDuration !=
+                                                              null) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Text(
+                                                          [
+                                                            if (p.goalTagName
+                                                                    ?.isNotEmpty ??
+                                                                false)
+                                                              p.goalTagName!,
+                                                            if (p.totalDuration !=
+                                                                null)
+                                                              p.totalDuration!
+                                                                  .formatted,
+                                                          ].join(' - '),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: TextStyle(
+                                                            color: ThemeConstants
+                                                                .textSecondary,
+                                                            fontSize: 12,
+                                                            height: 1.25,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -390,7 +555,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                     16 + bottomInset + bottomBarHeight + 12,
                   ),
                   children: [
-                    const Text(
+                    Text(
                       'Configure each device individually',
                       style: TextStyle(
                         color: ThemeConstants.textSecondary,
@@ -403,11 +568,8 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                       final isIncluded = _runDeviceIds.contains(deviceId);
                       final selectedProtocolId =
                           _protocolIdByDeviceId[deviceId];
-                      final selectedProtocol = selectedProtocolId == null
-                          ? null
-                          : protocols.firstWhere(
-                              (p) => p.id == selectedProtocolId,
-                            );
+                      final selectedProtocol =
+                          _selectedProtocolByDeviceId[deviceId];
                       final settings = _settingsByDeviceId[deviceId];
                       final showAdvanced =
                           _showAdvancedByDeviceId[deviceId] ?? false;
@@ -430,7 +592,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                     _labelFor(deviceId),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: ThemeConstants.textPrimary,
                                       fontWeight: FontWeight.w700,
                                       fontSize: 13,
@@ -441,7 +603,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Text(
+                                    Text(
                                       'Use',
                                       style: TextStyle(
                                         color: ThemeConstants.textSecondary,
@@ -491,17 +653,29 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                         currentId: selectedProtocolId,
                                       );
                                       if (!mounted || picked == null) return;
-                                      final p = protocols
-                                          .firstWhere((x) => x.id == picked);
-                                      setState(() {
-                                        _protocolIdByDeviceId[deviceId] =
-                                            picked;
-                                        _settingsByDeviceId[deviceId] =
-                                            _advancedDefaultsFromProtocol(p);
-                                        // Default advanced panel to collapsed on protocol change.
-                                        _showAdvancedByDeviceId[deviceId] =
-                                            false;
-                                      });
+                                      try {
+                                        final p = await ref.read(
+                                          protocolDetailProvider(picked).future,
+                                        );
+                                        if (!mounted) return;
+                                        setState(() {
+                                          _protocolIdByDeviceId[deviceId] =
+                                              picked;
+                                          _selectedProtocolByDeviceId[
+                                              deviceId] = p;
+                                          _settingsByDeviceId[deviceId] =
+                                              _advancedDefaultsFromProtocol(p);
+                                          // Default advanced panel to collapsed on protocol change.
+                                          _showAdvancedByDeviceId[deviceId] =
+                                              false;
+                                        });
+                                      } catch (e) {
+                                        if (!context.mounted) return;
+                                        context.showSnackBar(
+                                          'Failed to load protocol details: $e',
+                                          isError: true,
+                                        );
+                                      }
                                     },
                               child: Container(
                                 width: double.infinity,
@@ -535,7 +709,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                       ),
                                     ),
                                     const SizedBox(width: 8),
-                                    const Icon(
+                                    Icon(
                                       Icons.keyboard_arrow_down_rounded,
                                       color: ThemeConstants.textTertiary,
                                     ),
@@ -548,7 +722,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                             // Advanced Settings collapsible header (same pattern as protocol detail).
                             if (!isIncluded) ...[
                               const SizedBox(height: 4),
-                              const Text(
+                              Text(
                                 'This device will not be used in this session.',
                                 style: TextStyle(
                                     color: ThemeConstants.textSecondary),
@@ -556,7 +730,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                             ] else if (selectedProtocol == null ||
                                 settings == null) ...[
                               const SizedBox(height: 4),
-                              const Text(
+                              Text(
                                 'Select a protocol to edit advanced settings.',
                                 style: TextStyle(
                                     color: ThemeConstants.textSecondary),
@@ -572,13 +746,13 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 },
                                 child: Row(
                                   children: [
-                                    const Icon(
+                                    Icon(
                                       Icons.settings_rounded,
                                       color: ThemeConstants.accent,
                                       size: 20,
                                     ),
                                     const SizedBox(width: 10),
-                                    const Expanded(
+                                    Expanded(
                                       child: Text(
                                         'Advanced Settings',
                                         style: TextStyle(
@@ -785,12 +959,8 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               }
                             },
                       child: _starting
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Start Session'),
+                          ? const _StartSessionButtonSkeleton()
+                          : Text('Start Session'),
                     ),
                   ),
                 ),
@@ -803,10 +973,255 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   }
 }
 
+class _SessionSetupSkeleton extends StatelessWidget {
+  const _SessionSetupSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+      children: const [
+        _SessionSetupHeaderSkeleton(),
+        SizedBox(height: 16),
+        _SessionSetupCardSkeleton(),
+        SizedBox(height: 14),
+        _SessionSetupCardSkeleton(),
+        SizedBox(height: 14),
+        _SessionSetupCardSkeleton(shorter: true),
+      ],
+    );
+  }
+}
+
+class _SessionSetupHeaderSkeleton extends StatelessWidget {
+  const _SessionSetupHeaderSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: const [
+        ShimmerBox(width: 170, height: 24, borderRadius: 10),
+        SizedBox(height: 10),
+        ShimmerBox(width: 250, height: 14, borderRadius: 8),
+      ],
+    );
+  }
+}
+
+class _SessionSetupCardSkeleton extends StatelessWidget {
+  final bool shorter;
+
+  const _SessionSetupCardSkeleton({this.shorter = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final cardColor = Theme.of(context).brightness == Brightness.dark
+        ? ThemeConstants.surface
+        : Colors.white;
+
+    return GradientCard(
+      gradientColors: [cardColor, cardColor],
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              ShimmerBox(width: 42, height: 42, borderRadius: 14),
+              SizedBox(width: 12),
+              Expanded(
+                child: ShimmerBox(width: double.infinity, height: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const ShimmerBox(width: 110, height: 12),
+          const SizedBox(height: 8),
+          const ShimmerBox(width: double.infinity, height: 48, borderRadius: 12),
+          const SizedBox(height: 16),
+          const ShimmerBox(width: 140, height: 12),
+          const SizedBox(height: 10),
+          Row(
+            children: const [
+              Expanded(child: ShimmerBox(width: double.infinity, height: 44)),
+              SizedBox(width: 10),
+              Expanded(child: ShimmerBox(width: double.infinity, height: 44)),
+            ],
+          ),
+          if (!shorter) ...const [
+            SizedBox(height: 16),
+            ShimmerBox(width: double.infinity, height: 110, borderRadius: 14),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GoalFilterChipSkeletonList extends StatelessWidget {
+  const _GoalFilterChipSkeletonList();
+
+  @override
+  Widget build(BuildContext context) {
+    const widths = [52.0, 88.0, 74.0, 96.0];
+
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      physics: const ClampingScrollPhysics(),
+      itemCount: widths.length,
+      separatorBuilder: (_, __) => const SizedBox(width: 8),
+      itemBuilder: (context, index) => ShimmerBox(
+        width: widths[index],
+        height: 38,
+        borderRadius: 999,
+      ),
+    );
+  }
+}
+
+class _ProtocolPickerListSkeleton extends StatelessWidget {
+  const _ProtocolPickerListSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      itemCount: 4,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) => const _ProtocolPickerTileSkeleton(),
+    );
+  }
+}
+
+class _ProtocolPickerTileSkeleton extends StatelessWidget {
+  const _ProtocolPickerTileSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surfaceVariant.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: ThemeConstants.border),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ShimmerBox(width: 160, height: 16, borderRadius: 8),
+          SizedBox(height: 10),
+          ShimmerBox(width: double.infinity, height: 12, borderRadius: 8),
+          SizedBox(height: 8),
+          ShimmerBox(width: 220, height: 12, borderRadius: 8),
+          SizedBox(height: 12),
+          Row(
+            children: [
+              ShimmerBox(width: 92, height: 28, borderRadius: 999),
+              SizedBox(width: 8),
+              ShimmerBox(width: 84, height: 28, borderRadius: 999),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GoalFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _GoalFilterChip({
+    required this.label,
+    required this.selected,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : ThemeConstants.surfaceVariant.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color:
+                selected ? ThemeConstants.accent : ThemeConstants.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 final _presetsProvider = FutureProvider<List<Preset>>((ref) async {
   final repo = ref.read(presetRepositoryProvider);
   return repo.getPresets();
 });
+
+class _PresetSlotsSkeleton extends StatelessWidget {
+  const _PresetSlotsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surfaceVariant.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.border),
+      ),
+      child: Row(
+        children: List.generate(3, (index) {
+          return Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(right: index == 2 ? 0 : 8),
+              child: const ShimmerBox(
+                width: double.infinity,
+                height: 40,
+                borderRadius: 12,
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _StartSessionButtonSkeleton extends StatelessWidget {
+  const _StartSessionButtonSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        ShimmerBox(width: 18, height: 18, borderRadius: 999),
+        SizedBox(width: 10),
+        ShimmerBox(width: 76, height: 12, borderRadius: 8),
+      ],
+    );
+  }
+}
 
 class _AdvancedSettingsPanel extends ConsumerWidget {
   final String protocolId;
@@ -856,7 +1271,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             children: [
               Text(
                 label.toUpperCase(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                   color: ThemeConstants.textSecondary,
@@ -902,7 +1317,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             Expanded(
               child: Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   color: ThemeConstants.textPrimary,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -934,7 +1349,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             children: [
               Text(
                 label.toUpperCase(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
                   color: ThemeConstants.textSecondary,
@@ -968,7 +1383,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
+        Text(
           'VIBRATION MODE',
           style: TextStyle(
             fontSize: 11,
@@ -1079,7 +1494,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         ],
         const SizedBox(height: 10),
         if (settings.vibrationMode == 'Single') ...[
-          const Text(
+          Text(
             'FREQUENCY (HZ)',
             style: TextStyle(
               fontSize: 11,
@@ -1099,34 +1514,34 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               FilteringTextInputFormatter.digitsOnly,
               LengthLimitingTextInputFormatter(3),
             ],
-            style: const TextStyle(
+            style: TextStyle(
               color: ThemeConstants.textPrimary,
               fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
             decoration: InputDecoration(
               hintText: 'Enter frequency (10-230)',
-              hintStyle: const TextStyle(color: ThemeConstants.textTertiary),
+              hintStyle: TextStyle(color: ThemeConstants.textTertiary),
               filled: true,
               fillColor: ThemeConstants.surfaceVariant,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               suffixText: 'Hz',
-              suffixStyle: const TextStyle(
+              suffixStyle: TextStyle(
                 color: ThemeConstants.textSecondary,
                 fontWeight: FontWeight.w700,
               ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: ThemeConstants.border),
+                borderSide: BorderSide(color: ThemeConstants.border),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: ThemeConstants.border),
+                borderSide: BorderSide(color: ThemeConstants.border),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: ThemeConstants.accent),
+                borderSide: BorderSide(color: ThemeConstants.accent),
               ),
             ),
             onChanged: (value) {
@@ -1149,7 +1564,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
 
         const SizedBox(height: 8),
         if (settings.vibrationMode == 'Off') ...[
-          const Text(
+          Text(
             'Vibration is Off.',
             style: TextStyle(color: ThemeConstants.textSecondary),
           ),
@@ -1175,7 +1590,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         ),
 
         const SizedBox(height: 10),
-        const Text(
+        Text(
           'Start Delay (seconds)',
           style: TextStyle(
             fontSize: 11,
@@ -1193,34 +1608,34 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             FilteringTextInputFormatter.digitsOnly,
             LengthLimitingTextInputFormatter(2),
           ],
-          style: const TextStyle(
+          style: TextStyle(
             color: ThemeConstants.textPrimary,
             fontSize: 13,
             fontWeight: FontWeight.w700,
           ),
           decoration: InputDecoration(
             hintText: 'Enter seconds (0-60)',
-            hintStyle: const TextStyle(color: ThemeConstants.textTertiary),
+            hintStyle: TextStyle(color: ThemeConstants.textTertiary),
             filled: true,
             fillColor: ThemeConstants.surfaceVariant,
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             suffixText: 'sec',
-            suffixStyle: const TextStyle(
+            suffixStyle: TextStyle(
               color: ThemeConstants.textSecondary,
               fontWeight: FontWeight.w700,
             ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: ThemeConstants.border),
+              borderSide: BorderSide(color: ThemeConstants.border),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: ThemeConstants.border),
+              borderSide: BorderSide(color: ThemeConstants.border),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: ThemeConstants.accent),
+              borderSide: BorderSide(color: ThemeConstants.accent),
             ),
           ),
           onChanged: (value) {
@@ -1234,7 +1649,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
 
         if (isMulti && settings.startDelay > 0) ...[
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'Delay which device?',
             style: TextStyle(
               fontSize: 11,
@@ -1324,7 +1739,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           onTap: onToggleSavePreset,
           child: Row(
             children: [
-              const Icon(Icons.save_rounded,
+              Icon(Icons.save_rounded,
                   size: 16, color: ThemeConstants.textSecondary),
               const SizedBox(width: 8),
               Text(
@@ -1380,8 +1795,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
                         child: OutlinedButton(
                           style: OutlinedButton.styleFrom(
                             foregroundColor: ThemeConstants.textPrimary,
-                            side:
-                                const BorderSide(color: ThemeConstants.border),
+                            side: BorderSide(color: ThemeConstants.border),
                           ),
                           onPressed: selectedDeviceIds.isEmpty
                               ? null
@@ -1396,11 +1810,11 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             },
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 10),
-              child: HwLoading(),
+              child: _PresetSlotsSkeleton(),
             ),
             error: (e, _) => Text(
               'Failed to load presets: $e',
-              style: const TextStyle(color: ThemeConstants.error, fontSize: 12),
+              style: TextStyle(color: ThemeConstants.error, fontSize: 12),
             ),
           ),
         ],

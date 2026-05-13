@@ -70,8 +70,8 @@ class SessionRepository {
           id: session.id,
           protocolId: session.protocolId,
           protocolName: session.protocolName,
-          deviceIds: (jsonDecode(session.deviceIds) as List<dynamic>)
-              .cast<String>(),
+          deviceIds:
+              (jsonDecode(session.deviceIds) as List<dynamic>).cast<String>(),
           totalDurationSeconds: session.durationSeconds,
           elapsedSeconds: session.elapsedSeconds,
           discomfortBefore: session.discomfortBefore,
