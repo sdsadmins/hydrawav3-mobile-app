@@ -46,7 +46,7 @@ class ThemeConstants {
     background: Color(0xFF0D1A2D),
     surface: Color(0xFF243756),
     surfaceVariant: Color(0xFF172845),
-    accent: Color(0xFFA9763F),
+    accent: Color(0xFFC79E84),
     accentLight: Color(0xFF2D4470),
     textPrimary: Color(0xFFF7F4EE),
     textSecondary: Color(0xFFB3BED4),
