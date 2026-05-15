@@ -156,14 +156,15 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                         ),
 
                         /// 🔥 RIGHT SIDE ICONS
-                        Row(
-                          children: [
-                            _HeaderButton(
-                              icon: Icons.smart_toy_outlined,
-                              onTap: () => context.push(RoutePaths.chat),
-                            ),
-                          ],
-                        ),
+                        // Commented out AI assistance button per request.
+                        // Row(
+                        //   children: [
+                        //     _HeaderButton(
+                        //       icon: Icons.smart_toy_outlined,
+                        //       onTap: () => context.push(RoutePaths.chat),
+                        //     ),
+                        //   ],
+                        // ),
                       ],
                     ),
                   ),
@@ -314,7 +315,10 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                     final visibleProtocols = protocols
                         .where((protocol) =>
                             filteredProtocolIds.contains(protocol.id))
-                        .toList();
+                        .toList()
+                      ..sort((a, b) => a.templateName
+                          .toLowerCase()
+                          .compareTo(b.templateName.toLowerCase()));
 
                     if (visibleProtocols.isEmpty) {
                       return const SliverFillRemaining(
@@ -330,7 +334,12 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                 );
               }
 
-              return _ProtocolList(protocols: protocols);
+              final sortedProtocols = [...protocols]..sort((a, b) => a
+                  .templateName
+                  .toLowerCase()
+                  .compareTo(b.templateName.toLowerCase()));
+
+              return _ProtocolList(protocols: sortedProtocols);
             },
           ),
         ],

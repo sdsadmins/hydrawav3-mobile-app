@@ -374,7 +374,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                   ),
                                   data: (filteredProtocols) {
                                     final list = query.trim().isEmpty
-                                        ? filteredProtocols
+                                        ? [...filteredProtocols]
                                         : filteredProtocols
                                             .where((p) =>
                                                 p.templateName
@@ -390,6 +390,11 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                                     .contains(
                                                         query.toLowerCase()))
                                             .toList();
+
+                                    list.sort((a, b) => a.templateName
+                                        .toLowerCase()
+                                        .compareTo(
+                                            b.templateName.toLowerCase()));
 
                                     if (list.isEmpty) {
                                       return Center(
@@ -1039,7 +1044,8 @@ class _SessionSetupCardSkeleton extends StatelessWidget {
           const SizedBox(height: 16),
           const ShimmerBox(width: 110, height: 12),
           const SizedBox(height: 8),
-          const ShimmerBox(width: double.infinity, height: 48, borderRadius: 12),
+          const ShimmerBox(
+              width: double.infinity, height: 48, borderRadius: 12),
           const SizedBox(height: 16),
           const ShimmerBox(width: 140, height: 12),
           const SizedBox(height: 10),

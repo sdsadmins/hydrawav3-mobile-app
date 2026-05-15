@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +28,8 @@ final _bleConnectingIdsProvider = StateProvider<Set<String>>((ref) {
 
 final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
 
+final _autoConnectEnabledProvider = StateProvider<bool>((ref) => false);
+
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
@@ -36,13 +39,149 @@ class DeviceListScreen extends ConsumerWidget {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final scanner = ref.read(bleScannerProvider);
       scanner.initializeAutoScan();
+
+      scanner.onDeviceFound = (result) async {
+        if (!ref.read(_autoConnectEnabledProvider)) return;
+
+        final id = result.device.remoteId.str;
+        final alreadyConnecting =
+            ref.read(_bleConnectingIdsProvider).contains(id);
+        if (alreadyConnecting) return;
+
+        final state = ref.read(
+          bleDeviceStatusProvider(id),
+        );
+        if (state == BleConnectionStatus.connected) return;
+
+        final expectedUuid = BleConstants.preferredServiceUuid;
+        if (expectedUuid == null) return;
+
+        final targetUuid = BleConstants.normalizeUuid(expectedUuid);
+        final matches = result.advertisementData.serviceUuids.any(
+          (u) => BleConstants.normalizeUuid(u.str) == targetUuid,
+        );
+        if (!matches) return;
+
+        ref.read(_bleConnectingIdsProvider.notifier).state = {
+          ...ref.read(_bleConnectingIdsProvider),
+          id,
+        };
+
+        try {
+          final ok = await ref
+              .read(bleRepositoryProvider)
+              .connectDevice(result.device);
+
+          if (ok) {
+            ref.read(sessionTargetProvider.notifier).ensureSelected(id);
+          }
+        } finally {
+          final current = ref.read(_bleConnectingIdsProvider);
+          ref.read(_bleConnectingIdsProvider.notifier).state = {
+            ...current,
+          }..remove(id);
+        }
+      };
     });
 
     final pairedDevices = ref.watch(pairedDevicesProvider);
     final target = ref.watch(sessionTargetProvider);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
+    final bleScanResultsAsync = ref.watch(bleScanResultsProvider);
     final connectingIds = ref.watch(_bleConnectingIdsProvider);
     final hydrawaveOnly = ref.watch(_hydrawaveOnlyProvider);
+    final autoConnectEnabled = ref.watch(_autoConnectEnabledProvider);
+    final isIos = defaultTargetPlatform == TargetPlatform.iOS;
+
+    Future<void> _connectAllHydrawaveDevices() async {
+      if (!hydrawaveOnly) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Enable the Hydrawav3 filter before auto-connecting devices.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final scanResults = bleScanResultsAsync.maybeWhen(
+        data: (list) => list,
+        orElse: () => const <ScanResult>[],
+      );
+
+      final expectedUuid = BleConstants.preferredServiceUuid;
+      if (expectedUuid == null || expectedUuid.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Hydrawav3 service UUID is not configured.'),
+          ),
+        );
+        return;
+      }
+
+      final targetUuid = BleConstants.normalizeUuid(expectedUuid);
+      final filtered = scanResults.where((r) {
+        final id = r.device.remoteId.str;
+        if (connectingIds.contains(id)) return false;
+        final advertised = r.advertisementData.serviceUuids;
+        return advertised.any(
+          (u) => BleConstants.normalizeUuid(u.str) == targetUuid,
+        );
+      }).toList();
+
+      if (filtered.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No Hydrawav3 devices available to auto-connect.'),
+          ),
+        );
+        return;
+      }
+
+      final messenger = ScaffoldMessenger.of(context);
+      final connected = <String>[];
+      final failed = <String>[];
+
+      for (final result in filtered) {
+        final id = result.device.remoteId.str;
+        final name = result.device.platformName.isNotEmpty
+            ? result.device.platformName
+            : id;
+
+        ref.read(_bleConnectingIdsProvider.notifier).state = {
+          ...ref.read(_bleConnectingIdsProvider),
+          id,
+        };
+
+        try {
+          final ok = await ref.read(bleRepositoryProvider).connectDevice(
+                result.device,
+              );
+          if (ok) {
+            connected.add(name);
+            await Future<void>.delayed(const Duration(milliseconds: 150));
+            ref.read(sessionTargetProvider.notifier).ensureSelected(id);
+          } else {
+            failed.add(name);
+          }
+        } finally {
+          final current = ref.read(_bleConnectingIdsProvider);
+          ref.read(_bleConnectingIdsProvider.notifier).state = {
+            ...current,
+          }..remove(id);
+        }
+      }
+
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+          'Auto-connect complete: ${connected.length} connected'
+          '${failed.isNotEmpty ? ', ${failed.length} failed' : ''}.',
+        ),
+      ));
+    }
+
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       body: CustomScrollView(
@@ -197,7 +336,7 @@ class DeviceListScreen extends ConsumerWidget {
                   if (target.transport == SessionTransport.ble) ...[
                     Container(
                       height: 34,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
                       decoration: BoxDecoration(
                         color: ThemeConstants.surface,
                         borderRadius: BorderRadius.circular(10),
@@ -214,7 +353,7 @@ class DeviceListScreen extends ConsumerWidget {
                                 ? ThemeConstants.accent
                                 : ThemeConstants.textTertiary,
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                           Text(
                             'Hydrawav3',
                             style: TextStyle(
@@ -225,7 +364,7 @@ class DeviceListScreen extends ConsumerWidget {
                                   : ThemeConstants.textSecondary,
                             ),
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                           SizedBox(
                             height: 22,
                             child: Center(
@@ -246,7 +385,59 @@ class DeviceListScreen extends ConsumerWidget {
                         ],
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 6),
+                    if (hydrawaveOnly) ...[
+                      GestureDetector(
+                        onTap: () async {
+                          ref.read(_autoConnectEnabledProvider.notifier).state =
+                              !autoConnectEnabled;
+                          if (!autoConnectEnabled) {
+                            await _connectAllHydrawaveDevices();
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: autoConnectEnabled
+                                ? ThemeConstants.accent
+                                : ThemeConstants.surface,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: autoConnectEnabled
+                                  ? ThemeConstants.accent
+                                  : ThemeConstants.border,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.usb_rounded,
+                                size: 16,
+                                color: autoConnectEnabled
+                                    ? ThemeConstants.textPrimary
+                                    : ThemeConstants.textSecondary,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                autoConnectEnabled ? 'ON' : 'Auto-connect',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: autoConnectEnabled
+                                      ? ThemeConstants.textPrimary
+                                      : ThemeConstants.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                   ],
                   _ScanButton(
                     visible: target.transport == SessionTransport.ble,
@@ -442,16 +633,12 @@ class DeviceListScreen extends ConsumerWidget {
               data: (devices) {
                 final scanResults = ref.watch(bleScanResultsProvider);
 
-                final connectedDevices = scanResults.when(
-                  data: (list) => list.where((r) {
-                    final state = ref.watch(
-                      bleDeviceStatusProvider(r.device.remoteId.str),
-                    );
-                    return state == BleConnectionStatus.connected;
-                  }).toList(),
-                  loading: () => [],
-                  error: (_, __) => [],
-                );
+                final connectedDevices = devices.where((d) {
+                  final state = ref.watch(
+                    bleDeviceStatusProvider(d.id),
+                  );
+                  return state == BleConnectionStatus.connected;
+                }).toList();
 
                 return SliverPadding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -461,25 +648,23 @@ class DeviceListScreen extends ConsumerWidget {
                       if (connectedDevices.isNotEmpty) ...[
                         const SectionHeader(title: 'Connected')
                       ],
-                      ...connectedDevices.map((r) {
+                      ...connectedDevices.map((d) {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: _ConnectedGradientCard(
                             typeIcon: Icons.bluetooth_rounded,
                             typeLabel: 'BLE',
-                            name: r.device.platformName.isNotEmpty
-                                ? r.device.platformName
-                                : 'Unknown Device',
-                            subtitle: 'MAC: ${r.device.remoteId.str}',
+                            name: d.name,
+                            subtitle: 'MAC: ${d.id}',
                             batteryText: '--',
                             primaryActionLabel: 'Disconnect',
                             onPrimaryAction: () async {
                               await ref
                                   .read(bleRepositoryProvider)
-                                  .disconnectDevice(r.device.remoteId.str);
+                                  .disconnectDevice(d.id);
                               ref
                                   .read(sessionTargetProvider.notifier)
-                                  .ensureDeselected(r.device.remoteId.str);
+                                  .ensureDeselected(d.id);
                             },
                           ),
                         );
@@ -497,9 +682,8 @@ class DeviceListScreen extends ConsumerWidget {
                           for (final r in sorted) {
                             byId.putIfAbsent(r.device.remoteId.str, () => r);
                           }
-                          final connectedIdSet = connectedDevices
-                              .map((r) => r.device.remoteId.str)
-                              .toSet();
+                          final connectedIdSet =
+                              connectedDevices.map((d) => d.id).toSet();
                           final deduped = byId.values
                               .where((r) => !connectedIdSet
                                   .contains(r.device.remoteId.str))
@@ -553,7 +737,7 @@ class DeviceListScreen extends ConsumerWidget {
                                   child: _AvailableDeviceRow(
                                     icon: Icons.bluetooth_rounded,
                                     name: name,
-                                    idText: id,
+                                    idText: isIos ? '' : id,
                                     buttonLabel: connectingIds.contains(id)
                                         ? 'Connecting...'
                                         : 'Connect',
@@ -748,7 +932,7 @@ class _ScanButton extends ConsumerWidget {
     return GestureDetector(
       onTap: scanning ? null : onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           color: ThemeConstants.surface,
           borderRadius: BorderRadius.circular(10),
@@ -770,7 +954,7 @@ class _ScanButton extends ConsumerWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              scanning ? 'Scanning...' : 'Scan for Devices',
+              scanning ? 'Scanning...' : 'Scan',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -894,15 +1078,19 @@ class _ConnectedGradientCard extends StatelessWidget {
                     color: ThemeConstants.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: ThemeConstants.textSecondary,
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: ThemeConstants.textSecondary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 14),
+                  const SizedBox(height: 14),
+                ] else ...[
+                  const SizedBox(height: 14),
+                ],
                 Row(
                   children: [
                     Expanded(
