@@ -60,7 +60,8 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       // ✅ Logged in + org selected
       if (isAuth && hasSelectedOrg && isAuthRoute) {
-        return RoutePaths.protocols;
+        // Redirect authenticated users to the device list first.
+        return RoutePaths.devices;
       }
 
       return null;

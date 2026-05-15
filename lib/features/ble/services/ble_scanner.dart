@@ -30,6 +30,7 @@ class BleScanner {
   final _resultsController = StreamController<List<ScanResult>>.broadcast();
   bool _isScanning = false;
   bool _autoScanEnabled = true;
+  Function(ScanResult result)? onDeviceFound;
 
   Stream<List<ScanResult>> get scanResults => _resultsController.stream;
   bool get isScanning => _isScanning;
@@ -180,6 +181,9 @@ class BleScanner {
           }
 
           _resultsController.add(results);
+          for (final result in results) {
+            onDeviceFound?.call(result);
+          }
         },
         onError: (error) {
           appLogger.e('BLE: Scan error: $error');

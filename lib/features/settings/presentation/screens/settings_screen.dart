@@ -402,10 +402,7 @@ class SettingsScreen extends ConsumerWidget {
                       _Item(Icons.lock_outline_rounded, 'Change Password',
                           onTap: () => context.push(RoutePaths.changePassword)),
                       _Item(Icons.fingerprint_rounded, 'Biometric Login',
-                          trailing: Switch.adaptive(
-                              value: false,
-                              onChanged: (_) {},
-                              activeColor: ThemeConstants.accent)),
+                          trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -430,7 +427,8 @@ class SettingsScreen extends ConsumerWidget {
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
                           onTap: () => context.push(RoutePaths.deviceRegister)),
-                      _Item(Icons.verified_user_outlined, 'Warranty Status'),
+                      _Item(Icons.verified_user_outlined, 'Warranty Status',
+                          trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -438,12 +436,14 @@ class SettingsScreen extends ConsumerWidget {
                 AnimatedEntrance(
                     index: 4,
                     child: _SettingsGroup(title: 'GENERAL', items: [
-                      _Item(Icons.notifications_outlined, 'Notifications'),
+                      _Item(Icons.notifications_outlined, 'Notifications',
+                          trailing: _comingSoonBadge()),
                       _Item(Icons.shield_outlined, 'Privacy & Security'),
                       _Item(Icons.help_outline_rounded, 'Help & Support',
                           onTap: () => launchUrl(
                               Uri.parse('https://hydrawav3.app/help'))),
-                      _Item(Icons.payment_outlined, 'Payment Methods'),
+                      _Item(Icons.payment_outlined, 'Payment Methods',
+                          trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -701,4 +701,26 @@ class _Item extends StatelessWidget {
       ),
     );
   }
+}
+
+Widget _comingSoonBadge() {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration: BoxDecoration(
+      color: ThemeConstants.accent.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: ThemeConstants.accent.withValues(alpha: 0.3),
+        width: 0.5,
+      ),
+    ),
+    child: Text(
+      'Coming Soon',
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        color: ThemeConstants.accent,
+      ),
+    ),
+  );
 }
