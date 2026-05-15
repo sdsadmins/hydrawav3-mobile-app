@@ -655,7 +655,8 @@ class DeviceListScreen extends ConsumerWidget {
                             typeIcon: Icons.bluetooth_rounded,
                             typeLabel: 'BLE',
                             name: d.name,
-                            subtitle: 'MAC: ${d.id}',
+                            subtitle:
+                                isIos ? 'Connected Device' : 'MAC: ${d.id}',
                             batteryText: '--',
                             primaryActionLabel: 'Disconnect',
                             onPrimaryAction: () async {
