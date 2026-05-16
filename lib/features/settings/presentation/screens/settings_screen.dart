@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
@@ -389,10 +388,6 @@ class SettingsScreen extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-                // Subscription
-                AnimatedEntrance(index: 0, child: _SubscriptionCard()),
-                const SizedBox(height: 20),
-
                 // Account
                 AnimatedEntrance(
                     index: 1,
@@ -408,7 +403,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // Appearance
                 AnimatedEntrance(
-                    index: 2,
+                    index: 1,
                     child: _SettingsGroup(title: 'APPEARANCE', items: [
                       _Item(Icons.dark_mode_outlined, 'Dark Mode',
                           trailing: Switch.adaptive(
@@ -422,7 +417,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // Device
                 AnimatedEntrance(
-                    index: 3,
+                    index: 2,
                     child: _SettingsGroup(title: 'DEVICE', items: [
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
@@ -434,7 +429,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // General
                 AnimatedEntrance(
-                    index: 4,
+                    index: 3,
                     child: _SettingsGroup(title: 'GENERAL', items: [
                       _Item(Icons.notifications_outlined, 'Notifications',
                           trailing: _comingSoonBadge()),
@@ -449,7 +444,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 // Legal
                 AnimatedEntrance(
-                    index: 5,
+                    index: 4,
                     child: _SettingsGroup(title: 'LEGAL', items: [
                       _Item(Icons.privacy_tip_outlined, 'Privacy Policy',
                           onTap: () => launchUrl(
@@ -463,7 +458,7 @@ class SettingsScreen extends ConsumerWidget {
 
                 /// ✅ SWITCH ORGANIZATION (NEW SECTION)
                 AnimatedEntrance(
-                  index: 6,
+                  index: 5,
                   child: _SettingsGroup(
                     title: 'ORGANIZATION',
                     items: [
@@ -510,7 +505,7 @@ class SettingsScreen extends ConsumerWidget {
                 const SizedBox(height: 20),
                 // Logout
                 AnimatedEntrance(
-                    index: 7,
+                    index: 6,
                     child: Container(
                       decoration: BoxDecoration(
                         color: Colors.red.withValues(alpha: 0.08),
@@ -557,18 +552,8 @@ class SettingsScreen extends ConsumerWidget {
                     )),
                 const SizedBox(height: 16),
 
-                // Version
-                FutureBuilder<PackageInfo>(
-                  future: PackageInfo.fromPlatform(),
-                  builder: (c, s) => Center(
-                      child: Text(
-                    s.data != null
-                        ? 'Version ${s.data!.version} (Build ${s.data!.buildNumber})'
-                        : '',
-                    style: TextStyle(
-                        fontSize: 12, color: ThemeConstants.textTertiary),
-                  )),
-                ),
+                // About
+                AnimatedEntrance(index: 7, child: _AboutSection()),
               ]),
             ),
           ),
@@ -578,50 +563,130 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-class _SubscriptionCard extends StatelessWidget {
+class _AboutSection extends StatelessWidget {
+  const _AboutSection();
+
   @override
   Widget build(BuildContext context) {
-    return GradientCard(
-      showGlow: true,
-      gradientColors: [ThemeConstants.surface],
-      padding: const EdgeInsets.all(18),
-      child: Row(
-        children: [
-          const GlowIconBox(icon: Icons.workspace_premium_rounded),
-          const SizedBox(width: 14),
-          Expanded(
-              child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Free Tier',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: ThemeConstants.textPrimary)),
-              SizedBox(height: 2),
-              Text('Upgrade for advanced features',
-                  style: TextStyle(
-                      fontSize: 13, color: ThemeConstants.textSecondary)),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title: 'ABOUT'),
+        Container(
+          decoration: BoxDecoration(
+            color: ThemeConstants.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: ThemeConstants.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 6,
+                offset: const Offset(0, 1),
+              ),
             ],
-          )),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: ThemeConstants.accent,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                    color: ThemeConstants.accent.withValues(alpha: 0.25),
-                    blurRadius: 8)
-              ],
-            ),
-            child: Text('Upgrade',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white)),
           ),
-        ],
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _showReleaseNotes(context),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline_rounded,
+                      color: ThemeConstants.accent, size: 20),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      '${AppConstants.appVersion} • Build ${AppConstants.buildNumber}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: ThemeConstants.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded,
+                      color: ThemeConstants.textTertiary, size: 18),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showReleaseNotes(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 8),
+              decoration: BoxDecoration(
+                color: ThemeConstants.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Release Notes',
+                      style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                          color: ThemeConstants.textPrimary)),
+                  const SizedBox(height: 6),
+                  Text('Version ${AppConstants.appVersion}',
+                      style: TextStyle(
+                          fontSize: 14, color: ThemeConstants.textSecondary)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text(AppConstants.releaseNotes,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: ThemeConstants.textPrimary,
+                        height: 1.6)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: ThemeConstants.accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: Text('Close'),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

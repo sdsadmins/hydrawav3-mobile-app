@@ -98,6 +98,19 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     }
   }
 
+  bool _isLiveStatus(SessionStatus status) {
+    return status == SessionStatus.running || status == SessionStatus.paused;
+  }
+
+  bool _hasLiveDeviceStatuses(Map<String, SessionStatus> deviceStatuses) {
+    return deviceStatuses.values.any(_isLiveStatus);
+  }
+
+  bool _shouldKeepSession(ActiveSession session) {
+    return _isLiveStatus(session.status) ||
+        _hasLiveDeviceStatuses(session.deviceStatuses);
+  }
+
   Future<String> createSession({
     String? sessionId,
     required String protocolId,
@@ -143,6 +156,13 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     if (sessionIndex == -1) return;
 
     final updatedSession = state[sessionIndex].copyWith(status: status);
+    if (!_shouldKeepSession(updatedSession)) {
+      state = state.where((s) => s.id != sessionId).toList();
+      await _saveActiveSessions();
+      appLogger.i('Removed terminal active session: $sessionId');
+      return;
+    }
+
     state = [
       ...state.sublist(0, sessionIndex),
       updatedSession,
@@ -158,6 +178,13 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
 
     final updatedSession =
         state[sessionIndex].copyWith(deviceStatuses: deviceStatuses);
+    if (!_shouldKeepSession(updatedSession)) {
+      state = state.where((s) => s.id != sessionId).toList();
+      await _saveActiveSessions();
+      appLogger.i('Removed terminal active session: $sessionId');
+      return;
+    }
+
     state = [
       ...state.sublist(0, sessionIndex),
       updatedSession,

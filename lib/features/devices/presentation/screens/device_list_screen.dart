@@ -423,7 +423,9 @@ class DeviceListScreen extends ConsumerWidget {
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                autoConnectEnabled ? 'ON' : 'Auto-connect',
+                                autoConnectEnabled
+                                    ? 'Auto-connect'
+                                    : 'Auto-connect',
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,

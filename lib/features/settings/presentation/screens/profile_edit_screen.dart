@@ -95,7 +95,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             // ✅ Name
             TextFormField(
               controller: nameController,
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Name',
                 prefixIcon: Icon(Icons.person_outline_rounded,
@@ -108,7 +108,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             TextFormField(
               controller: emailController,
               readOnly: true, // Make email read-only
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Email',
                 prefixIcon: Icon(Icons.email_outlined,
@@ -121,7 +121,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             // ✅ Phone
             TextFormField(
               controller: phoneController,
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Phone',
                 prefixIcon: Icon(Icons.phone_outlined,
@@ -134,7 +134,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             // ✅ Country
             TextFormField(
               controller: countryController,
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Country',
               ),
@@ -144,7 +144,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             // ✅ State
             TextFormField(
               controller: stateController,
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'State',
               ),
@@ -155,7 +155,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             TextFormField(
               controller: dobController,
               readOnly: true,
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: ThemeConstants.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Date of Birth',
                 prefixIcon: Icon(Icons.calendar_today,
