@@ -35,4 +35,16 @@ class AppConstants {
   static const String supportEmail = 'support@hydrawav3.com';
   static const String privacyPolicyUrl = 'https://hydrawav3.app/privacy';
   static const String termsUrl = 'https://hydrawav3.app/terms';
+
+  // Version and Release Notes
+  static const String appVersion = '1.0.0';
+  static const String buildNumber = '1';
+  static const String releaseNotes = '''
+Version 1.0.0
+- Initial release
+- Complete Hydrawav3 platform integration
+- Real-time protocol management
+- Device connectivity features
+- User authentication and authorization
+  ''';
 }

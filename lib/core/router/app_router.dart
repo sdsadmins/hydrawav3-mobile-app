@@ -15,6 +15,8 @@ import '../../features/protocols/presentation/screens/protocol_detail_screen.dar
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
+import '../../features/session/domain/active_session_model.dart';
+import '../../features/session/presentation/providers/active_sessions_provider.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
 import '../../features/session/presentation/screens/session_setup_screen.dart';
 import '../../features/settings/presentation/screens/change_password_screen.dart';
@@ -228,18 +230,40 @@ final routerProvider = Provider<GoRouter>((ref) {
   );
 });
 
-class _AppShell extends StatelessWidget {
+class _AppShell extends ConsumerWidget {
   final Widget child;
   const _AppShell({required this.child});
 
+  bool _isLiveStatus(SessionStatus status) {
+    return status == SessionStatus.running || status == SessionStatus.paused;
+  }
+
+  bool _isVisibleActiveSession(ActiveSession session) {
+    if (_isLiveStatus(session.status)) {
+      return true;
+    }
+    for (final deviceId in session.deviceIds) {
+      final deviceStatus =
+          session.deviceStatuses[deviceId] ?? SessionStatus.idle;
+      if (_isLiveStatus(deviceStatus)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     int idx = 0;
     if (location.startsWith(RoutePaths.devices)) idx = 1;
     if (location.startsWith(RoutePaths.history)) idx = 2;
     if (location.startsWith(RoutePaths.settings)) idx = 3;
+
+    final activeSessions = ref.watch(activeSessionsProvider);
+    final activeBackgroundCount =
+        activeSessions.where(_isVisibleActiveSession).length;
 
     return Scaffold(
       body: child,
@@ -284,6 +308,7 @@ class _AppShell extends StatelessWidget {
                     activeIcon: Icons.history_rounded,
                     label: 'History',
                     active: idx == 2,
+                    badgeCount: activeBackgroundCount,
                     onTap: () => context.go(RoutePaths.history)),
                 _NavTab(
                     icon: Icons.settings_outlined,
@@ -305,6 +330,7 @@ class _NavTab extends StatelessWidget {
   final IconData activeIcon;
   final String label;
   final bool active;
+  final int badgeCount;
   final VoidCallback onTap;
 
   const _NavTab(
@@ -312,6 +338,7 @@ class _NavTab extends StatelessWidget {
       required this.activeIcon,
       required this.label,
       required this.active,
+      this.badgeCount = 0,
       required this.onTap});
 
   @override
@@ -330,10 +357,45 @@ class _NavTab extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  active ? activeIcon : icon,
-                  size: 22,
-                  color: active ? ThemeConstants.accent : inactiveColor,
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      active ? activeIcon : icon,
+                      size: 22,
+                      color: active ? ThemeConstants.accent : inactiveColor,
+                    ),
+                    if (badgeCount > 0)
+                      Positioned(
+                        right: -8,
+                        top: -6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: ThemeConstants.accent,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: Theme.of(context).scaffoldBackgroundColor,
+                              width: 1.5,
+                            ),
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 18,
+                            minHeight: 18,
+                          ),
+                          child: Text(
+                            badgeCount > 99 ? '99+' : '$badgeCount',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
