@@ -121,15 +121,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       state = state.copyWith(
         isAuthenticated: true,
-        isLoading: false,
         user: profile,
         selectedOrgId: null, // ✅ FIXED
       );
     } catch (e) {
       state = state.copyWith(
-        isLoading: false,
         error: e.toString(),
       );
+    } finally {
+      // Always clear loading to avoid infinite spinners on some devices.
+      state = state.copyWith(isLoading: false);
     }
   }
 

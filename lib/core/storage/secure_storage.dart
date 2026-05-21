@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../utils/extensions.dart';
+
 final secureStorageProvider = Provider<SecureStorageService>((ref) {
   return SecureStorageService();
 });
@@ -20,28 +22,30 @@ class SecureStorageService {
     ),
   );
 
-  // Token management
   Future<void> saveTokens({
     required String accessToken,
     required String refreshToken,
   }) async {
-    print("SAVED TOKEN: $accessToken");
+    final cleanAccessToken = accessToken.withoutBearerPrefix;
+    final cleanRefreshToken = refreshToken.withoutBearerPrefix;
+    print('SAVED TOKEN: $cleanAccessToken');
     await Future.wait([
-      _storage.write(key: _accessTokenKey, value: accessToken),
-      _storage.write(key: _refreshTokenKey, value: refreshToken),
+      _storage.write(key: _accessTokenKey, value: cleanAccessToken),
+      _storage.write(key: _refreshTokenKey, value: cleanRefreshToken),
     ]);
   }
 
-  // Future<String?> getAccessToken() =>
-  //     _storage.read(key: _accessTokenKey);
-  //     print("GET TOKEN: $token");
   Future<String?> getAccessToken() async {
-    final token = await _storage.read(key: 'access_token');
-    print("GET TOKEN FROM STORAGE: $token"); // ✅ ADD
-    return token;
+    final token = await _storage.read(key: _accessTokenKey);
+    final normalizedToken = token?.withoutBearerPrefix;
+    print('GET TOKEN FROM STORAGE: $normalizedToken');
+    return normalizedToken;
   }
 
-  Future<String?> getRefreshToken() => _storage.read(key: _refreshTokenKey);
+  Future<String?> getRefreshToken() async {
+    final token = await _storage.read(key: _refreshTokenKey);
+    return token?.withoutBearerPrefix;
+  }
 
   Future<void> clearTokens() async {
     await Future.wait([
@@ -55,7 +59,6 @@ class SecureStorageService {
     return token != null;
   }
 
-  // Biometric preference
   Future<void> setBiometricEnabled(bool enabled) =>
       _storage.write(key: _biometricEnabledKey, value: enabled.toString());
 
@@ -64,13 +67,11 @@ class SecureStorageService {
     return value == 'true';
   }
 
-  // User ID
   Future<void> saveUserId(String userId) =>
       _storage.write(key: _userIdKey, value: userId);
 
   Future<String?> getUserId() => _storage.read(key: _userIdKey);
 
-  // Organization selection
   Future<void> saveSelectedOrganization(String orgId, String orgName) async {
     await Future.wait([
       _storage.write(key: _selectedOrgIdKey, value: orgId),
@@ -79,6 +80,7 @@ class SecureStorageService {
   }
 
   Future<String?> getSelectedOrgId() => _storage.read(key: _selectedOrgIdKey);
+
   Future<String?> getSelectedOrgName() =>
       _storage.read(key: _selectedOrgNameKey);
 
@@ -89,6 +91,5 @@ class SecureStorageService {
     ]);
   }
 
-  // Clear all
   Future<void> clearAll() => _storage.deleteAll();
 }

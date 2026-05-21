@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,7 +54,10 @@ class BleRepository {
 
   Stream<Map<String, int>> get batteryLevels => _connector.batteryLevels;
 
-  Future<bool> connectDevice(BluetoothDevice device) async {
+  Future<bool> connectDevice(
+    BluetoothDevice device, {
+    bool cachePairedDevice = true,
+  }) async {
     // Avoid scan activity while connecting. Some stacks/plugin behavior can
     // be timing-sensitive, and we don't need scan during connection.
     try {
@@ -62,7 +67,7 @@ class BleRepository {
     }
 
     final success = await _connector.connect(device);
-    if (success) {
+    if (success && cachePairedDevice) {
       // Save to paired devices cache
       await _db.upsertPairedDevice(PairedDevicesCompanion(
         id: Value(device.remoteId.str),
@@ -75,6 +80,14 @@ class BleRepository {
       ));
     }
     return success;
+  }
+
+  Future<bool> writeJsonToDevice(
+      String deviceId, Map<String, dynamic> payload) async {
+    return _connector.writeJsonToDevice(
+      deviceId,
+      utf8.encode(jsonEncode(payload)),
+    );
   }
 
   Future<void> disconnectDevice(String deviceId) =>

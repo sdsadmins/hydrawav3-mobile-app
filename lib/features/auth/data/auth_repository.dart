@@ -50,6 +50,9 @@ class AuthRepository {
       refreshToken: cleanRefreshToken,
     );
 
+    // Some Android devices can race secure storage flush vs immediate requests.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
     // ✅ VERIFY SAVE
     final storedToken = await _secureStorage.getAccessToken();
     print("TOKEN AFTER SAVE: $storedToken");
