@@ -1,8 +1,12 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/constants/ble_constants.dart';
@@ -30,15 +34,24 @@ final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
 
 final _autoConnectEnabledProvider = StateProvider<bool>((ref) => false);
 
+final _autoScanStartedProvider = StateProvider<bool>((ref) => false);
+
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Initialize auto-scan for BLE devices
+    // Initialize auto-scan for BLE devices and request permissions on first screen load.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final scanner = ref.read(bleScannerProvider);
       scanner.initializeAutoScan();
+
+      final autoScanStarted = ref.read(_autoScanStartedProvider);
+      final transport = ref.read(sessionTargetProvider).transport;
+      if (!autoScanStarted && transport == SessionTransport.ble) {
+        ref.read(_autoScanStartedProvider.notifier).state = true;
+        Future.microtask(() => ref.read(startScanProvider)());
+      }
 
       scanner.onDeviceFound = (result) async {
         if (!ref.read(_autoConnectEnabledProvider)) return;
@@ -634,8 +647,10 @@ class DeviceListScreen extends ConsumerWidget {
             pairedDevices.when(
               data: (devices) {
                 final scanResults = ref.watch(bleScanResultsProvider);
+                final provisioningIds = ref.watch(bleProvisioningIdsProvider);
 
                 final connectedDevices = devices.where((d) {
+                  if (provisioningIds.contains(d.id)) return false;
                   final state = ref.watch(
                     bleDeviceStatusProvider(d.id),
                   );

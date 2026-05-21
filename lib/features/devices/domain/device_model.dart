@@ -21,14 +21,24 @@ class DeviceInfo {
     this.updatedAt,
   });
 
+  static List<int> _parseOrganizationIds(dynamic rawValue) {
+    if (rawValue is! List) return const [];
+
+    return rawValue
+        .map((value) {
+          if (value is int) return value;
+          if (value is String) return int.tryParse(value);
+          return int.tryParse(value.toString());
+        })
+        .whereType<int>()
+        .toList();
+  }
+
   factory DeviceInfo.fromJson(Map<String, dynamic> json) => DeviceInfo(
         id: json['id']?.toString(),
         name: json['name'] as String? ?? 'Unknown',
         macAddress: json['macAddress'] as String? ?? '',
-        organizationIds: (json['organizationIds'] as List<dynamic>?)
-                ?.map((e) => e as int)
-                .toList() ??
-            [],
+        organizationIds: _parseOrganizationIds(json['organizationIds']),
         firmware: json['firmware'] as String?,
         warrantyStatus: json['warrantyStatus'] as String?,
         status: json['status'] as String?,

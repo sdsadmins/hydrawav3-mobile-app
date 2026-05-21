@@ -438,6 +438,7 @@ class BleConnector {
     BluetoothCharacteristic? characteristic, {
     required String channelName,
     bool? withoutResponse,
+    int attempt = 0,
   }) async {
     if (characteristic == null) {
       appLogger.e('BLE: No $channelName characteristic for $deviceId');
@@ -451,10 +452,25 @@ class BleConnector {
 
     try {
       // Match web BLE sender pacing/chunking as closely as possible.
-      const chunkSize = 180;
+      // Android GATT stacks are sensitive; smaller chunks + more pacing
+      // significantly reduces android-code 133 during configuration writes.
+      final chunkSize = channelName == 'json' ? 60 : 180;
+      // IMPORTANT: For config/JSON writes, prefer writeWithoutResponse when the
+      // characteristic supports it. Many Android stacks are more stable with it
+      // (reduces GATT 133 on some devices).
+      final preferWriteWithoutResponse =
+          channelName == 'json' && characteristic.properties.writeWithoutResponse;
+
       final effectiveWithoutResponse = withoutResponse ??
-          (characteristic.properties.writeWithoutResponse &&
-              !characteristic.properties.write);
+          (preferWriteWithoutResponse
+              ? true
+              : (characteristic.properties.writeWithoutResponse &&
+                  !characteristic.properties.write));
+
+      // Small settle delay before config writes.
+      if (channelName == 'json') {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
 
       for (int i = 0; i < data.length; i += chunkSize) {
         final end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
@@ -468,16 +484,48 @@ class BleConnector {
 
         // Match web delay between chunks
         if (end < data.length) {
-          await Future.delayed(const Duration(milliseconds: 50));
+          await Future.delayed(
+            Duration(milliseconds: channelName == 'json' ? 90 : 50),
+          );
         }
       }
 
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(
+        Duration(milliseconds: channelName == 'json' ? 120 : 50),
+      );
 
       appLogger.i('BLE: Write complete for $deviceId');
       return true;
     } catch (e) {
       appLogger.e('BLE: Write failed for $deviceId: $e');
+
+      // One-shot recovery: Android GATT 133 is often resolved by reconnecting
+      // then retrying the write once.
+      final isGatt133 = e.toString().contains('android-code: 133') ||
+          e.toString().contains('GATT_ERROR (133)');
+
+      if (isGatt133 && attempt < 1) {
+        final device = _connectedDevices[deviceId];
+        if (device != null) {
+          try {
+            await disconnect(deviceId);
+          } catch (_) {}
+          await Future<void>.delayed(const Duration(milliseconds: 350));
+          final reconnected = await connect(device, autoReconnect: false);
+          if (reconnected) {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            return _writeInChunks(
+              deviceId,
+              data,
+              characteristic,
+              channelName: channelName,
+              withoutResponse: true, // force more stable mode on retry
+              attempt: attempt + 1,
+            );
+          }
+        }
+      }
+
       return false;
     }
   }

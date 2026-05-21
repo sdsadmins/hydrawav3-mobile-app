@@ -20,6 +20,10 @@ final bleNotificationsProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).notifications;
 });
 
+final bleProvisioningIdsProvider = StateProvider<Set<String>>((ref) {
+  return <String>{};
+});
+
 final bleDeviceStatusProvider =
     Provider.family<BleConnectionStatus, String>((ref, deviceId) {
   final states = ref.watch(bleConnectionStatesProvider);

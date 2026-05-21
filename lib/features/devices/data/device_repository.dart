@@ -26,6 +26,8 @@ class DeviceRepository {
         _bleRepository = bleRepository,
         _db = db;
 
+  String _normalizeMac(String macAddress) => macAddress.trim().toUpperCase();
+
   /// Get all registered devices from backend.
   Future<List<DeviceInfo>> getRegisteredDevices() => _remoteSource.getDevices();
 
@@ -34,31 +36,69 @@ class DeviceRepository {
       _remoteSource.getDevicesByOrg(orgId);
 
   /// Register a new device.
-  Future<DeviceInfo> registerDevice({
+  Future<void> registerDevice({
     required String name,
     required String macAddress,
     required List<int> organizationIds,
   }) async {
-    final device = await _remoteSource.registerDevice(
+    final normalizedMac = _normalizeMac(macAddress);
+    // Match web flow: if sensor already exists globally, update it by adding
+    // org mapping instead of creating again via POST /admin/sensors.
+    final existing = (await _remoteSource.getDevices()).where((device) {
+      return _normalizeMac(device.macAddress) == normalizedMac;
+    }).toList();
+
+    if (existing.isNotEmpty && existing.first.id != null) {
+      await _remoteSource.updateDevice(
+        sensorId: existing.first.id!,
+        name: name,
+        macAddress: normalizedMac,
+        addOrgIds: organizationIds,
+        removeOrgIds: const [],
+      );
+      return;
+    }
+
+    await _remoteSource.registerDevice(
       name: name,
-      macAddress: macAddress,
+      macAddress: normalizedMac,
       organizationIds: organizationIds,
     );
-
-    // Also add to BLE paired devices
-    await _bleRepository.renamePairedDevice(macAddress, name);
-
-    return device;
   }
 
   /// Update device name.
   Future<DeviceInfo> renameDevice(String sensorId, String newName) =>
       _remoteSource.updateDevice(sensorId: sensorId, name: newName);
 
+  /// Remove a device from the current organization and clear local BLE pairing.
+  Future<void> removeDeviceFromOrganization({
+    required String sensorId,
+    required int organizationId,
+    required String macAddress,
+  }) async {
+    await _remoteSource.updateDevice(
+      sensorId: sensorId,
+      removeOrgIds: [organizationId],
+    );
+    await _bleRepository.removePairedDevice(_normalizeMac(macAddress));
+  }
+
   /// Watch paired devices from local DB.
   Stream<List<PairedDevice>> watchPairedDevices() => _db.watchPairedDevices();
 
   /// Remove a paired device.
   Future<void> forgetDevice(String macAddress) =>
-      _bleRepository.removePairedDevice(macAddress);
+      _bleRepository.removePairedDevice(_normalizeMac(macAddress));
+
+  Future<void> locateDevice(String macAddress, {bool beeping = true}) =>
+      _remoteSource.publishMqttPayload({
+        'mac': _normalizeMac(macAddress),
+        'beeping': beeping,
+      });
+
+  Future<void> runDiagnostics(String macAddress, {bool selfCheck = true}) =>
+      _remoteSource.publishMqttPayload({
+        'mac': _normalizeMac(macAddress),
+        'selfCheck': selfCheck,
+      });
 }

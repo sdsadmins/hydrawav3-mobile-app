@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/api_endpoints.dart';
 import '../storage/secure_storage.dart';
 import '../utils/extensions.dart';
+import 'dio_client.dart';
 
 final authInterceptorProvider = Provider<AuthInterceptor>((ref) {
   return AuthInterceptor(ref);
@@ -14,7 +15,7 @@ final authInterceptorProvider = Provider<AuthInterceptor>((ref) {
 class AuthInterceptor extends Interceptor {
   final Ref _ref;
   bool _isRefreshing = false;
-  final _refreshCompleter = <Completer<void>>[];
+  final _refreshCompleters = <Completer<void>>[];
 
   AuthInterceptor(this._ref);
 
@@ -25,52 +26,70 @@ class AuthInterceptor extends Interceptor {
   ) async {
     final storage = _ref.read(secureStorageProvider);
     final token = await storage.getAccessToken();
-    if (token != null && token.isNotEmpty) {
-      options.headers['Authorization'] = 'Bearer $token';
+    final cleanToken = token?.withoutBearerPrefix;
+
+    if (cleanToken != null && cleanToken.isNotEmpty) {
+      options.headers['Authorization'] = 'Bearer $cleanToken';
     }
-    print("FINAL HEADERS: ${options.headers}"); // 🔥 DEBUG
-//     if (token != null && token.isNotEmpty) {
-//   if (token.startsWith('Bearer ')) {
-//     options.headers['Authorization'] = token;
-//   } else {
-//     options.headers['Authorization'] = 'Bearer $token';
-//   }
-// }
+
+    print('🔵 REQUEST: ${options.method} ${options.path}');
     handler.next(options);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) async {
-    if (err.response?.statusCode == 401) {
-      final success = await _refreshTokens();
-      if (success) {
-        // Retry the original request with new token
-        final storage = _ref.read(secureStorageProvider);
-        final newToken = await storage.getAccessToken();
-        if (newToken != null) {
-          err.requestOptions.headers['Authorization'] = 'Bearer $newToken';
-          try {
-            final response = await Dio().fetch(err.requestOptions);
-            return handler.resolve(response);
-          } catch (e) {
-            return handler.next(err);
-          }
-        }
-      }
-      // Token refresh failed - clear tokens and let the error propagate
+    // Helpful for diagnosing Samsung "spinner" reports: log status + body.
+    print('🔴 ERROR: ${err.requestOptions.method} ${err.requestOptions.path}');
+    print('🔴 STATUS: ${err.response?.statusCode}');
+    print('🔴 RESPONSE: ${err.response?.data}');
+    print('🔴 MESSAGE: ${err.message}');
+
+    if (err.response?.statusCode != 401) {
+      handler.next(err);
+      return;
+    }
+
+    final refreshed = await _refreshTokens();
+    if (!refreshed) {
       final storage = _ref.read(secureStorageProvider);
       await storage.clearTokens();
+      handler.next(err);
+      return;
     }
-    handler.next(err);
+
+    final storage = _ref.read(secureStorageProvider);
+    final newToken = await storage.getAccessToken();
+    final cleanToken = newToken?.withoutBearerPrefix;
+
+    if (cleanToken == null || cleanToken.isEmpty) {
+      handler.next(err);
+      return;
+    }
+
+    err.requestOptions.headers['Authorization'] = 'Bearer $cleanToken';
+
+    try {
+      // Reuse the original configured Dio instance with all interceptors and settings
+      final response =
+          await _ref.read(djangoDioProvider).fetch<dynamic>(err.requestOptions);
+      handler.resolve(response);
+    } on DioException catch (retryErr) {
+      print(
+          'RETRY AFTER TOKEN REFRESH FAILED: ${retryErr.response?.statusCode}');
+      handler.next(retryErr);
+    }
   }
 
   Future<bool> _refreshTokens() async {
     if (_isRefreshing) {
-      // Wait for the ongoing refresh to complete
       final completer = Completer<void>();
-      _refreshCompleter.add(completer);
-      await completer.future;
-      return true;
+      _refreshCompleters.add(completer);
+      try {
+        await completer.future;
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
 
     _isRefreshing = true;
@@ -78,42 +97,83 @@ class AuthInterceptor extends Interceptor {
     try {
       final storage = _ref.read(secureStorageProvider);
       final refreshToken = await storage.getRefreshToken();
-      if (refreshToken == null) return false;
+      final cleanRefreshToken = refreshToken?.withoutBearerPrefix;
 
       final dio = Dio(BaseOptions(
         baseUrl: ApiEndpoints.djangoBaseUrl,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $refreshToken',
-        },
+        headers: const {'Content-Type': 'application/json'},
       ));
 
-      final response = await dio.get(ApiEndpoints.refreshToken);
-      final data = response.data;
+      Response<dynamic> response;
 
-      final newAccessToken =
-          (data['JWT_ACCESS_TOKEN'] as String).withoutBearerPrefix;
-      final newRefreshToken =
-          (data['JWT_REFRESH_TOKEN'] as String).withoutBearerPrefix;
+      try {
+        response = await dio.get(
+          ApiEndpoints.refreshToken,
+          options: Options(
+            headers: {
+              if (cleanRefreshToken != null && cleanRefreshToken.isNotEmpty)
+                'Authorization': 'Bearer $cleanRefreshToken',
+            },
+          ),
+        );
+      } on DioException catch (e) {
+        print(
+            'REFRESH TOKEN FAILED WITH AUTH: ${e.response?.statusCode} - ${e.response?.data}');
+        rethrow;
+      }
+
+      print('REFRESH RESPONSE RAW: ${response.data}');
+
+      final data = response.data as Map<String, dynamic>?;
+      if (data == null) {
+        throw Exception('Refresh token response is null');
+      }
+
+      // Try multiple key patterns to handle backend contract variations
+      String? newAccessToken = data['JWT_ACCESS_TOKEN'] as String?;
+      String? newRefreshToken = data['JWT_REFRESH_TOKEN'] as String?;
+
+      // Fallback to alternative key names if primary keys not found
+      if (newAccessToken == null) {
+        newAccessToken = data['access'] as String? ??
+            data['token'] as String? ??
+            data['accessToken'] as String?;
+      }
+      if (newRefreshToken == null) {
+        newRefreshToken = data['JWT_REFRESH_TOKEN'] as String? ??
+            data['refresh'] as String? ??
+            data['refresh_token'] as String? ??
+            data['refreshToken'] as String?;
+      }
+
+      if (newAccessToken == null || newAccessToken.isEmpty) {
+        throw Exception(
+            'No access token in refresh response: ${data.keys.toList()}');
+      }
+
+      final cleanAccessToken = newAccessToken.withoutBearerPrefix;
+      final cleanRefreshTokenResult =
+          (newRefreshToken ?? cleanRefreshToken)?.withoutBearerPrefix;
 
       await storage.saveTokens(
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
+        accessToken: cleanAccessToken,
+        refreshToken: cleanRefreshTokenResult ?? '',
       );
 
-      // Notify all waiting requests
-      for (final completer in _refreshCompleter) {
+      print('✅ TOKENS REFRESHED SUCCESSFULLY');
+
+      for (final completer in _refreshCompleters) {
         completer.complete();
       }
-      _refreshCompleter.clear();
+      _refreshCompleters.clear();
 
       return true;
     } catch (e) {
-      // Notify all waiting requests of failure
-      for (final completer in _refreshCompleter) {
+      print('❌ TOKEN REFRESH FAILED: $e');
+      for (final completer in _refreshCompleters) {
         completer.completeError(e);
       }
-      _refreshCompleter.clear();
+      _refreshCompleters.clear();
       return false;
     } finally {
       _isRefreshing = false;

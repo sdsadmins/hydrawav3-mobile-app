@@ -16,7 +16,10 @@ final djangoDioProvider = Provider<Dio>((ref) {
     baseUrl: ApiEndpoints.djangoBaseUrl,
     connectTimeout: AppConstants.connectTimeout,
     receiveTimeout: AppConstants.receiveTimeout,
-    headers: {'Content-Type': 'application/json'},
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
   ));
 
   dio.interceptors.add(ref.read(authInterceptorProvider));
@@ -35,7 +38,10 @@ final nodeDioProvider = Provider<Dio>((ref) {
     baseUrl: ApiEndpoints.nodeBaseUrl,
     connectTimeout: AppConstants.connectTimeout,
     receiveTimeout: AppConstants.receiveTimeout,
-    headers: {'Content-Type': 'application/json'},
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
   ));
 
   dio.interceptors.add(ref.read(authInterceptorProvider));

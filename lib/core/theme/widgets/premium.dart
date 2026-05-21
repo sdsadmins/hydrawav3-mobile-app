@@ -30,37 +30,49 @@ class GradientCard extends StatelessWidget {
         ? gradientColors!.first
         : ThemeConstants.surface;
 
+    final cardBody = Container(
+      padding: padding ?? const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
+        boxShadow: showGlow
+            ? [
+                BoxShadow(
+                  color: ThemeConstants.accent.withValues(alpha: 0.08),
+                  blurRadius: 20,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+      ),
+      child: child,
+    );
+
+    // IMPORTANT: If onTap is null, don't wrap in InkWell.
+    // Otherwise nested action buttons can "compete" with this InkWell and
+    // trigger unwanted parent tap behaviors.
+    if (onTap == null) {
+      return Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: cardBody,
+      );
+    }
+
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(borderRadius),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(borderRadius),
-        child: Container(
-          padding: padding ?? const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(borderRadius),
-            border:
-                Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
-            boxShadow: showGlow
-                ? [
-                    BoxShadow(
-                      color: ThemeConstants.accent.withValues(alpha: 0.08),
-                      blurRadius: 20,
-                      offset: const Offset(0, 4),
-                    ),
-                  ]
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-          ),
-          child: child,
-        ),
+        child: cardBody,
       ),
     );
   }
