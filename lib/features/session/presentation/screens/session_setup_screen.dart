@@ -1744,20 +1744,20 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         InkWell(
           onTap: onToggleSavePreset,
           child: Row(
-            children: [
-              Icon(Icons.save_rounded,
-                  size: 16, color: ThemeConstants.textSecondary),
-              const SizedBox(width: 8),
-              Text(
-                'Save configuration as preset',
-                style: TextStyle(
-                  color: ThemeConstants.textSecondary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
+              // children: [
+              //   Icon(Icons.save_rounded,
+              //       size: 16, color: ThemeConstants.textSecondary),
+              //   const SizedBox(width: 8),
+              //   Text(
+              //     'Save configuration as preset',
+              //     style: TextStyle(
+              //       color: ThemeConstants.textSecondary,
+              //       fontSize: 12,
+              //       fontWeight: FontWeight.w800,
+              //     ),
+              //   ),
+              // ],
               ),
-            ],
-          ),
         ),
 
         if (showSavePreset) ...[

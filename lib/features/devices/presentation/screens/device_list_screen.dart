@@ -34,8 +34,6 @@ final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
 
 final _autoConnectEnabledProvider = StateProvider<bool>((ref) => false);
 
-final _autoScanStartedProvider = StateProvider<bool>((ref) => false);
-
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
@@ -46,10 +44,12 @@ class DeviceListScreen extends ConsumerWidget {
       final scanner = ref.read(bleScannerProvider);
       scanner.initializeAutoScan();
 
-      final autoScanStarted = ref.read(_autoScanStartedProvider);
       final transport = ref.read(sessionTargetProvider).transport;
-      if (!autoScanStarted && transport == SessionTransport.ble) {
-        ref.read(_autoScanStartedProvider.notifier).state = true;
+      final hasActiveConnectionAttempt =
+          ref.read(_bleConnectingIdsProvider).isNotEmpty;
+      if (transport == SessionTransport.ble &&
+          !scanner.isScanning &&
+          !hasActiveConnectionAttempt) {
         Future.microtask(() => ref.read(startScanProvider)());
       }
 
@@ -712,9 +712,7 @@ class DeviceListScreen extends ConsumerWidget {
                         data: (list) {
                           if (list.isEmpty) return const SizedBox(height: 0);
                           final byId = <String, ScanResult>{};
-                          final sorted = [...list]
-                            ..sort((a, b) => (b.rssi).compareTo(a.rssi));
-                          for (final r in sorted) {
+                          for (final r in list) {
                             byId.putIfAbsent(r.device.remoteId.str, () => r);
                           }
                           final connectedIdSet =

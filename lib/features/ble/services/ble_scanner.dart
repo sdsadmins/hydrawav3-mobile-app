@@ -27,13 +27,84 @@ class BleScanner {
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothAdapterState>? _adapterSub;
   StreamSubscription<bool>? _isScanningSub;
+  Timer? _autoRestartTimer;
   final _resultsController = StreamController<List<ScanResult>>.broadcast();
+  final Map<String, ScanResult> _knownResultsById = {};
+  final Map<String, DateTime> _lastSeenAtById = {};
+  final List<String> _orderedDeviceIds = [];
   bool _isScanning = false;
   bool _autoScanEnabled = true;
+  bool _suppressNextAutoRestart = false;
   Function(ScanResult result)? onDeviceFound;
+  static const Duration _staleDeviceThreshold = Duration(seconds: 14);
 
   Stream<List<ScanResult>> get scanResults => _resultsController.stream;
   bool get isScanning => _isScanning;
+
+  void _emitKnownResults() {
+    final now = DateTime.now();
+    final staleIds = _orderedDeviceIds.where((id) {
+      final lastSeen = _lastSeenAtById[id];
+      return lastSeen == null ||
+          now.difference(lastSeen) > _staleDeviceThreshold;
+    }).toList();
+
+    for (final id in staleIds) {
+      _knownResultsById.remove(id);
+      _lastSeenAtById.remove(id);
+      _orderedDeviceIds.remove(id);
+    }
+
+    final stableList = _orderedDeviceIds
+        .map((id) => _knownResultsById[id])
+        .whereType<ScanResult>()
+        .toList(growable: false);
+
+    _resultsController.add(stableList);
+  }
+
+  void _mergeScanResults(List<ScanResult> results) {
+    final now = DateTime.now();
+
+    for (final result in results) {
+      final id = result.device.remoteId.str;
+      final isNewDevice = !_knownResultsById.containsKey(id);
+
+      _knownResultsById[id] = result;
+      _lastSeenAtById[id] = now;
+
+      if (isNewDevice) {
+        _orderedDeviceIds.remove(id);
+        _orderedDeviceIds.insert(0, id);
+      } else if (!_orderedDeviceIds.contains(id)) {
+        _orderedDeviceIds.add(id);
+      }
+    }
+
+    _emitKnownResults();
+  }
+
+  void _scheduleAutoRestart() {
+    if (!_autoScanEnabled || _suppressNextAutoRestart) return;
+
+    _autoRestartTimer?.cancel();
+    _autoRestartTimer = Timer(const Duration(milliseconds: 900), () async {
+      _autoRestartTimer = null;
+      if (_isScanning || _globalScanActive) return;
+
+      try {
+        final state = await FlutterBluePlus.adapterState
+            .where((s) => s != BluetoothAdapterState.unknown)
+            .first;
+        if (state == BluetoothAdapterState.on) {
+          appLogger.i('BLE: Auto-restarting scan after completion');
+          await startScan();
+        }
+      } catch (e) {
+        appLogger.w('BLE: Failed to auto-restart scan: $e');
+      }
+    });
+  }
 
   /// Initialize Bluetooth state monitoring for auto-scan
   void initializeAutoScan() {
@@ -52,6 +123,25 @@ class BleScanner {
           stopScan();
         }
       });
+
+      // Also check the current adapter state once on initialization so the
+      // first visit to the Devices screen can auto-scan without needing an
+      // app restart or a later adapter-state change event.
+      Future.microtask(() async {
+        try {
+          final state = await FlutterBluePlus.adapterState
+              .where((s) => s != BluetoothAdapterState.unknown)
+              .first;
+          if (state == BluetoothAdapterState.on &&
+              !_isScanning &&
+              !_globalScanActive) {
+            appLogger.i('BLE: Adapter already on, starting initial auto-scan');
+            await startScan();
+          }
+        } catch (e) {
+          appLogger.w('BLE: Failed initial adapter state check: $e');
+        }
+      });
     }
   }
 
@@ -61,9 +151,10 @@ class BleScanner {
 
     appLogger.i('BLE: Starting quick scan for new devices');
 
-    // Clear old results and do a fresh scan
-    final oldResults = <ScanResult>[];
-    _resultsController.add(oldResults);
+    _knownResultsById.clear();
+    _lastSeenAtById.clear();
+    _orderedDeviceIds.clear();
+    _resultsController.add(const <ScanResult>[]);
 
     await _scanSubscription?.cancel();
     _scanSubscription = null;
@@ -96,6 +187,10 @@ class BleScanner {
 
   /// Start scanning for Hydrawav3 devices.
   Future<void> startScan({Duration? timeout}) async {
+    _autoRestartTimer?.cancel();
+    _autoRestartTimer = null;
+    _suppressNextAutoRestart = false;
+
     if (_isScanning) return;
     if (_globalScanActive) {
       appLogger
@@ -180,13 +275,14 @@ class BleScanner {
             appLogger.d('BLE: Sample: $sample');
           }
 
-          _resultsController.add(results);
+          _mergeScanResults(results);
           for (final result in results) {
             onDeviceFound?.call(result);
           }
         },
         onError: (error) {
           appLogger.e('BLE: Scan error: $error');
+          _isScanning = false;
           _globalScanActive = false;
         },
       );
@@ -196,7 +292,14 @@ class BleScanner {
       _isScanningSub = FlutterBluePlus.isScanning.listen((scanning) {
         _isScanning = scanning;
         if (!scanning) {
+          _globalScanActive = false;
+          _emitKnownResults();
           appLogger.i('BLE: Scan completed');
+          final shouldAutoRestart = !_suppressNextAutoRestart;
+          _suppressNextAutoRestart = false;
+          if (shouldAutoRestart) {
+            _scheduleAutoRestart();
+          }
         }
       });
     } catch (e) {
@@ -208,6 +311,10 @@ class BleScanner {
 
   /// Stop scanning.
   Future<void> stopScan() async {
+    _autoRestartTimer?.cancel();
+    _autoRestartTimer = null;
+    _suppressNextAutoRestart = true;
+
     if (!_isScanning && !_globalScanActive) return;
 
     // Stop our log/stream listeners first, so we don't keep receiving "scan tick"
@@ -262,6 +369,7 @@ class BleScanner {
   }
 
   void dispose() {
+    _autoRestartTimer?.cancel();
     _scanSubscription?.cancel();
     _adapterSub?.cancel();
     _isScanningSub?.cancel();
