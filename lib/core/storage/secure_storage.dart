@@ -29,10 +29,8 @@ class SecureStorageService {
     final cleanAccessToken = accessToken.withoutBearerPrefix;
     final cleanRefreshToken = refreshToken.withoutBearerPrefix;
     print('SAVED TOKEN: $cleanAccessToken');
-    await Future.wait([
-      _storage.write(key: _accessTokenKey, value: cleanAccessToken),
-      _storage.write(key: _refreshTokenKey, value: cleanRefreshToken),
-    ]);
+    await _storage.write(key: _accessTokenKey, value: cleanAccessToken);
+    await _storage.write(key: _refreshTokenKey, value: cleanRefreshToken);
   }
 
   Future<String?> getAccessToken() async {
@@ -48,10 +46,8 @@ class SecureStorageService {
   }
 
   Future<void> clearTokens() async {
-    await Future.wait([
-      _storage.delete(key: _accessTokenKey),
-      _storage.delete(key: _refreshTokenKey),
-    ]);
+    await _storage.delete(key: _accessTokenKey);
+    await _storage.delete(key: _refreshTokenKey);
   }
 
   Future<bool> hasTokens() async {

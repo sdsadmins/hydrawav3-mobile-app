@@ -280,14 +280,12 @@ class DeviceListScreen extends ConsumerWidget {
                                       ),
                                     ),
                                   ),
-                                // Temporarily hidden until device registration
-                                // is ready for release.
-                                // _HeaderBtn(
-                                //   icon: Icons.add_rounded,
-                                //   filled: true,
-                                //   onTap: () =>
-                                //       context.push(RoutePaths.deviceRegister),
-                                // ),
+                                _HeaderBtn(
+                                  icon: Icons.add_rounded,
+                                  filled: true,
+                                  onTap: () =>
+                                      context.push(RoutePaths.deviceRegister),
+                                ),
                               ],
                             ),
                           ),

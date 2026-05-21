@@ -21,49 +21,72 @@ class AuthRepository {
   })  : _remoteSource = remoteSource,
         _secureStorage = secureStorage;
 
-  // Future<UserProfile> login(LoginRequest request) async {
-  //   final tokens = await _remoteSource.login(request);
-  //   print("LOGIN TOKEN RAW: ${tokens.accessToken}");
-  //   await _secureStorage.saveTokens(
-  //     accessToken: tokens.accessToken.replaceAll('Bearer ', ''), // ✅ FIX: Remove 'Bearer ' prefix
-  //     refreshToken: tokens.refreshToken.replaceAll('Bearer ', ''), // ✅ FIX: Remove 'Bearer ' prefix
-  //   );
-  //   print("LOGIN TOKEN: ${tokens.accessToken}");
-  //   final profile = await _remoteSource.getProfile();
-  //   if (profile.id != null) {
-  //     await _secureStorage.saveUserId(profile.id!);
-  //   }
-  //   return profile;
-  // }
   Future<UserProfile> login(LoginRequest request) async {
     final tokens = await _remoteSource.login(request);
-
-    // ✅ DEBUG
     print("LOGIN TOKEN RAW: ${tokens.accessToken}");
 
-    // ✅ REMOVE "Bearer " BEFORE SAVING
     final cleanAccessToken = tokens.accessToken.replaceFirst("Bearer ", "");
     final cleanRefreshToken = tokens.refreshToken.replaceFirst("Bearer ", "");
 
+    // Reset any stale auth state before writing the fresh session.
+    await _secureStorage.clearTokens();
     await _secureStorage.saveTokens(
       accessToken: cleanAccessToken,
       refreshToken: cleanRefreshToken,
     );
 
-    // Some Android devices can race secure storage flush vs immediate requests.
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-
-    // ✅ VERIFY SAVE
-    final storedToken = await _secureStorage.getAccessToken();
-    print("TOKEN AFTER SAVE: $storedToken");
-
-    final profile = await _remoteSource.getProfile();
+    final profile = await _loadProfileAfterLogin(
+      accessToken: cleanAccessToken,
+      refreshToken: cleanRefreshToken,
+    );
 
     if (profile.id != null) {
       await _secureStorage.saveUserId(profile.id!);
     }
 
     return profile;
+  }
+
+  Future<UserProfile> _loadProfileAfterLogin({
+    required String accessToken,
+    required String refreshToken,
+  }) async {
+    Object? lastError;
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final delayMs = attempt == 0 ? 500 : 1000;
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
+
+      final storedToken = await _secureStorage.getAccessToken();
+      print("TOKEN AFTER SAVE [attempt ${attempt + 1}]: $storedToken");
+
+      if (storedToken == null || storedToken.isEmpty) {
+        print("TOKEN MISSING AFTER SAVE, REWRITING TOKENS");
+        await _secureStorage.clearTokens();
+        await _secureStorage.saveTokens(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+        );
+        continue;
+      }
+
+      try {
+        return await _remoteSource.getProfile();
+      } catch (e) {
+        lastError = e;
+        print("PROFILE FETCH FAILED AFTER LOGIN [attempt ${attempt + 1}]: $e");
+
+        if (attempt == 0) {
+          await _secureStorage.clearTokens();
+          await _secureStorage.saveTokens(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+          );
+        }
+      }
+    }
+
+    throw lastError ?? Exception('Failed to load profile after login');
   }
 
   Future<void> logout() async {
@@ -97,12 +120,10 @@ class AuthRepository {
     );
   }
 
-  // forgot password
   Future<void> forgotPassword(String id) {
     return _remoteSource.forgotPassword(id);
   }
 
-  // Organization management
   Future<void> saveSelectedOrganization(String orgId, String orgName) async {
     await _secureStorage.saveSelectedOrganization(orgId, orgName);
   }

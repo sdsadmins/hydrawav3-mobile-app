@@ -61,6 +61,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     parts[5] = next.toRadixString(16).padLeft(2, '0').toUpperCase();
     return parts.join(':');
   }
+
   List<String> _bleConnectCandidates(String macAddress) {
     final normalized = _normalizeMac(macAddress);
     final plusOne = _deriveAdjacentMac(normalized, delta: 1);
@@ -71,6 +72,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       if (minusOne != null) minusOne,
     }.toList();
   }
+
   String _stripHydraPrefix(String value) =>
       value.toLowerCase().startsWith('hydra-') ? value.substring(6) : value;
   String _prefixedBleName(String value) {
@@ -211,12 +213,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       }
 
       final normalizedMac = _normalizeMac(_serialCtrl.text);
-      print('REGISTER DEVICE FINAL MAC => $normalizedMac (selected=$selectedMac)');
+      print(
+          'REGISTER DEVICE FINAL MAC => $normalizedMac (selected=$selectedMac)');
       if (!_isValidMac(normalizedMac)) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Invalid MAC address. Please use XX:XX:XX:XX:XX:XX'),
+              content:
+                  Text('Invalid MAC address. Please use XX:XX:XX:XX:XX:XX'),
             ),
           );
         }
@@ -402,9 +406,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     if (selected.isEmpty) return false;
 
     try {
-      final connected = await ref
-          .read(bleRepositoryProvider)
-          .connectDevice(
+      final connected = await ref.read(bleRepositoryProvider).connectDevice(
             selected.first.device,
             cachePairedDevice: false,
           );
@@ -447,7 +449,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     if (_connectedDeviceMac != null &&
         _isDeviceConnected &&
         !candidateSet.contains(_connectedDeviceMac)) {
-      await ref.read(bleRepositoryProvider).disconnectDevice(_connectedDeviceMac!);
+      await ref
+          .read(bleRepositoryProvider)
+          .disconnectDevice(_connectedDeviceMac!);
       if (mounted) {
         _updateSheet(() {
           _isDeviceConnected = false;
@@ -810,7 +814,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
 
   Future<void> _handleDiagnostics(DeviceInfo device) async {
     try {
-      await ref.read(deviceRepositoryProvider).runDiagnostics(device.macAddress);
+      await ref
+          .read(deviceRepositoryProvider)
+          .runDiagnostics(device.macAddress);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Diagnostics requested')),
@@ -869,7 +875,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               }
 
               return AlertDialog(
-                title: Text(step == 0 ? 'Bluetooth handshake' : 'Configure WiFi'),
+                title:
+                    Text(step == 0 ? 'Bluetooth handshake' : 'Configure WiFi'),
                 content: step == 0
                     ? Column(
                         mainAxisSize: MainAxisSize.min,
@@ -903,8 +910,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           TextField(
                             controller: passCtrl,
                             obscureText: !showPassword,
-                            decoration:
-                                InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'Password',
                               suffixIcon: IconButton(
                                 onPressed: () => setModalState(() {
@@ -965,13 +971,12 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           return;
         }
 
-        final success = await ref
-            .read(bleCommandServiceProvider)
-            .sendWifiCredentials(
-              _connectedDeviceMac!,
-              ssid: ssidCtrl.text.trim(),
-              password: passCtrl.text,
-            );
+        final success =
+            await ref.read(bleCommandServiceProvider).sendWifiCredentials(
+                  _connectedDeviceMac!,
+                  ssid: ssidCtrl.text.trim(),
+                  password: passCtrl.text,
+                );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -987,8 +992,8 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   }
 
   Future<void> _editNameFlow({DeviceInfo? registeredDevice}) async {
-    final targetMac =
-        _normalizeMac(registeredDevice?.macAddress ?? _connectedDeviceMac ?? '');
+    final targetMac = _normalizeMac(
+        registeredDevice?.macAddress ?? _connectedDeviceMac ?? '');
     if (targetMac.isEmpty) return;
 
     final editCtrl = TextEditingController(
@@ -1737,22 +1742,22 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       ],
                     ),
                   ),
-                  SizedBox(
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      onPressed: _showCreateSheet,
-                      icon: Icon(Icons.add),
-                      label: Text('Register Device'),
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(0, 48),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 12),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                      ),
-                    ),
-                  ),
+                  // SizedBox(
+                  //   height: 48,
+                  //   child: ElevatedButton.icon(
+                  //     onPressed: _showCreateSheet,
+                  //     icon: Icon(Icons.add),
+                  //     label: Text('Register Device'),
+                  //     style: ElevatedButton.styleFrom(
+                  //       minimumSize: const Size(0, 48),
+                  //       padding: const EdgeInsets.symmetric(
+                  //           horizontal: 18, vertical: 12),
+                  //       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  //       shape: RoundedRectangleBorder(
+                  //           borderRadius: BorderRadius.circular(20)),
+                  //     ),
+                  //   ),
+                  // ),
                 ],
               ),
               const SizedBox(height: 24),
