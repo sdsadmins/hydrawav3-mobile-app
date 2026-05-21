@@ -38,7 +38,8 @@ android {
 
             // Keep rules for release shrinking (R8).
             // Required for Stripe in some configurations (e.g. optional modules referenced).
-            isMinifyEnabled = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

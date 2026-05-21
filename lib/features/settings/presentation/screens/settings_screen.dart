@@ -61,6 +61,21 @@ final organizationProvider =
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
+  Future<void> _openExternalUrl(BuildContext context, String url) async {
+    final launched = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to open the link right now.'),
+        ),
+      );
+    }
+  }
+
   void _showOrganizationBottomSheet(
     BuildContext context,
     WidgetRef ref,
@@ -421,7 +436,8 @@ class SettingsScreen extends ConsumerWidget {
                     child: _SettingsGroup(title: 'DEVICE', items: [
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
-                          onTap: () => context.push(RoutePaths.deviceRegister)),
+                          enabled: false,
+                          trailing: _comingSoonBadge()),
                       _Item(Icons.verified_user_outlined, 'Warranty Status',
                           trailing: _comingSoonBadge()),
                     ])),
@@ -435,8 +451,8 @@ class SettingsScreen extends ConsumerWidget {
                           trailing: _comingSoonBadge()),
                       _Item(Icons.shield_outlined, 'Privacy & Security'),
                       _Item(Icons.help_outline_rounded, 'Help & Support',
-                          onTap: () => launchUrl(
-                              Uri.parse('https://hydrawav3.app/help'))),
+                          onTap: () => _openExternalUrl(
+                              context, 'https://www.hydrawav3.com/help-center')),
                       _Item(Icons.payment_outlined, 'Payment Methods',
                           trailing: _comingSoonBadge()),
                     ])),
@@ -741,24 +757,41 @@ class _Item extends StatelessWidget {
   final String title;
   final VoidCallback? onTap;
   final Widget? trailing;
-  const _Item(this.icon, this.title, {this.onTap, this.trailing});
+  final bool enabled;
+  const _Item(
+    this.icon,
+    this.title, {
+    this.onTap,
+    this.trailing,
+    this.enabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final canTap = enabled && onTap != null;
     return InkWell(
-      onTap: onTap,
+      onTap: canTap ? onTap : null,
       borderRadius: BorderRadius.circular(14),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         child: Row(children: [
-          Icon(icon, color: ThemeConstants.accent, size: 20),
+          Icon(
+            icon,
+            color: enabled
+                ? ThemeConstants.accent
+                : ThemeConstants.textTertiary,
+            size: 20,
+          ),
           const SizedBox(width: 14),
           Expanded(
               child: Text(title,
                   style: TextStyle(
-                      fontSize: 14, color: ThemeConstants.textPrimary))),
+                      fontSize: 14,
+                      color: enabled
+                          ? ThemeConstants.textPrimary
+                          : ThemeConstants.textSecondary))),
           trailing ??
-              (onTap != null
+              (canTap
                   ? Icon(Icons.chevron_right_rounded,
                       color: ThemeConstants.textTertiary, size: 18)
                   : const SizedBox.shrink()),

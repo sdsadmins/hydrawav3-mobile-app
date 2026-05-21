@@ -37,9 +37,13 @@ class AppConstants {
   static const String termsUrl = 'https://hydrawav3.app/terms';
 
   // Version and Release Notes
-  static const String appVersion = '1.0.0';
-  static const String buildNumber = '1';
+  static const String appVersion = '1.0.1';
+  static const String buildNumber = '2';
   static const String releaseNotes = '''
+Version 1.0.1
+- Bug fixes and performance improvements
+- Enhanced user interface
+- Improved device connectivity
 Version 1.0.0
 - Initial release
 - Complete Hydrawav3 platform integration
