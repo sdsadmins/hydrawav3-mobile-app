@@ -34,8 +34,6 @@ final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
 
 final _autoConnectEnabledProvider = StateProvider<bool>((ref) => false);
 
-final _autoScanStartedProvider = StateProvider<bool>((ref) => false);
-
 class DeviceListScreen extends ConsumerWidget {
   const DeviceListScreen({super.key});
 
@@ -46,10 +44,12 @@ class DeviceListScreen extends ConsumerWidget {
       final scanner = ref.read(bleScannerProvider);
       scanner.initializeAutoScan();
 
-      final autoScanStarted = ref.read(_autoScanStartedProvider);
       final transport = ref.read(sessionTargetProvider).transport;
-      if (!autoScanStarted && transport == SessionTransport.ble) {
-        ref.read(_autoScanStartedProvider.notifier).state = true;
+      final hasActiveConnectionAttempt =
+          ref.read(_bleConnectingIdsProvider).isNotEmpty;
+      if (transport == SessionTransport.ble &&
+          !scanner.isScanning &&
+          !hasActiveConnectionAttempt) {
         Future.microtask(() => ref.read(startScanProvider)());
       }
 
@@ -209,72 +209,86 @@ class DeviceListScreen extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
                   child: AnimatedEntrance(
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Devices',
-                                style: TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.w700,
-                                    color: ThemeConstants.textPrimary,
-                                    letterSpacing: -0.5)),
-                            SizedBox(height: 4),
-                            Text('Manage your Hydrawav3 devices',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    color: ThemeConstants.textSecondary)),
-                          ],
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Devices',
+                                  style: TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.w700,
+                                      color: ThemeConstants.textPrimary,
+                                      letterSpacing: -0.5)),
+                              SizedBox(height: 4),
+                              Text('Manage your Hydrawav3 devices',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      color: ThemeConstants.textSecondary)),
+                            ],
+                          ),
                         ),
-                        Row(
-                          children: [
-                            if (target.deviceIds.isNotEmpty)
-                              GestureDetector(
-                                onTap: () => context.go(RoutePaths.protocols),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 10,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: ThemeConstants.accent,
-                                    borderRadius: BorderRadius.circular(999),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: ThemeConstants.accent
-                                            .withValues(alpha: 0.22),
-                                        blurRadius: 14,
-                                        offset: const Offset(0, 6),
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Align(
+                            alignment: Alignment.topRight,
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              alignment: WrapAlignment.end,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                if (target.deviceIds.isNotEmpty)
+                                  GestureDetector(
+                                    onTap: () => context.go(RoutePaths.protocols),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
                                       ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Text(
-                                        'Next',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800,
-                                          color: ThemeConstants.textPrimary,
-                                        ),
+                                      decoration: BoxDecoration(
+                                        color: ThemeConstants.accent,
+                                        borderRadius:
+                                            BorderRadius.circular(999),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: ThemeConstants.accent
+                                                .withValues(alpha: 0.22),
+                                            blurRadius: 14,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
                                       ),
-                                      SizedBox(width: 6),
-                                      Icon(Icons.arrow_forward_rounded,
-                                          size: 18,
-                                          color: ThemeConstants.textPrimary),
-                                    ],
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            'Next',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              color:
+                                                  ThemeConstants.textPrimary,
+                                            ),
+                                          ),
+                                          SizedBox(width: 6),
+                                          Icon(Icons.arrow_forward_rounded,
+                                              size: 18,
+                                              color: ThemeConstants.textPrimary),
+                                        ],
+                                      ),
+                                    ),
                                   ),
+                                _HeaderBtn(
+                                  icon: Icons.add_rounded,
+                                  filled: true,
+                                  onTap: () =>
+                                      context.push(RoutePaths.deviceRegister),
                                 ),
-                              ),
-                            const SizedBox(width: 10),
-                            _HeaderBtn(
-                              icon: Icons.add_rounded,
-                              filled: true,
-                              onTap: () =>
-                                  context.push(RoutePaths.deviceRegister),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
@@ -344,7 +358,10 @@ class DeviceListScreen extends ConsumerWidget {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
             sliver: SliverToBoxAdapter(
-              child: Row(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   if (target.transport == SessionTransport.ble) ...[
                     Container(
@@ -398,7 +415,6 @@ class DeviceListScreen extends ConsumerWidget {
                         ],
                       ),
                     ),
-                    const SizedBox(width: 6),
                     if (hydrawaveOnly) ...[
                       GestureDetector(
                         onTap: () async {
@@ -451,7 +467,6 @@ class DeviceListScreen extends ConsumerWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
                     ],
                   ],
                   _ScanButton(
@@ -695,9 +710,7 @@ class DeviceListScreen extends ConsumerWidget {
                         data: (list) {
                           if (list.isEmpty) return const SizedBox(height: 0);
                           final byId = <String, ScanResult>{};
-                          final sorted = [...list]
-                            ..sort((a, b) => (b.rssi).compareTo(a.rssi));
-                          for (final r in sorted) {
+                          for (final r in list) {
                             byId.putIfAbsent(r.device.remoteId.str, () => r);
                           }
                           final connectedIdSet =

@@ -41,7 +41,9 @@ class AppConstants {
   static const String buildNumber = '2';
   static const String releaseNotes = '''
 Version 1.0.1
-- Added new feature to connect to the device
+- Bug fixes and performance improvements
+- Enhanced user interface
+- Improved device connectivity
 Version 1.0.0
 - Initial release
   ''';

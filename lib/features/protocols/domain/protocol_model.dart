@@ -144,7 +144,20 @@ class Protocol {
       cycleDuration += (cycle.durationSeconds * cycle.repetitions).toInt();
       cycleDuration += (cycle.cyclePause * (cycle.repetitions - 1)).toInt();
     }
-    return (cycleDuration * sessions + sessionPause * (sessions - 1)).toInt();
+
+    var total =
+        (cycleDuration * sessions + sessionPause * (sessions - 1)).toInt();
+    final edgeCycleDurationSeconds =
+        (cycle1 || cycle5) ? 9 : edgecycleduration.toInt();
+
+    if (cycle1) {
+      total += edgeCycleDurationSeconds + 30;
+    }
+    if (cycle5) {
+      total += edgeCycleDurationSeconds + 30;
+    }
+
+    return total;
   }
 
   Duration get totalDuration => Duration(seconds: totalDurationSeconds);

@@ -1271,6 +1271,10 @@ Map<String, dynamic> _protocolToRs35Payload(
     'Sweep' => advancedSettings.vibrationSweepMax.toInt(),
     _ => advancedSettings.vibMax.toInt(),
   };
+  final edgeCycleDuration = _effectiveEdgeCycleDurationSeconds(
+    p,
+    advancedSettings,
+  );
   final totalDuration =
       _computeFirmwareTotalDurationSeconds(p, advancedSettings);
 
@@ -1281,7 +1285,7 @@ Map<String, dynamic> _protocolToRs35Payload(
     'sDelay': applyStartDelay ? advancedSettings.startDelay : 0,
     'cycle1': advancedSettings.cycle1Initiation ? 1 : 0,
     'cycle5': advancedSettings.cycle5Completion ? 1 : 0,
-    'edgeCycleDuration': p.edgecycleduration.toInt(),
+    'edgeCycleDuration': edgeCycleDuration,
     'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
     'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
     // Match web sender exactly.
@@ -1326,14 +1330,29 @@ int _computeFirmwareTotalDurationSeconds(
         (p.sessionPause.toInt() * (p.sessions - 1));
   }
 
+  final edgeCycleDuration = _effectiveEdgeCycleDurationSeconds(
+    p,
+    advancedSettings,
+  );
+
   if (advancedSettings.cycle1Initiation) {
-    baseTimeline += p.edgecycleduration.toInt() + 30;
+    baseTimeline += edgeCycleDuration + 30;
   }
   if (advancedSettings.cycle5Completion) {
-    baseTimeline += p.edgecycleduration.toInt() + 30;
+    baseTimeline += edgeCycleDuration + 30;
   }
 
   return baseTimeline;
+}
+
+int _effectiveEdgeCycleDurationSeconds(
+  Protocol p,
+  AdvancedSettings advancedSettings,
+) {
+  return (advancedSettings.cycle1Initiation ||
+          advancedSettings.cycle5Completion)
+      ? 9
+      : p.edgecycleduration.toInt();
 }
 
 Future<List<String>?> _pickConnectedDevices(
@@ -1508,7 +1527,8 @@ Map<String, dynamic> _protocolToSessionPayload(
     'sDelay': 0,
     'cycle1': p.cycle1 ? 1 : 0,
     'cycle5': p.cycle5 ? 1 : 0,
-    'edgeCycleDuration': p.edgecycleduration.toInt(),
+    'edgeCycleDuration':
+        (p.cycle1 || p.cycle5) ? 9 : p.edgecycleduration.toInt(),
     'cycleRepetitions': cycles.map((c) => c.repetitions).toList(),
     'cycleDurations': cycles.map((c) => c.durationSeconds.toInt()).toList(),
     'cyclePauses': cycles.map((c) => c.pauseSeconds.toInt()).toList(),
