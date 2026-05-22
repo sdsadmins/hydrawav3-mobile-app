@@ -1150,20 +1150,6 @@ class _ConnectedGradientCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.background,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: ThemeConstants.borderLight,
-                        ),
-                      ),
-                      child: Icon(Icons.settings_rounded,
-                          color: ThemeConstants.textPrimary, size: 20),
-                    ),
                   ],
                 ),
               ],

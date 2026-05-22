@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/theme/widgets/premium.dart';
@@ -1725,6 +1726,24 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  GestureDetector(
+                    onTap: () => context.pop(),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: ThemeConstants.border),
+                      ),
+                      child: Icon(
+                        Icons.arrow_back_rounded,
+                        color: ThemeConstants.textPrimary,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
