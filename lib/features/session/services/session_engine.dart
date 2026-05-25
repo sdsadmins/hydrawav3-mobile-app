@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
 import '../../ble/services/ble_connector.dart';
@@ -160,8 +161,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         appLogger.i(
           'WiFi: Publishing playCmd=$playCmd (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
         );
-        await dio.post(
-          ApiEndpoints.mqttPublish,
+        await postMqttPublishRequest(
+          dio,
           data: {
             'topic': 'HydraWav3Pro/config',
             'payload': payloadStr,
@@ -186,8 +187,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       appLogger.i(
         'WiFi: Publishing playCmd=$playCmd (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
       );
-      await dio.post(
-        ApiEndpoints.mqttPublish,
+      await postMqttPublishRequest(
+        dio,
         data: {
           'topic': 'HydraWav3Pro/config',
           'payload': payloadStr,
@@ -382,14 +383,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               );
               final payloadStr = jsonEncode(payloadObj);
 
-              await dio.post(
-                ApiEndpoints.mqttPublish,
+              await postMqttPublishRequest(
+                dio,
                 data: {
                   'topic': 'HydraWav3Pro/config',
                   'payload': payloadStr,
                 },
               );
             }
+          } on DioException catch (e) {
+            appLogger.e(
+              'WiFi: config publish failed '
+              '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
+            );
+            if (!_isActive) return;
+            state = state.copyWith(
+              status: SessionStatus.stopped,
+              error: 'WiFi publish failed: ${e.message ?? e.toString()}',
+            );
+            return;
           } catch (e) {
             appLogger.e('WiFi: config publish failed: $e');
             if (!_isActive) return;

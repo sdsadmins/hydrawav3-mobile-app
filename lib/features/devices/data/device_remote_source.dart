@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/error/exceptions.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/mqtt_publish_client.dart';
 import '../domain/device_model.dart';
 
 final deviceRemoteSourceProvider = Provider<DeviceRemoteSource>((ref) {
@@ -143,8 +144,8 @@ class DeviceRemoteSource {
 
   Future<void> publishMqttPayload(Map<String, dynamic> payload) async {
     try {
-      await _dio.post(
-        ApiEndpoints.mqttPublish,
+      await postMqttPublishRequest(
+        _dio,
         data: {
           'topic': 'HydraWav3Pro/config',
           'payload': jsonEncode(payload),
