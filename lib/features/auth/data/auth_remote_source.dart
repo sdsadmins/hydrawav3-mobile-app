@@ -119,15 +119,17 @@ class AuthRemoteSource {
   }
 
   Future<void> changePassword({
-    required String oldPassword,
+    required String currentPassword,
     required String newPassword,
+    required String confirmPassword,
   }) async {
     try {
       await _dio.put(
         ApiEndpoints.changePassword,
         data: {
-          'oldPassword': oldPassword,
+          'currentPassword': currentPassword,
           'newPassword': newPassword,
+          'confirmPassword': confirmPassword,
         },
       );
     } on DioException catch (e) {
