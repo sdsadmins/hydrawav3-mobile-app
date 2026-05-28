@@ -187,17 +187,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                   wifiDevicesAsync: wifiAsync,
                   onConnectTap: () => context.go(RoutePaths.devices),
                   canContinue: canContinue,
-                  onContinueTap: () {
-                    context.push(
-                      RoutePaths.sessionSetup,
-                      extra: {
-                        'deviceIds': setupDeviceIds,
-                        'transport': target.transport == SessionTransport.ble
-                            ? 'ble'
-                            : 'wifi',
-                      },
-                    );
-                  },
+                  onContinueTap: () => context.go(RoutePaths.devices),
                 ),
               ),
             ),

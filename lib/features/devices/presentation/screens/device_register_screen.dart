@@ -1596,114 +1596,121 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     );
   }
 
-  Widget _buildActionButton(
-    IconData icon,
-    String label,
-    VoidCallback onTap,
-  ) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            children: [
-              Icon(icon, size: 20, color: ThemeConstants.textSecondary),
-              const SizedBox(height: 6),
-              Text(label,
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: ThemeConstants.textTertiary,
-                      fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildDeviceCard(DeviceInfo device) {
     return GradientCard(
-      borderRadius: 24,
+      borderRadius: 20,
+      showShadow: false,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 48,
-                  height: 48,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
                     color: ThemeConstants.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(Icons.memory,
-                      size: 24, color: ThemeConstants.accent),
+                      size: 21, color: ThemeConstants.accent),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    device.name,
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.textPrimary),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.textPrimary),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        device.macAddress,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: ThemeConstants.textSecondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                InkWell(
+                  onTap: () async {
+                    await _removeRegisteredDevice(device);
+                  },
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    height: 34,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: ThemeConstants.error.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: ThemeConstants.error.withValues(alpha: 0.22),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.delete_outline_rounded,
+                          size: 16,
+                          color: ThemeConstants.error,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Remove',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.error,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: ThemeConstants.surfaceVariant.withValues(alpha: 0.48),
                 border: Border.all(color: ThemeConstants.border),
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('HARDWARE MAC',
+                  Text('REGISTERED DEVICE',
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.6,
                           color: ThemeConstants.textTertiary)),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(device.macAddress,
                       style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           color: ThemeConstants.textPrimary,
                           fontWeight: FontWeight.w600)),
                 ],
               ),
-            ),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                _buildActionButton(Icons.gps_fixed, 'Locate', () async {
-                  await _handleLocate(device);
-                }),
-                _buildActionButton(Icons.analytics_outlined, 'Report',
-                    () async {
-                  await _handleDiagnostics(device);
-                }),
-                _buildActionButton(Icons.wifi, 'Edit WiFi', () async {
-                  await _openWifiModal(device);
-                }),
-                _buildActionButton(Icons.edit, 'Edit Name', () async {
-                  if (await _activateRegisteredDevice(device)) {
-                    await _editNameFlow(registeredDevice: device);
-                  }
-                }),
-                _buildActionButton(Icons.delete_outline, 'Remove', () async {
-                  await _removeRegisteredDevice(device);
-                }),
-              ],
             ),
           ],
         ),

@@ -265,10 +265,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
       resolvedProtocolByDevice[id] = proto;
     }
-    final computedTotalDurationSeconds = _computeFirmwareTotalDurationSeconds(
-      protocol,
-      advancedSettings,
-    );
+    final selectedDeviceIds = List<String>.from(deviceIds);
+    final computedTotalDurationSeconds = selectedDeviceIds.isEmpty
+        ? _computeEffectiveTotalDurationSeconds(
+            protocol,
+            advancedSettings,
+            applyStartDelay: false,
+          )
+        : selectedDeviceIds
+            .map((id) {
+              final deviceProtocol = resolvedProtocolByDevice[id]!;
+              final deviceSettings = settingsByDevice[id] ?? advancedSettings;
+              return _computeEffectiveTotalDurationSeconds(
+                deviceProtocol,
+                deviceSettings,
+                applyStartDelay: _shouldApplyStartDelay(
+                  transportId: id,
+                  advancedSettings: deviceSettings,
+                ),
+              );
+            })
+            .reduce((a, b) => a > b ? a : b);
     appLogger
         .i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
     appLogger.i(
@@ -284,14 +301,17 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
     appLogger.i('═══════════════════════════════════════════════════');
 
-    final selectedDeviceIds = List<String>.from(deviceIds);
     final deviceTimers = <String, TimerState>{
       for (final id in selectedDeviceIds)
         id: TimerState(
           totalDuration: Duration(
-            seconds: _computeFirmwareTotalDurationSeconds(
+            seconds: _computeEffectiveTotalDurationSeconds(
               resolvedProtocolByDevice[id]!,
               settingsByDevice[id] ?? advancedSettings,
+              applyStartDelay: _shouldApplyStartDelay(
+                transportId: id,
+                advancedSettings: settingsByDevice[id] ?? advancedSettings,
+              ),
             ),
           ),
           totalCycles: resolvedProtocolByDevice[id]!.cycles.length,
@@ -749,13 +769,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     final advancedSettings =
         state.advancedSettingsByDevice[transportId] ?? state.advancedSettings;
-    // In multi-device mode, apply start delay only to the selected device.
-    // If no delayed device is selected, keep legacy behavior and apply when > 0.
-    final selectedDelayedDeviceId = state.delayedDeviceId;
-    final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
-        state.deviceIds.contains(selectedDelayedDeviceId);
-    final applyDelay = advancedSettings.startDelay > 0 &&
-        (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
+    final applyDelay = _shouldApplyStartDelay(
+      transportId: transportId,
+      advancedSettings: advancedSettings,
+    );
     return _protocolToRs35Payload(
       p,
       mac: transportId,
@@ -843,8 +860,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       p,
       advancedSettings,
     );
-    final totalDuration =
-        _computeFirmwareTotalDurationSeconds(p, advancedSettings);
+    final totalDuration = _computeEffectiveTotalDurationSeconds(
+      p,
+      advancedSettings,
+      applyStartDelay: applyStartDelay,
+    );
 
     return {
       'mac': mac,
@@ -910,6 +930,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     return baseTimeline;
+  }
+
+  bool _shouldApplyStartDelay({
+    required String transportId,
+    required AdvancedSettings advancedSettings,
+  }) {
+    final selectedDelayedDeviceId = state.delayedDeviceId;
+    final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
+        state.deviceIds.contains(selectedDelayedDeviceId);
+    return advancedSettings.startDelay > 0 &&
+        (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
+  }
+
+  int _computeEffectiveTotalDurationSeconds(
+    Protocol p,
+    AdvancedSettings advancedSettings, {
+    required bool applyStartDelay,
+  }) {
+    final baseDuration = _computeFirmwareTotalDurationSeconds(
+      p,
+      advancedSettings,
+    );
+    return baseDuration + (applyStartDelay ? advancedSettings.startDelay : 0);
   }
 
   int _effectiveEdgeCycleDurationSeconds(

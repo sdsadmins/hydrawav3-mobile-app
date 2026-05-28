@@ -10,6 +10,7 @@ class GradientCard extends StatelessWidget {
   final VoidCallback? onTap;
   final List<Color>? gradientColors;
   final bool showGlow;
+  final bool showShadow;
   final double borderRadius;
 
   const GradientCard({
@@ -19,6 +20,7 @@ class GradientCard extends StatelessWidget {
     this.onTap,
     this.gradientColors,
     this.showGlow = false,
+    this.showShadow = true,
     this.borderRadius = 14,
   });
 
@@ -36,21 +38,23 @@ class GradientCard extends StatelessWidget {
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadius),
         border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
-        boxShadow: showGlow
-            ? [
-                BoxShadow(
-                  color: ThemeConstants.accent.withValues(alpha: 0.08),
-                  blurRadius: 20,
-                  offset: const Offset(0, 4),
-                ),
-              ]
-            : [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
+        boxShadow: !showShadow
+            ? null
+            : showGlow
+                ? [
+                    BoxShadow(
+                      color: ThemeConstants.accent.withValues(alpha: 0.08),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
       ),
       child: child,
     );
