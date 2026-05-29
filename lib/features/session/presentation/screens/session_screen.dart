@@ -23,6 +23,7 @@ import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
+import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/services/background_session_runtime.dart';
 
@@ -74,6 +75,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool _startingSession = false;
   bool _terminalSessionCleanupInFlight = false;
   String? _activeSessionId;
+  String? _historySnapshotSessionId;
   late final String _engineKey;
 
   /// Backend pad labels from Node `GET sessions/active/:org` (Hydrawav3-Server).
@@ -412,6 +414,45 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
   }
 
+  Future<void> _captureSessionHistorySnapshot(SessionEngineState engine) async {
+    final sessionId = _activeSessionId;
+    if (sessionId == null || _historySnapshotSessionId == sessionId) {
+      return;
+    }
+
+    // Claim the snapshot synchronously (before any await) so concurrent
+    // engine-state listener callbacks can't each fire a duplicate save/POST
+    // while the first one is still in flight.
+    _historySnapshotSessionId = sessionId;
+
+    final auth = ref.read(authStateProvider);
+    final userId = auth.user?.id;
+    final now = DateTime.now();
+    final sessionEngine =
+        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final record = sessionEngine.getSessionRecord(
+      sessionId: sessionId,
+      clientType: 'guest',
+      createdBy: userId,
+      updatedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+      discomfortBefore: 6,
+      discomfortAfter: 2,
+      notes: 'Guest session started from mobile app',
+    );
+
+    if (record == null) {
+      // Couldn't build a record yet — release the claim so a later, valid
+      // engine state can retry.
+      _historySnapshotSessionId = null;
+      return;
+    }
+
+    await ref.read(sessionRepositoryProvider).saveSession(record);
+    appLogger.i('Captured session history snapshot for $sessionId');
+  }
+
   bool _areDeviceListsEqual(List<String> list1, List<String> list2) {
     if (list1.length != list2.length) return false;
     final set1 = Set<String>.from(list1);
@@ -572,6 +613,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       protocolName:
           engine.protocol?.templateName ?? widget.protocol?.templateName,
     );
+    await _captureSessionHistorySnapshot(engine);
     await _syncEngineStateToActiveSessions(engine);
   }
 

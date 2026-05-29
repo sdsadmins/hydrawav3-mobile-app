@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/error/exceptions.dart';
 import '../../data/auth_repository.dart';
 import '../../domain/auth_models.dart';
 import '../../services/biometric_service.dart';
@@ -126,12 +127,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
     } catch (e) {
       state = state.copyWith(
-        error: e.toString(),
+        error: _friendlyAuthError(e),
       );
     } finally {
       // Always clear loading to avoid infinite spinners on some devices.
       state = state.copyWith(isLoading: false);
     }
+  }
+
+  /// Map an auth/login error into a clean, user-facing message.
+  String _friendlyAuthError(Object error) {
+    if (error is AuthException) return error.message;
+    if (error is ServerException) return error.message;
+    return 'Something went wrong. Please try again.';
   }
 
   Future<void> logout() async {

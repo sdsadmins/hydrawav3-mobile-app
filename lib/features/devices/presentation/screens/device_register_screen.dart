@@ -1731,13 +1731,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
                     child: Container(
                       width: 44,
                       height: 44,
+                      alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: ThemeConstants.surface,
                         borderRadius: BorderRadius.circular(14),
@@ -1754,36 +1755,56 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text('DEVICES FLEET',
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: ThemeConstants.textPrimary)),
-                        SizedBox(height: 8),
                         Text(
-                            'Manage clinical hardware connections and firmware protocols.',
-                            style:
-                                TextStyle(color: ThemeConstants.textSecondary)),
+                          'Device Fleet',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.3,
+                            color: ThemeConstants.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Manage your registered clinical hardware',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.3,
+                            color: ThemeConstants.textSecondary,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  // SizedBox(
-                  //   height: 48,
-                  //   child: ElevatedButton.icon(
-                  //     onPressed: _showCreateSheet,
-                  //     icon: Icon(Icons.add),
-                  //     label: Text('Register Device'),
-                  //     style: ElevatedButton.styleFrom(
-                  //       minimumSize: const Size(0, 48),
-                  //       padding: const EdgeInsets.symmetric(
-                  //           horizontal: 18, vertical: 12),
-                  //       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  //       shape: RoundedRectangleBorder(
-                  //           borderRadius: BorderRadius.circular(20)),
-                  //     ),
-                  //   ),
-                  // ),
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: _showCreateSheet,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.accent,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: ThemeConstants.accent.withValues(alpha: 0.25),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.add_rounded,
+                        color: _onAccent(context),
+                        size: 22,
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 24),

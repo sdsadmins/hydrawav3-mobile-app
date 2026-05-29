@@ -13,6 +13,12 @@ final historyRepositoryProvider = Provider<HistoryRepository>((ref) {
   );
 });
 
+/// All saved sessions fetched from the backend database (`GET /intake/all`).
+final allSessionsProvider =
+    FutureProvider.autoDispose<List<SessionHistoryItem>>((ref) async {
+  return ref.read(historyRepositoryProvider).getAllSessions();
+});
+
 class HistoryRepository {
   final HistoryRemoteSource _remoteSource;
   final AppDatabase _db;
@@ -28,6 +34,12 @@ class HistoryRepository {
 
   /// Watch local sessions (always available, offline-safe).
   Stream<List<LocalSession>> watchLocalSessions() => _db.watchLocalSessions();
+
+  /// Get every saved session from the backend database (online only).
+  Future<List<SessionHistoryItem>> getAllSessions() async {
+    if (!_isOnline) return [];
+    return _remoteSource.getAllIntakes();
+  }
 
   /// Get remote history for a client (online only).
   Future<List<SessionHistoryItem>> getClientHistory(

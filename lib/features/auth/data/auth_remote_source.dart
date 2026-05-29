@@ -24,10 +24,42 @@ class AuthRemoteSource {
       return AuthTokens.fromJson(response.data);
     } on DioException catch (e) {
       throw AuthException(
-        e.response?.data?['message'] ?? 'Login failed',
+        _loginErrorMessage(e),
         statusCode: e.response?.statusCode,
       );
     }
+  }
+
+  /// Translate a login [DioException] into a clear, user-facing message.
+  String _loginErrorMessage(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+        return 'Connection timed out. Please check your internet and try again.';
+      case DioExceptionType.connectionError:
+        return 'Unable to reach the server. Please check your connection.';
+      default:
+        break;
+    }
+
+    final status = e.response?.statusCode;
+    if (status == 400 || status == 401 || status == 403) {
+      return 'Incorrect username or password. Please try again.';
+    }
+    if (status == 404) {
+      return 'Account not found. Please check your username.';
+    }
+    if (status != null && status >= 500) {
+      return 'Server error. Please try again in a moment.';
+    }
+
+    final data = e.response?.data;
+    final serverMessage = data is Map ? data['message'] : null;
+    if (serverMessage is String && serverMessage.trim().isNotEmpty) {
+      return serverMessage;
+    }
+    return 'Login failed. Please try again.';
   }
 
   Future<UserProfile> getProfile() async {

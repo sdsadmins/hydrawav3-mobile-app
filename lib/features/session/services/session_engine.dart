@@ -10,10 +10,12 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
+import '../../auth/presentation/providers/auth_provider.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
+import '../data/session_repository.dart';
 import '../domain/session_model.dart';
 
 /// Provider family that creates a separate SessionEngine instance for each session
@@ -102,6 +104,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   int _cycleIndex = 0;
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
+  bool _historyCaptured = false; // Save session to history only once on start
   Future<void> _stateUpdateQueue = Future.value();
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
@@ -725,6 +728,37 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // so remaining time and cycle/pad UI match the device immediately.
     _syncDisplayedTimerFromStopwatch();
     unawaited(_syncBackgroundRuntime('running'));
+    unawaited(_captureSessionHistoryOnce());
+  }
+
+  /// Persist this session to history exactly once, the moment it starts
+  /// running — independent of any screen being open. The repository also
+  /// dedupes by session id, so re-opening the live session never creates a
+  /// duplicate intake.
+  Future<void> _captureSessionHistoryOnce() async {
+    if (_historyCaptured) return;
+    if (state.protocol == null) return;
+    _historyCaptured = true;
+    try {
+      final userId = _ref.read(authStateProvider).user?.id;
+      final record = getSessionRecord(
+        sessionId: sessionId,
+        clientType: 'guest',
+        createdBy: userId,
+        updatedBy: userId,
+        discomfortBefore: 6,
+        discomfortAfter: 2,
+        notes: 'Guest session started from mobile app',
+      );
+      if (record == null) {
+        _historyCaptured = false;
+        return;
+      }
+      await _ref.read(sessionRepositoryProvider).saveSession(record);
+      appLogger.i('Session: history captured on start for $sessionId');
+    } catch (e) {
+      appLogger.e('Session: failed to capture history on start: $e');
+    }
   }
 
   Future<void> _syncBackgroundRuntime(String status) async {
@@ -1215,22 +1249,43 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   SessionRecord? getSessionRecord({
+    String? sessionId,
     int? discomfortBefore,
     int? discomfortAfter,
     String? notes,
+    String clientType = 'guest',
+    String? createdBy,
+    String? updatedBy,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     if (state.protocol == null) return null;
+    final recordedAt = createdAt ?? DateTime.now();
+    final protocolByDeviceId =
+        <String, ({String name, int durationSeconds})>{
+      for (final entry in state.protocolByDevice.entries)
+        entry.key: (
+          name: entry.value.templateName,
+          durationSeconds: entry.value.totalDurationSeconds,
+        ),
+    };
     return SessionRecord(
-      id: const Uuid().v4(),
+      id: sessionId ?? const Uuid().v4(),
       protocolId: state.protocol!.id,
       protocolName: state.protocol!.templateName,
       deviceIds: state.deviceIds,
+      protocolByDeviceId: protocolByDeviceId,
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
       elapsedSeconds: _effectiveElapsed.inSeconds,
       discomfortBefore: discomfortBefore,
       discomfortAfter: discomfortAfter,
       notes: notes,
-      completedAt: DateTime.now(),
+      clientType: clientType,
+      createdBy: createdBy,
+      updatedBy: updatedBy,
+      createdAt: recordedAt,
+      updatedAt: updatedAt ?? recordedAt,
+      completedAt: recordedAt,
     );
   }
 
@@ -1240,6 +1295,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _sessionClockOffset = Duration.zero;
     _firstBlePlayAnchor = null;
     _startInProgress = false;
+    _historyCaptured = false;
     _cycleIndex = -1;
     _repetition = 0;
     try {

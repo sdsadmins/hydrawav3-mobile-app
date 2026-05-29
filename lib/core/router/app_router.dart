@@ -11,6 +11,7 @@ import '../../features/devices/presentation/screens/device_list_screen.dart';
 import '../../features/devices/presentation/screens/device_register_screen.dart';
 import '../../features/history/presentation/screens/history_list_screen.dart';
 import '../../features/history/presentation/screens/session_detail_screen.dart';
+import '../../features/history/domain/session_history_model.dart';
 import '../../features/protocols/presentation/screens/protocol_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
@@ -204,8 +205,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: RoutePaths.sessionDetail,
           name: RouteNames.sessionDetail,
-          builder: (c, s) =>
-              SessionDetailScreen(sessionId: s.pathParameters['id']!)),
+          builder: (c, s) => SessionDetailScreen(
+                sessionId: s.pathParameters['id']!,
+                item: s.extra is SessionHistoryItem
+                    ? s.extra as SessionHistoryItem
+                    : null,
+              )),
       GoRoute(
           path: RoutePaths.profileEdit,
           name: RouteNames.profileEdit,

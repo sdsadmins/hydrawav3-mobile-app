@@ -11,7 +11,10 @@ class ApiEndpoints {
   static const String login = '/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
-  static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
+  // static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
+  static const String nodeBaseUrl =
+      'https://8aa0-2401-4900-9024-6b9a-f87c-109d-ad0d-d77d.ngrok-free.app/hydrawav/v1/';
+
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -47,6 +50,7 @@ class ApiEndpoints {
 
   // Intake / Sessions
   static const String intake = '/intake';
+  static const String intakeAll = '/intake/all';
   static String intakeByClient(String clientId) => '/intake/client/$clientId';
   static String intakeDashboard(String orgId) => '/intake/dashboard/$orgId';
 

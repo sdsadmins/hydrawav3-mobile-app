@@ -882,6 +882,41 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     }
   }
 
+  Widget _buildStartSessionButton({
+    required List<String> runIds,
+    required SessionTransport transport,
+    required bool canStart,
+  }) {
+    final enabled = !_starting && canStart;
+    return SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: ElevatedButton.icon(
+        onPressed:
+            enabled ? () => _startSession(runIds: runIds, transport: transport) : null,
+        icon: Icon(
+          _starting ? Icons.hourglass_top_rounded : Icons.play_arrow_rounded,
+          size: 20,
+        ),
+        label: Text(_starting ? 'Starting...' : 'Start Session'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: ThemeConstants.accent,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor:
+              ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
+          disabledForegroundColor: ThemeConstants.textTertiary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSessionSetupCard({
     required _DeviceSessionCardData data,
     required List<String> currentRunIds,
@@ -1037,28 +1072,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                             ),
                           ),
                           const SizedBox(width: 14),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _HeaderBtn(
-                                icon: Icons.play_arrow_rounded,
-                                label:
-                                    _starting ? 'Starting...' : 'Start Session',
-                                filled: canStart,
-                                enabled: !_starting && canStart,
-                                onTap: () => _startSession(
-                                  runIds: runIds,
-                                  transport: target.transport,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              _HeaderBtn(
-                                icon: Icons.add_rounded,
-                                filled: true,
-                                onTap: () =>
-                                    context.push(RoutePaths.deviceRegister),
-                              ),
-                            ],
+                          _HeaderBtn(
+                            icon: Icons.add_rounded,
+                            filled: true,
+                            onTap: () =>
+                                context.push(RoutePaths.deviceRegister),
                           ),
                         ],
                       ),
@@ -1358,6 +1376,17 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                 },
               ),
             ),
+            if (selectedWifiDevices.isNotEmpty)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                sliver: SliverToBoxAdapter(
+                  child: _buildStartSessionButton(
+                    runIds: runIds,
+                    transport: target.transport,
+                    canStart: canStart,
+                  ),
+                ),
+              ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               sliver: const SliverToBoxAdapter(
@@ -1503,6 +1532,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                         );
                       }),
                       const SizedBox(height: 16),
+                      if (connectedDevices.isNotEmpty) ...[
+                        _buildStartSessionButton(
+                          runIds: runIds,
+                          transport: target.transport,
+                          canStart: canStart,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       const SectionHeader(title: 'Available Bluetooth Devices'),
                       scanResults.when(
                         data: (list) {
@@ -1886,7 +1923,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2009,7 +2046,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    flex: 5,
+                    flex: 4,
                     child: Container(
                       height: 30,
                       padding: const EdgeInsets.only(left: 8, right: 2),
@@ -2037,24 +2074,32 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 : ThemeConstants.textTertiary,
                           ),
                           const SizedBox(width: 4),
-                          Text(
-                            inUse ? 'In Use' : 'Paused',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: inUse
-                                  ? ThemeConstants.textPrimary
-                                  : ThemeConstants.textTertiary,
+                          Flexible(
+                            child: Text(
+                              inUse ? 'In Use' : 'Paused',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: inUse
+                                    ? ThemeConstants.textPrimary
+                                    : ThemeConstants.textTertiary,
+                              ),
                             ),
                           ),
-                          Transform.scale(
-                            scale: 0.54,
-                            child: Switch.adaptive(
-                              value: inUse,
-                              activeColor: ThemeConstants.accent,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              onChanged: onToggleInUse,
+                          SizedBox(
+                            width: 30,
+                            height: 22,
+                            child: FittedBox(
+                              fit: BoxFit.contain,
+                              child: Switch.adaptive(
+                                value: inUse,
+                                activeColor: ThemeConstants.accent,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                onChanged: onToggleInUse,
+                              ),
                             ),
                           ),
                         ],
@@ -2063,7 +2108,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 6),
                   Expanded(
-                    flex: 4,
+                    flex: 5,
                     child: InkWell(
                       onTap: onToggleAdvanced,
                       borderRadius: BorderRadius.circular(999),
@@ -2856,9 +2901,11 @@ class _HeaderBtn extends StatelessWidget {
 
   const _HeaderBtn({
     required this.icon,
+    // ignore: unused_element_parameter
     this.label,
     required this.onTap,
     this.filled = false,
+    // ignore: unused_element_parameter
     this.enabled = true,
   });
 

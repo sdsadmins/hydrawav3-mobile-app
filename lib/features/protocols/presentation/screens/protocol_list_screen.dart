@@ -269,9 +269,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
           ),
 
           protocolsAsync.when(
-            loading: () => const SliverFillRemaining(
-              child: HwLoading(message: 'Loading protocols...'),
-            ),
+            loading: () => const _ProtocolListSkeleton(),
             error: (e, _) => SliverFillRemaining(
               child: HwErrorWidget(
                 message: e.toString(),
@@ -290,9 +288,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
 
               if (selectedGoalTagId != null) {
                 return filteredProtocolIdsAsync.when(
-                  loading: () => const SliverFillRemaining(
-                    child: HwLoading(message: 'Filtering protocols...'),
-                  ),
+                  loading: () => const _ProtocolListSkeleton(),
                   error: (e, _) => SliverFillRemaining(
                     child: HwErrorWidget(
                       message: e.toString(),
@@ -362,6 +358,71 @@ class _ProtocolList extends StatelessWidget {
           },
           childCount: protocols.length,
         ),
+      ),
+    );
+  }
+}
+
+class _ProtocolListSkeleton extends StatelessWidget {
+  const _ProtocolListSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) => const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: _ProtocolCardSkeleton(),
+          ),
+          childCount: 6,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProtocolCardSkeleton extends StatelessWidget {
+  const _ProtocolCardSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final cardColor = Theme.of(context).brightness == Brightness.dark
+        ? ThemeConstants.surface
+        : Colors.white;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ShimmerBox(width: 44, height: 44, borderRadius: 12),
+              SizedBox(width: 14),
+              Expanded(
+                child: ShimmerBox(
+                    width: double.infinity, height: 15, borderRadius: 6),
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+          Row(
+            children: [
+              ShimmerBox(width: 72, height: 28, borderRadius: 10),
+              SizedBox(width: 8),
+              ShimmerBox(width: 72, height: 28, borderRadius: 10),
+              SizedBox(width: 8),
+              ShimmerBox(width: 72, height: 28, borderRadius: 10),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -878,18 +939,13 @@ class _ProtocolCard extends StatelessWidget {
     final cardColor = Theme.of(context).brightness == Brightness.dark
         ? ThemeConstants.surface
         : Colors.white;
-    final goalAndDuration = [
-      if (protocol.goalTagName?.trim().isNotEmpty ?? false)
-        protocol.goalTagName!.trim(),
-      protocol.totalDuration.formatted,
-    ].join(' - ');
 
     return GradientCard(
       onTap: () => context
           .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
       showGlow: true,
       gradientColors: [cardColor, cardColor],
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -898,50 +954,22 @@ class _ProtocolCard extends StatelessWidget {
               const GlowIconBox(icon: Icons.science_rounded),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      protocol.templateName,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: ThemeConstants.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    if (protocol.description.isNotEmpty)
-                      Text(
-                        protocol.description,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: ThemeConstants.textSecondary,
-                          height: 1.3,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    if (goalAndDuration.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        goalAndDuration,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: ThemeConstants.textSecondary,
-                          height: 1.25,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
+                child: Text(
+                  protocol.templateName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: ThemeConstants.textPrimary,
+                  ),
                 ),
               ),
               Icon(Icons.chevron_right_rounded,
                   color: ThemeConstants.textTertiary, size: 20),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           Row(
             children: [
               StatChip(

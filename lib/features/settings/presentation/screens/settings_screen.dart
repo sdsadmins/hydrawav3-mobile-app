@@ -504,8 +504,9 @@ class SettingsScreen extends ConsumerWidget {
                           onTap: () => context.push(RoutePaths.profileEdit)),
                       _Item(Icons.lock_outline_rounded, 'Change Password',
                           onTap: () => context.push(RoutePaths.changePassword)),
-                      _Item(Icons.fingerprint_rounded, 'Biometric Login',
-                          trailing: _comingSoonBadge()),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.fingerprint_rounded, 'Biometric Login',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -523,7 +524,8 @@ class SettingsScreen extends ConsumerWidget {
                     ])),
                 const SizedBox(height: 16),
 
-                // Device
+                // Device (coming soon — hidden for now)
+                /*
                 AnimatedEntrance(
                     index: 2,
                     child: _SettingsGroup(title: 'DEVICE', items: [
@@ -535,13 +537,15 @@ class SettingsScreen extends ConsumerWidget {
                           trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
+                */
 
                 // General
                 AnimatedEntrance(
                     index: 3,
                     child: _SettingsGroup(title: 'GENERAL', items: [
-                      _Item(Icons.notifications_outlined, 'Notifications',
-                          trailing: _comingSoonBadge()),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.notifications_outlined, 'Notifications',
+                      //     trailing: _comingSoonBadge()),
                       _Item(
                         Icons.shield_outlined,
                         'Privacy & Security',
@@ -555,8 +559,9 @@ class SettingsScreen extends ConsumerWidget {
                       _Item(Icons.help_outline_rounded, 'Help & Support',
                           onTap: () => _openExternalUrl(
                               context, 'https://www.hydrawav3.com/help-center')),
-                      _Item(Icons.payment_outlined, 'Payment Methods',
-                          trailing: _comingSoonBadge()),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.payment_outlined, 'Payment Methods',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -879,6 +884,7 @@ class _Item extends StatelessWidget {
     this.title, {
     this.onTap,
     this.trailing,
+    // ignore: unused_element_parameter
     this.enabled = true,
   });
 
@@ -991,6 +997,7 @@ class _InfoSheetSection extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 Widget _comingSoonBadge() {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
