@@ -360,10 +360,14 @@ class BleConnector {
 
   /// Disconnect a specific device.
   Future<void> disconnect(String deviceId) async {
+    // Always suppress any pending/in-flight auto-reconnect for this device,
+    // even if it isn't currently in [_connectedDevices] (e.g. mid-reconnect).
+    // A later explicit connect() clears these flags again.
+    _manualDisconnects.add(deviceId);
+    _reconnectAttempts[deviceId] = BleConstants.maxReconnectAttempts;
+
     final device = _connectedDevices[deviceId];
     if (device != null) {
-      _manualDisconnects.add(deviceId);
-      _reconnectAttempts[deviceId] = BleConstants.maxReconnectAttempts;
       await _connectionSubs[deviceId]?.cancel();
       _connectionSubs.remove(deviceId);
       await _notifySubs[deviceId]?.cancel();
@@ -439,6 +443,7 @@ class BleConnector {
     required String channelName,
     bool? withoutResponse,
     int attempt = 0,
+    bool recoverOnGatt133 = true,
   }) async {
     if (characteristic == null) {
       appLogger.e('BLE: No $channelName characteristic for $deviceId');
@@ -504,7 +509,7 @@ class BleConnector {
       final isGatt133 = e.toString().contains('android-code: 133') ||
           e.toString().contains('GATT_ERROR (133)');
 
-      if (isGatt133 && attempt < 1) {
+      if (recoverOnGatt133 && isGatt133 && attempt < 1) {
         final device = _connectedDevices[deviceId];
         if (device != null) {
           try {
@@ -521,6 +526,7 @@ class BleConnector {
               channelName: channelName,
               withoutResponse: true, // force more stable mode on retry
               attempt: attempt + 1,
+              recoverOnGatt133: recoverOnGatt133,
             );
           }
         }
@@ -547,7 +553,11 @@ class BleConnector {
   }
 
   /// Write JSON session payload to dedicated JSON characteristic.
-  Future<bool> writeJsonToDevice(String deviceId, List<int> data) async {
+  Future<bool> writeJsonToDevice(
+    String deviceId,
+    List<int> data, {
+    bool recoverOnGatt133 = true,
+  }) async {
     final jsonChar = _jsonCharacteristics[deviceId];
     if (jsonChar != null) {
       return _writeInChunks(
@@ -555,6 +565,7 @@ class BleConnector {
         data,
         jsonChar,
         channelName: 'json',
+        recoverOnGatt133: recoverOnGatt133,
       );
     }
     // Backward-compatible fallback for older devices exposing single write char.

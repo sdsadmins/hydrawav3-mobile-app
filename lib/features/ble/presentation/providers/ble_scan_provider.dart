@@ -12,6 +12,13 @@ final isScanningProvider = Provider<bool>((ref) {
   return ref.read(bleRepositoryProvider).isScanning;
 });
 
+/// Reactive scanning state sourced directly from the BLE adapter so UI can
+/// reflect start/stop transitions live (unlike [isScanningProvider], which is
+/// read once).
+final bleIsScanningProvider = StreamProvider<bool>((ref) {
+  return FlutterBluePlus.isScanning;
+});
+
 final startScanProvider = Provider<Future<void> Function()>((ref) {
   return () => ref.read(bleRepositoryProvider).startScan();
 });

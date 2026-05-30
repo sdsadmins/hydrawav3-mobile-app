@@ -65,11 +65,15 @@ class BleCommandService {
   }
 
   Future<bool> sendRename(String deviceId, String name) async {
+    // Web parity: firmware renames via BLUETOOTH_NAME / bluetoothName
+    // (see web useBleSession.setDevicename). A "RENAME"/"name" payload is
+    // ignored by the device.
+    final bluetoothName = name.startsWith('Hydra-') ? name : 'Hydra-$name';
     final success = await _bleRepository.writeJsonToDevice(
       deviceId,
       {
-        'type': 'RENAME',
-        'name': name,
+        'type': 'BLUETOOTH_NAME',
+        'bluetoothName': bluetoothName,
       },
     );
     if (!success) return false;
@@ -104,34 +108,44 @@ class BleCommandService {
       await Future<void>.delayed(const Duration(milliseconds: 350));
     }
 
-    Future<bool> tryWriteOnce() async {
-      try {
-        await ensureConnected();
-      } catch (_) {
-        return false;
-      }
-      return _bleRepository.writeJsonToDevice(deviceId, payload);
-    }
-
-    // Attempt write up to 2 times. If first fails, reconnect then retry.
-    var writeOk = await tryWriteOnce();
-    if (!writeOk) {
-      try {
-        await _bleRepository.disconnectDevice(deviceId);
-      } catch (_) {}
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      writeOk = await tryWriteOnce();
-    }
-    if (!writeOk) return false;
-
-    // Many firmwares disconnect immediately after receiving WiFi creds.
-    // ACK timeout is NOT considered a failure if the write succeeded.
     try {
-      await _connector.waitForConfigAck(deviceId, timeout: timeout);
+      await ensureConnected();
     } catch (_) {
-      // Ignore: disconnections/timeouts after send are expected.
+      return false;
     }
-    return true;
+
+    // Web parity (useBleSession.setWifi / handleUpdateWifi): the device almost
+    // always drops the BLE link the instant it accepts the credentials
+    // (GATT 133 / LINK_SUPERVISION_TIMEOUT). The web app treats that disconnect
+    // as a SUCCESS — the creds were delivered and the device is switching to
+    // WiFi. So we disable the GATT-133 reconnect recovery (it would just waste
+    // ~12s reconnecting to a device that has left BLE) and interpret a
+    // post-write disconnect as success.
+    final writeOk = await _bleRepository.writeJsonToDevice(
+      deviceId,
+      payload,
+      recoverOnGatt133: false,
+    );
+
+    if (writeOk) {
+      // ACK timeout is NOT a failure — many firmwares never ACK before leaving.
+      try {
+        await _connector.waitForConfigAck(deviceId, timeout: timeout);
+      } catch (_) {}
+      return true;
+    }
+
+    // The write reported failure — but the device almost always drops the BLE
+    // link the instant it accepts the credentials (GATT 133 /
+    // LINK_SUPERVISION_TIMEOUT), and that disconnect event can arrive a few
+    // hundred ms AFTER the write throws. So poll briefly: if the device leaves
+    // BLE, the creds were delivered and we treat it as success (web parity).
+    for (var i = 0; i < 8; i++) {
+      if (!_connector.isConnected(deviceId)) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+
+    return false;
   }
 
   Future<String?> resolveHardwareMac(

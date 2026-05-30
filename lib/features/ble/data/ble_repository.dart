@@ -83,10 +83,14 @@ class BleRepository {
   }
 
   Future<bool> writeJsonToDevice(
-      String deviceId, Map<String, dynamic> payload) async {
+    String deviceId,
+    Map<String, dynamic> payload, {
+    bool recoverOnGatt133 = true,
+  }) async {
     return _connector.writeJsonToDevice(
       deviceId,
       utf8.encode(jsonEncode(payload)),
+      recoverOnGatt133: recoverOnGatt133,
     );
   }
 
