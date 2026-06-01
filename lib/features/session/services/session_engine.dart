@@ -48,6 +48,13 @@ class SessionEngineState {
   final List<String> protocolPlusSequence;
   final int protocolPlusIndex;
 
+  /// Per-device Protocol Plus tracker state for mixed / multi-Plus sessions.
+  /// A device id present in [protocolPlusSequenceByDevice] is a Plus device and
+  /// gets its own progress card; absent ids are normal protocols.
+  final Map<String, String> protocolPlusNameByDevice;
+  final Map<String, List<String>> protocolPlusSequenceByDevice;
+  final Map<String, int> protocolPlusIndexByDevice;
+
   final String? error;
 
   const SessionEngineState({
@@ -66,6 +73,9 @@ class SessionEngineState {
     this.protocolPlusName = '',
     this.protocolPlusSequence = const [],
     this.protocolPlusIndex = 0,
+    this.protocolPlusNameByDevice = const {},
+    this.protocolPlusSequenceByDevice = const {},
+    this.protocolPlusIndexByDevice = const {},
     this.error,
   });
 
@@ -85,6 +95,9 @@ class SessionEngineState {
     String? protocolPlusName,
     List<String>? protocolPlusSequence,
     int? protocolPlusIndex,
+    Map<String, String>? protocolPlusNameByDevice,
+    Map<String, List<String>>? protocolPlusSequenceByDevice,
+    Map<String, int>? protocolPlusIndexByDevice,
     String? error,
   }) {
     return SessionEngineState(
@@ -105,6 +118,12 @@ class SessionEngineState {
       protocolPlusName: protocolPlusName ?? this.protocolPlusName,
       protocolPlusSequence: protocolPlusSequence ?? this.protocolPlusSequence,
       protocolPlusIndex: protocolPlusIndex ?? this.protocolPlusIndex,
+      protocolPlusNameByDevice:
+          protocolPlusNameByDevice ?? this.protocolPlusNameByDevice,
+      protocolPlusSequenceByDevice:
+          protocolPlusSequenceByDevice ?? this.protocolPlusSequenceByDevice,
+      protocolPlusIndexByDevice:
+          protocolPlusIndexByDevice ?? this.protocolPlusIndexByDevice,
       error: error,
     );
   }
@@ -130,6 +149,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// next one arrives via START_PROTOCOL. Sending STOP here would kill the
   /// device mid-sequence (timer keeps running, device goes dark).
   bool _isProtocolPlus = false;
+
+  /// Device ids running a server-driven Protocol Plus sequence. In a mixed
+  /// session (some Plus, some normal) only these devices skip the auto-STOP /
+  /// "completed" transition when a single protocol's duration elapses.
+  final Set<String> _protocolPlusDeviceIds = <String>{};
 
   Future<void> _stateUpdateQueue = Future.value();
   static const int _blePauseByte = 0x02;
@@ -754,11 +778,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final updatedSettingsByDevice =
         Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice)
           ..[mac] = _advancedSettingsForProtocol(newProtocol);
+    final updatedIndexByDevice =
+        Map<String, int>.from(state.protocolPlusIndexByDevice)
+          ..[mac] = protocolIndex;
     try {
       state = state.copyWith(
         protocolByDevice: updatedByDevice,
         advancedSettingsByDevice: updatedSettingsByDevice,
         protocolPlusIndex: protocolIndex,
+        protocolPlusIndexByDevice: updatedIndexByDevice,
       );
     } catch (_) {}
 
@@ -864,6 +892,67 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocolPlusIndex: 0,
     );
     appLogger.i('ProtocolPlus: "$plusName" sequence → ${names.join(" → ")}');
+  }
+
+  /// Per-device Protocol Plus sequences for mixed / multi-Plus sessions. Each
+  /// Plus device gets its own tracker; normal devices are absent from these
+  /// maps and render normal controls instead of a progress card.
+  void setProtocolPlusSequencesByDevice(
+    Map<String, String> nameByDevice,
+    Map<String, List<String>> sequenceByDevice,
+  ) {
+    if (!_isActive || sequenceByDevice.isEmpty) return;
+    _isProtocolPlus = true;
+    state = state.copyWith(
+      protocolPlusNameByDevice: Map<String, String>.from(nameByDevice),
+      protocolPlusSequenceByDevice: {
+        for (final e in sequenceByDevice.entries)
+          e.key: List<String>.from(e.value),
+      },
+      protocolPlusIndexByDevice: {
+        for (final id in sequenceByDevice.keys) id: 0,
+      },
+    );
+    appLogger.i(
+      'ProtocolPlus: per-device sequences set for ${sequenceByDevice.keys.join(", ")}',
+    );
+  }
+
+  /// Mark which devices are running a server-driven Protocol Plus sequence so
+  /// the tick loop doesn't auto-complete them when one protocol's time elapses.
+  void setProtocolPlusDevices(Set<String> deviceIds) {
+    if (!_isActive) return;
+    _protocolPlusDeviceIds
+      ..clear()
+      ..addAll(deviceIds);
+    if (deviceIds.isNotEmpty) _isProtocolPlus = true;
+  }
+
+  /// Override per-device total durations (each Protocol Plus has its own total
+  /// length). The overall session timer tracks the longest device. Call after
+  /// loadSession(), before start().
+  void setDeviceTotalDurations(Map<String, int> secondsByDevice) {
+    if (!_isActive || secondsByDevice.isEmpty) return;
+    final devTimers = Map<String, TimerState>.from(state.deviceTimers);
+    secondsByDevice.forEach((id, secs) {
+      if (secs <= 0) return;
+      final t = devTimers[id];
+      if (t != null) {
+        devTimers[id] = t.copyWith(totalDuration: Duration(seconds: secs));
+      }
+    });
+    var maxDur = state.timer.totalDuration;
+    for (final t in devTimers.values) {
+      if (t.totalDuration > maxDur) maxDur = t.totalDuration;
+    }
+    state = state.copyWith(
+      deviceTimers: devTimers,
+      timer: state.timer.copyWith(totalDuration: maxDur),
+    );
+    appLogger.i(
+      'Session: per-device durations set (${secondsByDevice.length} devices, '
+      'overall=${maxDur.inSeconds}s)',
+    );
   }
 
   void setSessionTotalDuration(int seconds) {
@@ -1494,6 +1583,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _historyCaptured = false;
     _cycleIndex = -1;
     _repetition = 0;
+    _isProtocolPlus = false;
+    _protocolPlusDeviceIds.clear();
     try {
       state = const SessionEngineState();
       unawaited(_ref
@@ -1554,7 +1645,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           // via START_PROTOCOL, so DON'T mark completed or send STOP here —
           // just clamp the displayed time and keep the device "running" so the
           // session stays live for the upcoming switch.
-          if (_isProtocolPlus) {
+          final deviceIsPlus = _protocolPlusDeviceIds.contains(id) ||
+              (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty);
+          if (deviceIsPlus) {
             updatedTimers[id] = timerState.copyWith(
               elapsed: timerState.totalDuration,
               isRunning: true,

@@ -117,6 +117,7 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     required String protocolName,
     required List<String> deviceIds,
     required String transport,
+    List<Map<String, String>> protocolPlusBindings = const [],
   }) async {
     if (sessionId != null) {
       for (final session in state) {
@@ -140,6 +141,7 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       status: SessionStatus.running,
       deviceStatuses: {for (final id in deviceIds) id: SessionStatus.running},
       deviceNames: {},
+      protocolPlusBindings: protocolPlusBindings,
     );
 
     state = [...state, newSession];

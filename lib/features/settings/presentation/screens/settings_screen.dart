@@ -524,20 +524,18 @@ class SettingsScreen extends ConsumerWidget {
                     ])),
                 const SizedBox(height: 16),
 
-                // Device (coming soon — hidden for now)
-                /*
+                // Device
                 AnimatedEntrance(
                     index: 2,
                     child: _SettingsGroup(title: 'DEVICE', items: [
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
-                          enabled: false,
-                          trailing: _comingSoonBadge()),
-                      _Item(Icons.verified_user_outlined, 'Warranty Status',
-                          trailing: _comingSoonBadge()),
+                          onTap: () => context.push(RoutePaths.deviceRegister)),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.verified_user_outlined, 'Warranty Status',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
-                */
 
                 // General
                 AnimatedEntrance(

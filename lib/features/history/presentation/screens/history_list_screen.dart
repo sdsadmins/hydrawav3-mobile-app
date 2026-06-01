@@ -308,6 +308,12 @@ class _ActiveSessionCard extends StatelessWidget {
             'protocolByDeviceId': {},
             'skipEngineBootstrap': false,
             'sessionClockAnchorMs': session.createdAt.millisecondsSinceEpoch,
+            // Restore Protocol Plus wiring so Stop cancels the server schedule.
+            if (session.protocolPlusBindings.isNotEmpty) ...{
+              'protocolPlusBindings': session.protocolPlusBindings,
+              'protocolPlusId':
+                  session.protocolPlusBindings.first['plusId'] ?? '',
+            },
           },
         );
       },

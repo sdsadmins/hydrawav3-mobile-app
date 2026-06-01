@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
@@ -28,7 +27,6 @@ import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../../session/services/protocol_plus_controller.dart';
-import '../../../session/services/session_engine.dart';
 
 final pairedDevicesProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
@@ -800,13 +798,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     }
 
     setState(() => _starting = true);
-    String? sessionId;
 
     try {
-      sessionId = const Uuid().v4();
-      final ctrl = ref.read(sessionEngineFamilyProvider(sessionId).notifier);
-      final firstId = runIds.first;
-      final firstProtocolId = _protocolIdByDeviceId[firstId]!;
       final selectedProtocolIds =
           runIds.map((id) => _protocolIdByDeviceId[id]!).toSet();
       final fullProtocolById = <String, Protocol>{};
@@ -819,71 +812,30 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         }),
       );
 
-      final commonProtocol = fullProtocolById[firstProtocolId]!;
-
-      // AUTO-DETECT: a Protocol Plus selection runs the server-driven sequence.
-      if (commonProtocol.isProtocolPlus) {
-        await launchProtocolPlusSession(
-          ref,
-          context,
-          plusId: commonProtocol.id,
-          deviceId: firstId,
-          transport: transport == SessionTransport.wifi ? 'wifi' : 'ble',
-        );
-        return;
-      }
-
-      final protocolByDevice = <String, Protocol>{
-        for (final id in runIds)
-          id: fullProtocolById[_protocolIdByDeviceId[id]!]!,
-      };
-      final advancedSettingsByDevice = <String, AdvancedSettings>{
-        for (final id in runIds) id: _settingsByDeviceId[id]!,
-      };
-      final commonAdvanced = advancedSettingsByDevice[firstId]!;
       final effectiveDelayedDeviceId =
           _delayedDeviceId != null && runIds.contains(_delayedDeviceId)
               ? _delayedDeviceId
               : null;
-      final transportString =
-          transport == SessionTransport.wifi ? 'wifi' : 'ble';
 
-      ctrl.prepareSession(deviceIds: runIds, transport: transport);
-      ctrl.loadSession(
-        commonProtocol,
-        runIds,
-        transport: transport,
-        advancedSettings: commonAdvanced,
-        advancedSettingsByDevice: advancedSettingsByDevice,
+      // One launcher handles any mix of normal protocols and Protocol Plus
+      // templates across all selected devices (auto-detected per device).
+      final selections = [
+        for (final id in runIds)
+          SessionDeviceSelection(
+            deviceId: id,
+            protocol: fullProtocolById[_protocolIdByDeviceId[id]!]!,
+            advanced: _settingsByDeviceId[id]!,
+          ),
+      ];
+
+      await launchSession(
+        ref,
+        context,
+        selections: selections,
+        transport: transport == SessionTransport.wifi ? 'wifi' : 'ble',
         delayedDeviceId: effectiveDelayedDeviceId,
-        protocolByDevice: protocolByDevice,
-        wifiConfigAlreadyPublished: false,
-      );
-      ctrl.applySessionClockOffsetFromWallAnchor(DateTime.now());
-      await ctrl.start();
-
-      if (!mounted) return;
-      context.push(
-        RoutePaths.session,
-        extra: {
-          'sessionId': sessionId,
-          'protocolId': commonProtocol.id,
-          'protocol': commonProtocol,
-          'deviceIds': runIds,
-          'transport': transportString,
-          'advancedSettings': commonAdvanced,
-          'advancedSettingsByDevice': advancedSettingsByDevice,
-          'protocolByDeviceId': {
-            for (final id in runIds) id: _protocolIdByDeviceId[id]!,
-          },
-          'delayedDeviceId': effectiveDelayedDeviceId,
-          'skipEngineBootstrap': true,
-        },
       );
     } catch (e) {
-      if (sessionId != null) {
-        ref.read(sessionEngineFamilyProvider(sessionId).notifier).reset();
-      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Start failed: $e')),

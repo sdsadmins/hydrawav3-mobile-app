@@ -16,6 +16,7 @@ import '../../features/protocols/presentation/screens/protocol_detail_screen.dar
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_plus_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
+import '../../features/session/services/protocol_plus_controller.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
 import '../../features/session/presentation/providers/active_sessions_provider.dart';
@@ -201,6 +202,19 @@ final routerProvider = Provider<GoRouter>((ref) {
                 protocolByDeviceId[key] = pid;
               }
             }
+            final protocolPlusBindingsRaw =
+                extra?['protocolPlusBindings'] as List?;
+            final protocolPlusBindings = <ProtocolPlusBinding>[];
+            if (protocolPlusBindingsRaw != null) {
+              for (final raw in protocolPlusBindingsRaw) {
+                if (raw is ProtocolPlusBinding) {
+                  protocolPlusBindings.add(raw);
+                } else if (raw is Map) {
+                  final b = ProtocolPlusBinding.fromMap(raw);
+                  if (b != null) protocolPlusBindings.add(b);
+                }
+              }
+            }
             return SessionScreen(
               sessionId: extra?['sessionId'] as String?,
               protocolId: extra?['protocolId'] as String? ?? '',
@@ -218,6 +232,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               protocolPlusServerSessionId:
                   extra?['protocolPlusServerSessionId'] as String?,
               protocolPlusMac: extra?['protocolPlusMac'] as String?,
+              protocolPlusBindings: protocolPlusBindings,
             );
           }),
       GoRoute(

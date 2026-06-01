@@ -54,6 +54,11 @@ class SessionScreen extends ConsumerStatefulWidget {
   final String? protocolPlusServerSessionId;
   final String? protocolPlusMac;
 
+  /// Per-device Protocol Plus bindings for a multi-device session. When
+  /// non-empty this takes precedence over the single [protocolPlusServerSessionId]
+  /// / [protocolPlusMac] fields (which remain for the single-device path).
+  final List<ProtocolPlusBinding> protocolPlusBindings;
+
   const SessionScreen({
     super.key,
     this.sessionId,
@@ -71,6 +76,7 @@ class SessionScreen extends ConsumerStatefulWidget {
     this.protocolPlusId,
     this.protocolPlusServerSessionId,
     this.protocolPlusMac,
+    this.protocolPlusBindings = const [],
   });
 
   @override
@@ -302,29 +308,38 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// protocol. Protocol[0] was already started by the launching screen.
   void _initProtocolPlus() {
     if (!mounted) return;
-    final serverSessionId = widget.protocolPlusServerSessionId;
-    if (widget.protocolPlusId == null ||
-        serverSessionId == null ||
-        serverSessionId.isEmpty) {
-      return;
+
+    // Prefer the multi-device bindings; fall back to the single-device fields.
+    var bindings = widget.protocolPlusBindings;
+    if (bindings.isEmpty) {
+      final serverSessionId = widget.protocolPlusServerSessionId;
+      if (widget.protocolPlusId == null ||
+          serverSessionId == null ||
+          serverSessionId.isEmpty) {
+        return;
+      }
+      final mac = widget.protocolPlusMac ??
+          (widget.deviceIds.isNotEmpty ? widget.deviceIds.first : '');
+      bindings = [
+        ProtocolPlusBinding(
+          localMac: mac,
+          serverDeviceId: mac,
+          serverSessionId: serverSessionId,
+          plusId: widget.protocolPlusId ?? '',
+        ),
+      ];
     }
 
-    final mac = widget.protocolPlusMac ??
-        (widget.deviceIds.isNotEmpty ? widget.deviceIds.first : '');
     final engineKey = widget.sessionId ?? _engineKey;
     final engine = ref.read(sessionEngineFamilyProvider(engineKey).notifier);
 
     _protocolPlusController = ref.read(protocolPlusControllerProvider);
     unawaited(
-      _protocolPlusController!.connect(
-        sessionId: serverSessionId,
-        macAddress: mac,
-        engine: engine,
-      ),
+      _protocolPlusController!.connectAll(bindings: bindings, engine: engine),
     );
     appLogger.i(
       'ProtocolPlus: SessionScreen connected socket '
-      '(serverSessionId=$serverSessionId, mac=$mac)',
+      '(${bindings.length} device binding(s))',
     );
   }
 
@@ -335,11 +350,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     SessionStatus nextS,
   ) {
     final controller = _protocolPlusController;
-    final serverSessionId = widget.protocolPlusServerSessionId;
-    if (controller == null ||
-        serverSessionId == null ||
-        serverSessionId.isEmpty ||
-        prevS == nextS) {
+    final hasPlus = widget.protocolPlusBindings.isNotEmpty ||
+        (widget.protocolPlusServerSessionId?.isNotEmpty ?? false);
+    if (controller == null || !hasPlus || prevS == nextS) {
       return;
     }
 
@@ -486,6 +499,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       protocolName: protocolName ?? 'Unknown Protocol',
       deviceIds: widget.deviceIds,
       transport: widget.transport,
+      // Persist Plus bindings so re-opening from history can re-attach the
+      // socket and stop the server-side schedule.
+      protocolPlusBindings:
+          widget.protocolPlusBindings.map((b) => b.toMap()).toList(),
     );
     appLogger.i(
         'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
@@ -814,18 +831,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           children: [
             const SizedBox(height: 8),
-            // Protocol Plus sequence tracker (highlights the active protocol).
-            if (engine.protocolPlusSequence.isNotEmpty &&
-                status != SessionStatus.idle) ...[
-              _buildProtocolPlusSequence(engine),
-              const SizedBox(height: 16),
-            ],
             if (status == SessionStatus.idle) ...[
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
             ] else if (orderedDeviceIds.isNotEmpty) ...[
               SizedBox(
-                height: 420,
+                // Plus devices render an extra progress card inside the device
+                // card, so give the page more height when any device is Plus.
+                height: engine.protocolPlusSequenceByDevice.isNotEmpty
+                    ? 560
+                    : 420,
                 child: PageView.builder(
                   itemCount: orderedDeviceIds.length,
                   onPageChanged: (idx) =>
@@ -839,6 +854,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                         engine.protocolByDevice[id]?.templateName ??
                             protocol?.templateName ??
                             '';
+                    final deviceSequence =
+                        engine.protocolPlusSequenceByDevice[id] ??
+                            const <String>[];
                     return _buildDeviceSessionCard(
                       id: id,
                       label: _deviceLabel(id),
@@ -850,6 +868,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       moonColor: moonColor,
                       sunColor: sunColor,
                       ctrl: ctrl,
+                      isProtocolPlusDevice: deviceSequence.isNotEmpty,
+                      plusSequence: deviceSequence,
+                      plusName: engine.protocolPlusNameByDevice[id] ?? '',
+                      plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
                     );
                   },
                 ),
@@ -924,9 +946,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// then stops (stations) laid out left→right and joined by a track whose
   /// traveled portion is filled. The active stop pulses; passed stops show ✓.
   /// Advances on each START_PROTOCOL.
-  Widget _buildProtocolPlusSequence(SessionEngineState engineState) {
-    final names = engineState.protocolPlusSequence;
-    var currentIndex = engineState.protocolPlusIndex;
+  Widget _buildProtocolPlusSequence(
+    List<String> names, {
+    required String name,
+    required int index,
+  }) {
+    var currentIndex = index;
     if (currentIndex < 0) currentIndex = 0;
     if (currentIndex > names.length - 1) currentIndex = names.length - 1;
 
@@ -947,9 +972,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  engineState.protocolPlusName.isNotEmpty
-                      ? engineState.protocolPlusName
-                      : 'Protocol Plus',
+                  name.isNotEmpty ? name : 'Protocol Plus',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -1121,6 +1144,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     required Color moonColor,
     required Color sunColor,
     required SessionEngine ctrl,
+    bool isProtocolPlusDevice = false,
+    List<String> plusSequence = const [],
+    String plusName = '',
+    int plusIndex = 0,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
@@ -1132,18 +1159,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: ThemeConstants.borderLight),
       ),
-      child: Column(
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: ThemeConstants.textPrimary,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
+      // Scrollable so the card never overflows — Plus devices add a progress
+      // card, and small screens may not fit the ring + status + controls.
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: ThemeConstants.textPrimary,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
-          ),
+            // Per-device Protocol Plus progress card (only for Plus devices).
+            if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _buildProtocolPlusSequence(
+              plusSequence,
+              name: plusName,
+              index: plusIndex,
+            ),
+          ],
           if (protocolName.isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
@@ -1234,29 +1274,28 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ),
           ],
-          const Spacer(),
-          _buildPerDeviceControls(id, status, ctrl),
-        ],
+            const SizedBox(height: 16),
+            _buildPerDeviceControls(id, status, ctrl,
+                isProtocolPlusDevice: isProtocolPlusDevice),
+          ],
+        ),
       ),
     );
   }
 
-  /// True when this screen is running a server-driven Protocol Plus sequence.
-  bool get _isProtocolPlus =>
-      widget.protocolPlusId != null ||
-      (widget.protocolPlusServerSessionId?.isNotEmpty ?? false);
-
   Widget _buildPerDeviceControls(
     String deviceId,
     SessionStatus status,
-    SessionEngine ctrl,
-  ) {
+    SessionEngine ctrl, {
+    bool isProtocolPlusDevice = false,
+  }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
 
     // Protocol Plus runs on a server-scheduled timeline; pausing/resuming would
-    // desync the scheduled protocol switches, so only Stop is offered.
-    if (_isProtocolPlus &&
+    // desync the scheduled protocol switches, so only Stop is offered. Normal
+    // protocol devices (incl. those in a mixed session) keep pause/resume.
+    if (isProtocolPlusDevice &&
         (status == SessionStatus.running || status == SessionStatus.paused)) {
       return SizedBox(
         height: 44,

@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/storage/local_db.dart';
-import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
@@ -15,10 +12,8 @@ import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../presets/data/preset_repository.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
-import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../services/protocol_plus_controller.dart';
-import '../../services/session_engine.dart';
 
 // This screen is the “web-like” setup:
 // 1) One card per device.
@@ -187,10 +182,6 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
               selectedDeviceIds.every((id) =>
                   _protocolIdByDeviceId.containsKey(id) &&
                   _settingsByDeviceId.containsKey(id));
-
-          final transportEnum = widget.transport == 'wifi'
-              ? session_model.SessionTransport.wifi
-              : session_model.SessionTransport.ble;
 
           Future<String?> pickProtocolId({
             required String? currentId,
@@ -581,11 +572,11 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                           _showAdvancedByDeviceId[deviceId] ?? false;
 
                       return Container(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        padding: const EdgeInsets.all(14),
+                        margin: const EdgeInsets.only(bottom: 20),
+                        padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
                           color: ThemeConstants.surface,
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(16),
                           border: Border.all(color: ThemeConstants.border),
                         ),
                         child: Column(
@@ -601,7 +592,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                     style: TextStyle(
                                       color: ThemeConstants.textPrimary,
                                       fontWeight: FontWeight.w700,
-                                      fontSize: 13,
+                                      fontSize: 15,
                                     ),
                                   ),
                                 ),
@@ -638,7 +629,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 18),
 
                             Text(
                               'Protocol',
@@ -648,7 +639,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 10),
 
                             InkWell(
                               borderRadius: BorderRadius.circular(12),
@@ -686,7 +677,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               child: Container(
                                 width: double.infinity,
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 12),
+                                    horizontal: 14, vertical: 16),
                                 decoration: BoxDecoration(
                                   color: ThemeConstants.surfaceVariant
                                       .withValues(alpha: 0.6),
@@ -724,7 +715,7 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               ),
                             ),
 
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 20),
                             // Advanced Settings collapsible header (same pattern as protocol detail).
                             if (!isIncluded) ...[
                               const SizedBox(height: 4),
@@ -856,21 +847,11 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               }
 
                               setState(() => _starting = true);
-                              String? sessionId;
                               try {
-                                sessionId = const Uuid().v4();
-                                final ctrl = ref.read(
-                                  sessionEngineFamilyProvider(sessionId)
-                                      .notifier,
-                                );
-
                                 final runIds = selectedDeviceIds;
-                                final firstId = runIds.first;
-                                final firstProtocolId =
-                                    _protocolIdByDeviceId[firstId]!;
-                                // IMPORTANT: resolve full protocol details before start.
-                                // protocolList items can be lightweight; start payload needs
-                                // full cycles/template fields (same as old flow).
+                                // Resolve full protocol details before start.
+                                // protocolList items can be lightweight; start
+                                // payload needs full cycles/template fields.
                                 final selectedProtocolIds = runIds
                                     .map((id) => _protocolIdByDeviceId[id]!)
                                     .toSet();
@@ -884,99 +865,34 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                   }),
                                 );
 
-                                final commonProtocol =
-                                    fullProtocolById[firstProtocolId]!;
-
-                                // AUTO-DETECT: if the selected protocol is
-                                // actually a Protocol Plus template, run the
-                                // server-driven sequence instead of a single
-                                // protocol (no separate button needed).
-                                if (commonProtocol.isProtocolPlus) {
-                                  await launchProtocolPlusSession(
-                                    ref,
-                                    context,
-                                    plusId: commonProtocol.id,
-                                    deviceId: firstId,
-                                    transport: widget.transport,
-                                  );
-                                  return;
-                                }
-
-                                final protocolByDevice = <String, Protocol>{};
-                                for (final id in runIds) {
-                                  final pid = _protocolIdByDeviceId[id]!;
-                                  protocolByDevice[id] = fullProtocolById[pid]!;
-                                }
-
-                                final advancedSettingsByDevice =
-                                    <String, AdvancedSettings>{};
-                                for (final id in runIds) {
-                                  advancedSettingsByDevice[id] =
-                                      _settingsByDeviceId[id]!;
-                                }
-
-                                final commonAdvanced =
-                                    advancedSettingsByDevice[firstId]!;
                                 final effectiveDelayedDeviceId =
                                     _delayedDeviceId != null &&
                                             runIds.contains(_delayedDeviceId)
                                         ? _delayedDeviceId
                                         : null;
 
-                                ctrl.prepareSession(
-                                  deviceIds: runIds,
-                                  transport: transportEnum,
-                                );
+                                // One launcher handles any mix of normal
+                                // protocols and Protocol Plus templates across
+                                // all selected devices (auto-detected per
+                                // device). Every device is started.
+                                final selections = [
+                                  for (final id in runIds)
+                                    SessionDeviceSelection(
+                                      deviceId: id,
+                                      protocol: fullProtocolById[
+                                          _protocolIdByDeviceId[id]!]!,
+                                      advanced: _settingsByDeviceId[id]!,
+                                    ),
+                                ];
 
-                                ctrl.loadSession(
-                                  commonProtocol,
-                                  runIds,
-                                  transport: transportEnum,
-                                  advancedSettings: commonAdvanced,
-                                  advancedSettingsByDevice:
-                                      advancedSettingsByDevice,
+                                await launchSession(
+                                  ref,
+                                  context,
+                                  selections: selections,
+                                  transport: widget.transport,
                                   delayedDeviceId: effectiveDelayedDeviceId,
-                                  protocolByDevice: protocolByDevice,
-                                  wifiConfigAlreadyPublished: false,
-                                );
-
-                                // Align timer UI close to “now”.
-                                ctrl.applySessionClockOffsetFromWallAnchor(
-                                  DateTime.now(),
-                                );
-
-                                await ctrl.start();
-
-                                if (!mounted) return;
-
-                                context.push(
-                                  RoutePaths.session,
-                                  extra: {
-                                    'sessionId': sessionId,
-                                    'protocolId': commonProtocol.id,
-                                    'protocol': commonProtocol,
-                                    'deviceIds': runIds,
-                                    'transport': widget.transport,
-                                    'advancedSettings': commonAdvanced,
-                                    'advancedSettingsByDevice':
-                                        advancedSettingsByDevice,
-                                    'protocolByDeviceId': {
-                                      for (final id in runIds)
-                                        id: _protocolIdByDeviceId[id]!,
-                                    },
-                                    'delayedDeviceId': effectiveDelayedDeviceId,
-                                    'skipEngineBootstrap': true,
-                                  },
                                 );
                               } catch (e) {
-                                if (sessionId != null) {
-                                  ref
-                                      .read(
-                                        sessionEngineFamilyProvider(sessionId)
-                                            .notifier,
-                                      )
-                                      .reset();
-                                }
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(content: Text('Start failed: $e')),
