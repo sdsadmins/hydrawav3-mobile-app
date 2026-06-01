@@ -550,6 +550,33 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           }
         }
       }
+
+      // Fallback (iOS only): a manually-added device has no advertised-name or
+      // MAC link the matcher above can use, so the scan-by-identity path returns
+      // nothing. Mirror the device-list behavior, which connects fine on iOS:
+      // connect to a live-advertised Hydra peripheral — auto if exactly one is
+      // nearby, otherwise let the practitioner pick the physical device. Only
+      // reached after the existing paths have already failed, so nothing that
+      // works today changes.
+      if (!connected && defaultTargetPlatform == TargetPlatform.iOS) {
+        final hydraDevices = await _scanHydraPeripherals();
+        BluetoothDevice? target;
+        if (hydraDevices.length == 1) {
+          target = hydraDevices.first.device;
+        } else if (hydraDevices.length > 1) {
+          target = await _pickHydraPeripheral(hydraDevices);
+        }
+        if (target != null) {
+          final didConnect = await ref.read(bleRepositoryProvider).connectDevice(
+                target,
+                cachePairedDevice: false,
+              );
+          if (didConnect) {
+            connected = true;
+            connectedCandidate = _normalizeMac(target.remoteId.str);
+          }
+        }
+      }
       if (mounted) {
         _updateSheet(() {
           _isDeviceConnected = connected;
@@ -574,6 +601,98 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
         });
       }
     }
+  }
+
+  /// True when [r] is a Hydra peripheral — by advertised service UUID, or by an
+  /// advertised name starting with "Hydra-" as a fallback.
+  bool _isHydraScanResult(ScanResult r) {
+    final expected = BleConstants.preferredServiceUuid;
+    if (expected != null && expected.isNotEmpty) {
+      final target = BleConstants.normalizeUuid(expected);
+      final hasService = r.advertisementData.serviceUuids
+          .any((u) => BleConstants.normalizeUuid(u.str) == target);
+      if (hasService) return true;
+    }
+    final advName = r.advertisementData.advName.trim().toLowerCase();
+    final platformName = r.device.platformName.trim().toLowerCase();
+    return advName.startsWith('hydra-') || platformName.startsWith('hydra-');
+  }
+
+  /// Collect live-advertised Hydra peripherals over a short window. Used by the
+  /// iOS connect fallback where a device can't be matched by name/MAC.
+  Future<List<ScanResult>> _scanHydraPeripherals({
+    Duration window = const Duration(seconds: 5),
+  }) async {
+    try {
+      if (!FlutterBluePlus.isScanningNow) {
+        ref.read(bleScannerProvider).initializeAutoScan();
+        await ref.read(startScanProvider)();
+      }
+    } catch (_) {
+      // A scan may already be in progress — the listener still gets results.
+    }
+
+    final byId = <String, ScanResult>{};
+    for (final r in _discoveredDevices) {
+      if (_isHydraScanResult(r)) byId[r.device.remoteId.str] = r;
+    }
+
+    final sub = FlutterBluePlus.onScanResults.listen((results) {
+      for (final r in results) {
+        if (_isHydraScanResult(r)) byId[r.device.remoteId.str] = r;
+      }
+    });
+    await Future<void>.delayed(window);
+    await sub.cancel();
+    return byId.values.toList();
+  }
+
+  /// Let the practitioner pick the physical device when several Hydra units are
+  /// advertising nearby (iOS connect fallback).
+  Future<BluetoothDevice?> _pickHydraPeripheral(List<ScanResult> results) async {
+    if (!mounted) return null;
+    final sorted = [...results]..sort((a, b) => b.rssi.compareTo(a.rssi));
+    return showDialog<BluetoothDevice>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: ThemeConstants.surface,
+          title: const Text('Select your device'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: sorted.length,
+              separatorBuilder: (_, __) =>
+                  Divider(height: 1, color: ThemeConstants.border),
+              itemBuilder: (_, i) {
+                final r = sorted[i];
+                final advName = r.advertisementData.advName.trim();
+                final platformName = r.device.platformName.trim();
+                final name = advName.isNotEmpty
+                    ? advName
+                    : (platformName.isNotEmpty ? platformName : 'Hydra device');
+                return ListTile(
+                  leading: Icon(Icons.bluetooth_rounded,
+                      color: ThemeConstants.accent),
+                  title: Text(name,
+                      style: TextStyle(color: ThemeConstants.textPrimary)),
+                  subtitle: Text('Signal ${r.rssi} dBm',
+                      style: TextStyle(color: ThemeConstants.textTertiary)),
+                  onTap: () => Navigator.of(ctx).pop(r.device),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<bool> _syncSelectedDeviceName() async {
