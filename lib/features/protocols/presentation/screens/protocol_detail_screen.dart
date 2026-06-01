@@ -273,33 +273,33 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //   ),
               // ),
               // const SizedBox(height: 16),
-              AnimatedEntrance(
-                index: 3,
-                child: GradientCard(
-                  gradientColors: [cardColor, cardColor],
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Web Payload Mapping',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: ThemeConstants.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      _R('Session Count', '${p.sessions}'),
-                      _R('Session Pause', '${p.sessionPause.toInt()}s'),
-                      _R('Cycle 1 (edge)', p.cycle1 ? 'enabled' : 'disabled'),
-                      _R('Cycle 5 (edge)', p.cycle5 ? 'enabled' : 'disabled'),
-                      _R('Edge Cycle Duration',
-                          '${p.edgecycleduration.toInt()}s'),
-                    ],
-                  ),
-                ),
-              ),
+              // AnimatedEntrance(
+              //   index: 3,
+              //   child: GradientCard(
+              //     gradientColors: [cardColor, cardColor],
+              //     padding: const EdgeInsets.all(16),
+              //     child: Column(
+              //       crossAxisAlignment: CrossAxisAlignment.start,
+              //       children: [
+              //         Text(
+              //           'Web Payload Mapping',
+              //           style: TextStyle(
+              //             fontSize: 15,
+              //             fontWeight: FontWeight.w700,
+              //             color: ThemeConstants.textPrimary,
+              //           ),
+              //         ),
+              //         const SizedBox(height: 10),
+              //         _R('Session Count', '${p.sessions}'),
+              //         _R('Session Pause', '${p.sessionPause.toInt()}s'),
+              //         _R('Cycle 1 (edge)', p.cycle1 ? 'enabled' : 'disabled'),
+              //         _R('Cycle 5 (edge)', p.cycle5 ? 'enabled' : 'disabled'),
+              //         _R('Edge Cycle Duration',
+              //             '${p.edgecycleduration.toInt()}s'),
+              //       ],
+              //     ),
+              //   ),
+              // ),
               const SizedBox(height: 16),
               // AnimatedEntrance(
               //   index: 4,
@@ -515,56 +515,56 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               //   ),
               // ),
               // const SizedBox(height: 16),
-              AnimatedEntrance(
-                  index: 5, child: const SectionHeader(title: 'Cycles')),
-              ...p.cycles.asMap().entries.map((e) {
-                final i = e.key;
-                final c = e.value;
-                return AnimatedEntrance(
-                    index: i + 6,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: GradientCard(
-                          gradientColors: [cardColor, cardColor],
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                GlowIconBox(
-                                    icon: Icons.loop_rounded,
-                                    size: 36,
-                                    iconSize: 18),
-                                const SizedBox(width: 12),
-                                Text('Cycle ${i + 1} (C${i + 1})',
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: ThemeConstants.textPrimary)),
-                              ]),
-                              const SizedBox(height: 12),
-                              _R('Duration (cycleDurations)',
-                                  '${c.durationSeconds.toInt()}s'),
-                              _R('Repetitions (cycleRepetitions)',
-                                  '${c.repetitions}'),
-                              _R(
-                                'Pause Between Repetitions (pauseIntervals/cycle_pause)',
-                                '${c.cyclePause.toInt()}s',
-                              ),
-                              _R(
-                                'Pause After Cycle (cyclePauses/pause_seconds)',
-                                '${c.pauseSeconds.toInt()}s',
-                              ),
-                              _R('Hot PWM', '${c.hotPwm.toInt()}'),
-                              _R('Cold PWM', '${c.coldPwm.toInt()}'),
-                              if (c.leftFunction.isNotEmpty)
-                                _R('Left Function', c.leftFunction),
-                              if (c.rightFunction.isNotEmpty)
-                                _R('Right Function', c.rightFunction),
-                            ],
-                          )),
-                    ));
-              }),
+              // AnimatedEntrance(
+              //     index: 5, child: const SectionHeader(title: 'Cycles')),
+              // ...p.cycles.asMap().entries.map((e) {
+              //   final i = e.key;
+              //   final c = e.value;
+              //   return AnimatedEntrance(
+              //       index: i + 6,
+              //       child: Padding(
+              //         padding: const EdgeInsets.only(bottom: 10),
+              //         child: GradientCard(
+              //             gradientColors: [cardColor, cardColor],
+              //             padding: const EdgeInsets.all(16),
+              //             child: Column(
+              //               crossAxisAlignment: CrossAxisAlignment.start,
+              //               children: [
+              //                 Row(children: [
+              //                   GlowIconBox(
+              //                       icon: Icons.loop_rounded,
+              //                       size: 36,
+              //                       iconSize: 18),
+              //                   const SizedBox(width: 12),
+              //                   Text('Cycle ${i + 1} (C${i + 1})',
+              //                       style: TextStyle(
+              //                           fontSize: 15,
+              //                           fontWeight: FontWeight.w600,
+              //                           color: ThemeConstants.textPrimary)),
+              //                 ]),
+              //                 const SizedBox(height: 12),
+              //                 _R('Duration (cycleDurations)',
+              //                     '${c.durationSeconds.toInt()}s'),
+              //                 _R('Repetitions (cycleRepetitions)',
+              //                     '${c.repetitions}'),
+              //                 _R(
+              //                   'Pause Between Repetitions (pauseIntervals/cycle_pause)',
+              //                   '${c.cyclePause.toInt()}s',
+              //                 ),
+              //                 _R(
+              //                   'Pause After Cycle (cyclePauses/pause_seconds)',
+              //                   '${c.pauseSeconds.toInt()}s',
+              //                 ),
+              //                 _R('Hot PWM', '${c.hotPwm.toInt()}'),
+              //                 _R('Cold PWM', '${c.coldPwm.toInt()}'),
+              //                 if (c.leftFunction.isNotEmpty)
+              //                   _R('Left Function', c.leftFunction),
+              //                 if (c.rightFunction.isNotEmpty)
+              //                   _R('Right Function', c.rightFunction),
+              //               ],
+              //             )),
+              //       ));
+              // }),
               const SizedBox(height: 20),
               // AnimatedEntrance(
               //     index: p.cycles.length + 5,

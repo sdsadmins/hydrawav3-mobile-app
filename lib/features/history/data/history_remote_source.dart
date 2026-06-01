@@ -15,6 +15,23 @@ class HistoryRemoteSource {
 
   HistoryRemoteSource(this._dio);
 
+  /// Fetch every saved intake/session from the backend database.
+  Future<List<SessionHistoryItem>> getAllIntakes() async {
+    try {
+      final response = await _dio.get(ApiEndpoints.intakeAll);
+      final data = response.data;
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+      return items
+          .map((e) => SessionHistoryItem.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } on DioException catch (e) {
+      throw ServerException(
+        e.response?.data?['message'] ?? 'Failed to fetch sessions',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<List<SessionHistoryItem>> getClientHistory(
     String clientId, {
     int page = 1,

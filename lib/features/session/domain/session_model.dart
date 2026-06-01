@@ -8,11 +8,22 @@ class SessionRecord {
   final String protocolId;
   final String protocolName;
   final List<String> deviceIds;
+
+  /// Per-device protocol (deviceId -> protocol name + its duration in seconds).
+  /// Lets a single session store a different protocol per device. Falls back to
+  /// [protocolName] / overall duration for any device missing from the map.
+  final Map<String, ({String name, int durationSeconds})> protocolByDeviceId;
+
   final int totalDurationSeconds;
   final int elapsedSeconds;
   final int? discomfortBefore;
   final int? discomfortAfter;
   final String? notes;
+  final String clientType;
+  final String? createdBy;
+  final String? updatedBy;
+  final DateTime createdAt;
+  final DateTime updatedAt;
   final bool synced;
   final DateTime completedAt;
 
@@ -21,32 +32,59 @@ class SessionRecord {
     required this.protocolId,
     required this.protocolName,
     required this.deviceIds,
+    this.protocolByDeviceId = const {},
     required this.totalDurationSeconds,
     required this.elapsedSeconds,
     this.discomfortBefore,
     this.discomfortAfter,
     this.notes,
+    this.clientType = 'guest',
+    this.createdBy,
+    this.updatedBy,
+    required this.createdAt,
+    required this.updatedAt,
     this.synced = false,
     required this.completedAt,
   });
 
-  Map<String, dynamic> toIntakeJson() => {
-        'protocols': [
+  /// Build the `POST /intake` body. Only fields declared on the backend
+  /// `CreateIntakeDto` are allowed — the server rejects anything else
+  /// (`whitelist + forbidNonWhitelisted`). `createdBy`/`updatedBy`/timestamps
+  /// are derived server-side from the authenticated user, so we don't send them.
+  Map<String, dynamic> toIntakeJson() {
+    final fallbackRaw =
+        elapsedSeconds > 0 ? elapsedSeconds : totalDurationSeconds;
+    final fallbackDuration = fallbackRaw > 0 ? fallbackRaw : 1;
+
+    final protocolEntries = <Map<String, dynamic>>[];
+    for (final deviceId in deviceIds) {
+      final info = protocolByDeviceId[deviceId];
+      final rawDuration = info?.durationSeconds ?? fallbackDuration;
+      protocolEntries.add({
+        'bodyPart': 'General',
+        'protocol': info?.name ?? protocolName,
+        'duration': rawDuration > 0 ? rawDuration : 1, // DTO requires @Min(1)
+        'deviceName': deviceId,
+      });
+    }
+
+    return {
+      'clientType': clientType,
+      'protocols': protocolEntries,
+      if (discomfortBefore != null || discomfortAfter != null)
+        'discomfortAreas': [
           {
-            'protocol': protocolId,
-            'duration': elapsedSeconds,
-            'deviceName': deviceIds.join(', '),
+            'discompfortbodyPart': 'General',
+            'side': 'Both',
+            'discomfortBefore': discomfortBefore ?? 0,
+            'discomfortAfter': discomfortAfter ?? 0,
+            'temporalDuration': 'Less than 6 weeks',
+            'behavior': 'Comes and Goes',
           }
         ],
-        if (discomfortBefore != null || discomfortAfter != null)
-          'discomfortAreas': [
-            {
-              'discomfortBefore': discomfortBefore ?? 0,
-              'discomfortAfter': discomfortAfter ?? 0,
-            }
-          ],
-        if (notes != null) 'sessionNotes': notes,
-      };
+      if (notes != null && notes!.isNotEmpty) 'sessionNotes': notes,
+    };
+  }
 }
 
 class TimerState {

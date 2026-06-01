@@ -118,15 +118,12 @@ Future<List<Protocol>> _enrichProtocolsWithGoalTagNames(
 final protocolListProvider = FutureProvider<List<Protocol>>((ref) async {
   final repository = ref.read(protocolRepositoryProvider);
   final orgId = await _resolveOrgId(ref);
-  final protocols = orgId != null
-      ? await repository.getProtocols(orgId: orgId)
-      : await repository.getProtocols();
-
-  return _enrichProtocolsWithGoalTagNames(
-    repository,
-    protocols,
-    orgId: orgId,
-  );
+  // NOTE: We intentionally skip goal-tag enrichment here. It issued one request
+  // per goal tag just to populate a label the list card no longer shows, which
+  // made the list slow to load. Fetch protocols in a single request instead.
+  return orgId != null
+      ? repository.getProtocols(orgId: orgId)
+      : repository.getProtocols();
 });
 
 final protocolDetailProvider =

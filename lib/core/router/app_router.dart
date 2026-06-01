@@ -11,9 +11,12 @@ import '../../features/devices/presentation/screens/device_list_screen.dart';
 import '../../features/devices/presentation/screens/device_register_screen.dart';
 import '../../features/history/presentation/screens/history_list_screen.dart';
 import '../../features/history/presentation/screens/session_detail_screen.dart';
+import '../../features/history/domain/session_history_model.dart';
 import '../../features/protocols/presentation/screens/protocol_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
+import '../../features/protocols/presentation/screens/protocol_plus_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
+import '../../features/session/services/protocol_plus_controller.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
 import '../../features/session/presentation/providers/active_sessions_provider.dart';
@@ -50,6 +53,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       /// ✅ ONLY use local selection
       final hasSelectedOrg = authState.selectedOrgId != null;
 
+      // ⏳ Still checking the stored token → don't redirect yet. The user waits
+      // on the login screen (the initial route) until the check completes; an
+      // already-authenticated user is then sent straight to home below.
+      if (!authState.isInitialized) {
+        return null;
+      }
+
       // ❌ Not logged in
       if (!isAuth && !isAuthRoute) {
         return RoutePaths.login;
@@ -68,7 +78,8 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       return null;
     },
-    routes: [
+    routes: 
+    [
       GoRoute(
           path: RoutePaths.login,
           name: RouteNames.login,
@@ -113,6 +124,20 @@ final routerProvider = Provider<GoRouter>((ref) {
           name: RouteNames.protocolDetail,
           builder: (c, s) =>
               ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
+      GoRoute(
+        path: RoutePaths.protocolPlus,
+        name: RouteNames.protocolPlus,
+        builder: (c, s) {
+          final extra = s.extra as Map<String, dynamic>?;
+          final deviceIds =
+              extra?['deviceIds'] as List<String>? ?? const <String>[];
+          final transport = extra?['transport'] as String? ?? 'ble';
+          return ProtocolPlusListScreen(
+            deviceIds: deviceIds,
+            transport: transport,
+          );
+        },
+      ),
       GoRoute(
         path: RoutePaths.sessionSetup,
         name: RouteNames.sessionSetup,
@@ -177,6 +202,19 @@ final routerProvider = Provider<GoRouter>((ref) {
                 protocolByDeviceId[key] = pid;
               }
             }
+            final protocolPlusBindingsRaw =
+                extra?['protocolPlusBindings'] as List?;
+            final protocolPlusBindings = <ProtocolPlusBinding>[];
+            if (protocolPlusBindingsRaw != null) {
+              for (final raw in protocolPlusBindingsRaw) {
+                if (raw is ProtocolPlusBinding) {
+                  protocolPlusBindings.add(raw);
+                } else if (raw is Map) {
+                  final b = ProtocolPlusBinding.fromMap(raw);
+                  if (b != null) protocolPlusBindings.add(b);
+                }
+              }
+            }
             return SessionScreen(
               sessionId: extra?['sessionId'] as String?,
               protocolId: extra?['protocolId'] as String? ?? '',
@@ -190,6 +228,11 @@ final routerProvider = Provider<GoRouter>((ref) {
               delayedDeviceId: delayedDeviceId,
               skipEngineBootstrap: skipEngineBootstrap,
               wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
+              protocolPlusId: extra?['protocolPlusId'] as String?,
+              protocolPlusServerSessionId:
+                  extra?['protocolPlusServerSessionId'] as String?,
+              protocolPlusMac: extra?['protocolPlusMac'] as String?,
+              protocolPlusBindings: protocolPlusBindings,
             );
           }),
       GoRoute(
@@ -204,8 +247,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: RoutePaths.sessionDetail,
           name: RouteNames.sessionDetail,
-          builder: (c, s) =>
-              SessionDetailScreen(sessionId: s.pathParameters['id']!)),
+          builder: (c, s) => SessionDetailScreen(
+                sessionId: s.pathParameters['id']!,
+                item: s.extra is SessionHistoryItem
+                    ? s.extra as SessionHistoryItem
+                    : null,
+              )),
       GoRoute(
           path: RoutePaths.profileEdit,
           name: RouteNames.profileEdit,

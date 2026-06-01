@@ -11,6 +11,11 @@ class ActiveSession {
   final int totalDurationSeconds;
   final int elapsedSeconds;
 
+  /// Per-device Protocol Plus bindings (serverSessionId / serverDeviceId /
+  /// plusId / localMac) needed to re-attach the socket and stop the server-side
+  /// schedule when the session is re-opened from history. Empty for normal runs.
+  final List<Map<String, String>> protocolPlusBindings;
+
   const ActiveSession({
     required this.id,
     required this.protocolId,
@@ -23,6 +28,7 @@ class ActiveSession {
     this.deviceNames = const {},
     this.totalDurationSeconds = 0,
     this.elapsedSeconds = 0,
+    this.protocolPlusBindings = const [],
   });
 
   ActiveSession copyWith({
@@ -37,6 +43,7 @@ class ActiveSession {
     Map<String, String>? deviceNames,
     int? totalDurationSeconds,
     int? elapsedSeconds,
+    List<Map<String, String>>? protocolPlusBindings,
   }) {
     return ActiveSession(
       id: id ?? this.id,
@@ -50,6 +57,7 @@ class ActiveSession {
       deviceNames: deviceNames ?? this.deviceNames,
       totalDurationSeconds: totalDurationSeconds ?? this.totalDurationSeconds,
       elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
+      protocolPlusBindings: protocolPlusBindings ?? this.protocolPlusBindings,
     );
   }
 
@@ -66,6 +74,7 @@ class ActiveSession {
       'deviceNames': deviceNames,
       'totalDurationSeconds': totalDurationSeconds,
       'elapsedSeconds': elapsedSeconds,
+      'protocolPlusBindings': protocolPlusBindings,
     };
   }
 
@@ -94,6 +103,10 @@ class ActiveSession {
       deviceNames: Map<String, String>.from(json['deviceNames'] ?? {}),
       totalDurationSeconds: json['totalDurationSeconds'] as int? ?? 0,
       elapsedSeconds: json['elapsedSeconds'] as int? ?? 0,
+      protocolPlusBindings: (json['protocolPlusBindings'] as List<dynamic>?)
+              ?.map((e) => Map<String, String>.from(e as Map))
+              .toList() ??
+          const [],
     );
   }
 
@@ -109,6 +122,7 @@ class ActiveSession {
         deviceNames,
         totalDurationSeconds,
         elapsedSeconds,
+        protocolPlusBindings,
       ];
 }
 

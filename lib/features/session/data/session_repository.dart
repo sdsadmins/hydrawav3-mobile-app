@@ -24,6 +24,12 @@ class SessionRepository {
   final Dio _nodeDio;
   final bool _isOnline;
 
+  /// Session ids that have already been saved/synced (or are being saved) in
+  /// this app run. The backend inserts a new intake on every POST (no upsert),
+  /// so opening the live session card repeatedly must not create duplicates.
+  /// Static so it survives provider re-creation and is shared app-wide.
+  static final Set<String> _handledSessionIds = {};
+
   SessionRepository({
     required AppDatabase db,
     required Dio nodeDio,
@@ -34,8 +40,26 @@ class SessionRepository {
 
   /// Save a completed session locally and sync to backend if online.
   Future<void> saveSession(SessionRecord record) async {
-    // Always save locally first
-    await _db.insertSession(LocalSessionsCompanion(
+    // Claim this session id synchronously (before any await). If it's already
+    // claimed, another save for the same session is in progress or done — skip
+    // so we never POST the same intake twice (e.g. re-opening the live card).
+    if (!_handledSessionIds.add(record.id)) {
+      appLogger.i(
+          'Session ${record.id} already handled this run, skipping duplicate save');
+      return;
+    }
+
+    // Also skip if a previous app run already synced it to the backend.
+    final existing = await _db.getLocalSession(record.id);
+    final alreadySynced = existing?.synced ?? false;
+    if (alreadySynced) {
+      appLogger.i('Session ${record.id} already synced, skipping duplicate save');
+      return;
+    }
+
+    // Always save locally first. Preserve the existing synced flag so we never
+    // downgrade a synced row back to unsynced.
+    await _db.upsertSession(LocalSessionsCompanion(
       id: Value(record.id),
       protocolId: Value(record.protocolId),
       protocolName: Value(record.protocolName),
@@ -45,13 +69,13 @@ class SessionRepository {
       discomfortBefore: Value(record.discomfortBefore),
       discomfortAfter: Value(record.discomfortAfter),
       notes: Value(record.notes),
-      synced: const Value(false),
+      synced: Value(record.synced),
       completedAt: Value(record.completedAt),
     ));
 
     appLogger.i('Session saved locally: ${record.id}');
 
-    // Attempt to sync to backend
+    // Attempt to sync to backend (only when not already synced).
     if (_isOnline) {
       await _syncSession(record);
     }
@@ -77,6 +101,8 @@ class SessionRepository {
           discomfortBefore: session.discomfortBefore,
           discomfortAfter: session.discomfortAfter,
           notes: session.notes,
+          createdAt: session.completedAt,
+          updatedAt: session.completedAt,
           completedAt: session.completedAt,
         );
         await _syncSession(record);
@@ -88,9 +114,11 @@ class SessionRepository {
 
   Future<void> _syncSession(SessionRecord record) async {
     try {
+      final body = record.toIntakeJson();
+      appLogger.i('Intake POST protocols → ${body['protocols']}');
       await _nodeDio.post(
         ApiEndpoints.intake,
-        data: record.toIntakeJson(),
+        data: body,
       );
       await _db.markSessionSynced(record.id);
       appLogger.i('Session synced: ${record.id}');

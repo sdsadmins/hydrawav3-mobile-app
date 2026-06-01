@@ -111,12 +111,14 @@ class AuthRepository {
   }
 
   Future<void> changePassword({
-    required String oldPassword,
+    required String currentPassword,
     required String newPassword,
+    required String confirmPassword,
   }) async {
     await _remoteSource.changePassword(
-      oldPassword: oldPassword,
+      currentPassword: currentPassword,
       newPassword: newPassword,
+      confirmPassword: confirmPassword,
     );
   }
 

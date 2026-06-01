@@ -5,24 +5,26 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
+import '../../data/history_repository.dart';
+import '../../domain/session_history_model.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
-import '../../../session/services/session_engine.dart';
-import '../../../session/services/background_session_runtime.dart';
 
-class _Session {
-  final String id, protocol, date, duration;
-  final bool synced;
-  final int discomfortBefore, discomfortAfter;
-  _Session(this.id, this.protocol, this.date, this.duration, this.synced,
-      this.discomfortBefore, this.discomfortAfter);
+enum _HistoryTab { live, history }
+
+enum _HistoryFilter { all, guest }
+
+class HistoryListScreen extends ConsumerStatefulWidget {
+  const HistoryListScreen({super.key});
+
+  @override
+  ConsumerState<HistoryListScreen> createState() => _HistoryListScreenState();
 }
 
-final _sessions = <_Session>[];
-
-class HistoryListScreen extends ConsumerWidget {
-  const HistoryListScreen({super.key});
+class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
+  _HistoryTab _selectedTab = _HistoryTab.live;
+  _HistoryFilter _historyFilter = _HistoryFilter.all;
 
   bool _isLiveStatus(SessionStatus status) {
     return status == SessionStatus.running || status == SessionStatus.paused;
@@ -45,126 +47,232 @@ class HistoryListScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final allActiveSessions = ref.watch(activeSessionsProvider);
 
-    // Show ALL sessions in History (running on top, older below).
-    // Keep only genuinely live sessions, but DON'T collapse duplicates - each session
-    // should remain separate even if they have the same protocol/devices.
+    // Keep only genuinely live sessions (running on top, older below).
     final runningSessions = allActiveSessions
         .where(_isVisibleActiveSession)
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
+    final sessionsAsync = ref.watch(allSessionsProvider);
+    final savedSessions = sessionsAsync.asData?.value ?? const <SessionHistoryItem>[];
+    final trackedMinutes = savedSessions.fold<int>(
+      0,
+      (sum, s) => sum + (_intakeDurationSeconds(s) ~/ 60),
+    );
+
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      body: CustomScrollView(
-        physics: const ClampingScrollPhysics(),
-        slivers: [
-          // Header
-          SliverToBoxAdapter(
-            child: Container(
-              decoration: BoxDecoration(color: ThemeConstants.background),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                  child: AnimatedEntrance(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Session History',
-                            style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w700,
-                                color: ThemeConstants.textPrimary,
-                                letterSpacing: -0.5)),
-                        const SizedBox(height: 4),
-                        Text('Track your therapy progress',
-                            style: TextStyle(
-                                fontSize: 14,
-                                color: ThemeConstants.textSecondary)),
-                        const SizedBox(height: 16),
-                        // Summary stats
-                        Row(children: [
-                          _SummaryChip(
-                              value: '${runningSessions.length}',
-                              label: 'Sessions',
-                              icon: Icons.play_circle_outline_rounded),
-                          const SizedBox(width: 10),
-                          const _SummaryChip(
-                              value: '-0.0',
-                              label: 'Avg Relief',
-                              icon: Icons.trending_down_rounded),
-                          const SizedBox(width: 10),
-                          const _SummaryChip(
-                              value: '0m',
-                              label: 'Total Time',
-                              icon: Icons.timer_outlined),
-                        ]),
-                      ],
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AnimatedEntrance(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Session History',
+                        style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.textPrimary,
+                            letterSpacing: -0.5)),
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      _SummaryChip(
+                          value: '${runningSessions.length}',
+                          label: 'Live',
+                          icon: Icons.play_circle_outline_rounded),
+                      const SizedBox(width: 8),
+                      _SummaryChip(
+                          value: '${savedSessions.length}',
+                          label: 'History',
+                          icon: Icons.history_rounded),
+                      const SizedBox(width: 8),
+                      _SummaryChip(
+                          value: '${trackedMinutes}m',
+                          label: 'Tracked',
+                          icon: Icons.timer_outlined),
+                    ]),
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: ThemeConstants.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _HistoryTabButton(
+                              label: 'Live Session',
+                              icon: Icons.bolt_rounded,
+                              selected: _selectedTab == _HistoryTab.live,
+                              onTap: () => setState(
+                                () => _selectedTab = _HistoryTab.live,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: _HistoryTabButton(
+                              label: 'History',
+                              icon: Icons.history_rounded,
+                              selected: _selectedTab == _HistoryTab.history,
+                              onTap: () => setState(
+                                () => _selectedTab = _HistoryTab.history,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
-            ),
-          ),
-
-          // Sessions
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (ctx, i) {
-                  // Show current live session from engine - COMMENTED OUT
-                  /*if (hasLiveSession && i == 0) {
-                    return AnimatedEntrance(
-                      index: i,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _LiveSessionCard(engine: engine),
-                      ),
-                    );
-                  }
-
-                  // Show background service session - COMMENTED OUT
-                  if (hasServiceLiveSession && i == 0) {
-                    return AnimatedEntrance(
-                      index: i,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _ServiceLiveSessionCard(
-                          runtime: bgRuntime,
-                        ),
-                      ),
-                    );
-                  }*/
-
-                  // Running sessions (big cards)
-                  if (i < runningSessions.length) {
-                    final session = runningSessions[i];
-                    return AnimatedEntrance(
-                      index: i,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _ActiveSessionCard(
-                          session: session,
-                          canOpenLive: _isVisibleActiveSession(session),
-                        ),
-                      ),
-                    );
-                  }
-
-                  return const SizedBox.shrink();
-                },
-                childCount: runningSessions.length,
+              const SizedBox(height: 14),
+              Expanded(
+                child: _selectedTab == _HistoryTab.live
+                    ? _buildLiveSessions(runningSessions)
+                    : _buildHistorySessions(sessionsAsync),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
+
+  Widget _buildLiveSessions(List<ActiveSession> runningSessions) {
+    if (runningSessions.isEmpty) {
+      return const _EmptyHistoryState(
+        title: 'No live sessions',
+        subtitle: 'Start a session to see it appear here while it is running.',
+        icon: Icons.play_disabled_rounded,
+      );
+    }
+
+    return ListView.separated(
+      physics: const ClampingScrollPhysics(),
+      itemCount: runningSessions.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final session = runningSessions[index];
+        return AnimatedEntrance(
+          index: index,
+          child: _ActiveSessionCard(
+            session: session,
+            canOpenLive: _isVisibleActiveSession(session),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHistorySessions(
+      AsyncValue<List<SessionHistoryItem>> sessionsAsync) {
+    return Column(
+      children: [
+        _HistoryFilterToggle(
+          filter: _historyFilter,
+          onChanged: (value) => setState(() => _historyFilter = value),
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          child: sessionsAsync.when(
+            loading: () => ListView.separated(
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: 7,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, __) => const _HistoryCardSkeleton(),
+            ),
+            error: (error, _) => _EmptyHistoryState(
+              title: 'Couldn\'t load history',
+              subtitle: 'Pull down to retry. ($error)',
+              icon: Icons.cloud_off_rounded,
+              onRetry: () => ref.invalidate(allSessionsProvider),
+            ),
+            data: (sessions) {
+              final filtered = _historyFilter == _HistoryFilter.guest
+                  ? sessions.where((s) => s.isGuest).toList()
+                  : sessions;
+
+              if (filtered.isEmpty) {
+                return RefreshIndicator(
+                  color: ThemeConstants.accent,
+                  onRefresh: () => ref.refresh(allSessionsProvider.future),
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      const SizedBox(height: 40),
+                      _EmptyHistoryState(
+                        title: _historyFilter == _HistoryFilter.guest
+                            ? 'No guest sessions'
+                            : 'No saved sessions',
+                        subtitle: _historyFilter == _HistoryFilter.guest
+                            ? 'Guest sessions saved to the database will appear here.'
+                            : 'Completed sessions saved to the database will appear here.',
+                        icon: Icons.history_rounded,
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return RefreshIndicator(
+                color: ThemeConstants.accent,
+                onRefresh: () => ref.refresh(allSessionsProvider.future),
+                child: ListView.separated(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    return AnimatedEntrance(
+                      index: index,
+                      child: _HistorySessionCard(session: filtered[index]),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Total session duration (seconds) for an intake — the longest protocol run.
+int _intakeDurationSeconds(SessionHistoryItem session) {
+  var maxSeconds = 0;
+  for (final protocol in session.protocols) {
+    final value = protocol.duration ?? 0;
+    if (value > maxSeconds) maxSeconds = value;
+  }
+  return maxSeconds;
+}
+
+String _formatHistoryDate(DateTime value) {
+  final local = value.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$day/$month/${local.year}  $hour:$minute';
+}
+
+String _formatHistoryDuration(int seconds) {
+  final safeSeconds = seconds < 0 ? 0 : seconds;
+  final hours = safeSeconds ~/ 3600;
+  final minutes = (safeSeconds % 3600) ~/ 60;
+  if (hours > 0) return '${hours}h ${minutes}m';
+  if (minutes > 0) return '${minutes}m';
+  return '${safeSeconds}s';
 }
 
 class _ActiveSessionCard extends StatelessWidget {
@@ -184,7 +292,6 @@ class _ActiveSessionCard extends StatelessWidget {
     return GradientCard(
       onTap: () {
         if (!canOpenLive) return;
-        // Navigate to session screen with this active session
         context.pushNamed(
           RouteNames.session,
           extra: {
@@ -199,14 +306,19 @@ class _ActiveSessionCard extends StatelessWidget {
             'advancedSettingsByDevice': {},
             'delayedDeviceId': null,
             'protocolByDeviceId': {},
-            // Let SessionScreen verify whether an engine already exists or
-            // needs to be bootstrapped for this session.
             'skipEngineBootstrap': false,
             'sessionClockAnchorMs': session.createdAt.millisecondsSinceEpoch,
+            // Restore Protocol Plus wiring so Stop cancels the server schedule.
+            if (session.protocolPlusBindings.isNotEmpty) ...{
+              'protocolPlusBindings': session.protocolPlusBindings,
+              'protocolPlusId':
+                  session.protocolPlusBindings.first['plusId'] ?? '',
+            },
           },
         );
       },
       padding: const EdgeInsets.all(16),
+      showShadow: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -293,10 +405,8 @@ class _ActiveSessionCard extends StatelessWidget {
                 final id = session.deviceIds[index];
                 final name = session.deviceNames[id] ?? 'Device ${index + 1}';
                 final deviceStatus = perDeviceStatuses[index];
-                final isPaused =
-                    deviceStatus == session_model.SessionStatus.paused;
-                final isRunning =
-                    deviceStatus == session_model.SessionStatus.running;
+                final isPaused = deviceStatus == SessionStatus.paused;
+                final isRunning = deviceStatus == SessionStatus.running;
                 final statusColor = isPaused
                     ? ThemeConstants.warning
                     : (isRunning
@@ -364,100 +474,6 @@ class _ActiveSessionCard extends StatelessWidget {
   }
 }
 
-class _ServiceLiveSessionCard extends StatelessWidget {
-  final BackgroundSessionState runtime;
-  const _ServiceLiveSessionCard({required this.runtime});
-
-  @override
-  Widget build(BuildContext context) {
-    final snapshot = runtime.snapshot;
-    if (snapshot == null) return const SizedBox.shrink();
-    final status = runtime.status == 'paused' ? 'Paused' : 'Running';
-
-    return GradientCard(
-      onTap: () {
-        context.pushNamed(
-          RouteNames.session,
-          extra: {
-            'sessionId': snapshot.sessionId,
-            'protocolId': snapshot.protocolId,
-            'deviceIds': snapshot.deviceIds,
-            'transport': snapshot.transport,
-            'advancedSettings': snapshot.advancedSettings,
-            'advancedSettingsByDevice': snapshot.advancedSettingsByDevice,
-            'delayedDeviceId': snapshot.delayedDeviceId,
-            'protocolByDeviceId': snapshot.protocolByDeviceId,
-            // Engine may be cold after app restart; allow bootstrap path.
-            'skipEngineBootstrap': false,
-            'sessionClockAnchorMs': snapshot.startedAtEpochMs,
-          },
-        );
-      },
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: ThemeConstants.warning.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              Icons.bluetooth_connected_rounded,
-              color: ThemeConstants.warning,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  snapshot.protocolName,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: ThemeConstants.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${snapshot.deviceIds.length} device(s) in background session',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: (runtime.status == 'paused'
-                      ? ThemeConstants.warning
-                      : ThemeConstants.success)
-                  .withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              status,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: runtime.status == 'paused'
-                    ? ThemeConstants.warning
-                    : ThemeConstants.success,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SummaryChip extends StatelessWidget {
   final String value, label;
   final IconData icon;
@@ -468,26 +484,36 @@ class _SummaryChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
         decoration: BoxDecoration(
           color: ThemeConstants.surface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: ThemeConstants.border),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Icon(icon, color: ThemeConstants.accent, size: 18),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: ThemeConstants.textPrimary)),
-            const SizedBox(height: 2),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 11, color: ThemeConstants.textTertiary)),
+            Icon(icon, color: ThemeConstants.accent, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.textPrimary)),
+                  Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 10, color: ThemeConstants.textTertiary)),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -495,63 +521,178 @@ class _SummaryChip extends StatelessWidget {
   }
 }
 
-class _SessionCard extends StatelessWidget {
-  final _Session session;
-  const _SessionCard({required this.session});
+class _HistoryTabButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _HistoryTabButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final improvement = session.discomfortBefore - session.discomfortAfter;
-    return GradientCard(
-      onTap: () => context.push('/history/${session.id}'),
-      padding: const EdgeInsets.all(16),
-      child: Row(
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected
+                ? ThemeConstants.accent
+                : ThemeConstants.border.withValues(alpha: 0),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 17,
+              color: selected
+                  ? ThemeConstants.accent
+                  : ThemeConstants.textSecondary,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: selected
+                    ? ThemeConstants.accent
+                    : ThemeConstants.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HistoryFilterToggle extends StatelessWidget {
+  final _HistoryFilter filter;
+  final ValueChanged<_HistoryFilter> onChanged;
+
+  const _HistoryFilterToggle({required this.filter, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _FilterPill(
+          label: 'All',
+          icon: Icons.all_inclusive_rounded,
+          selected: filter == _HistoryFilter.all,
+          onTap: () => onChanged(_HistoryFilter.all),
+        ),
+        const SizedBox(width: 8),
+        _FilterPill(
+          label: 'Guest only',
+          icon: Icons.person_outline_rounded,
+          selected: filter == _HistoryFilter.guest,
+          onTap: () => onChanged(_HistoryFilter.guest),
+        ),
+      ],
+    );
+  }
+}
+
+class _FilterPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterPill({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected
+                  ? ThemeConstants.accent
+                  : ThemeConstants.textSecondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: selected
+                    ? ThemeConstants.accent
+                    : ThemeConstants.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HistoryCardSkeleton extends StatelessWidget {
+  const _HistoryCardSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
+      ),
+      child: const Row(
         children: [
-          const GlowIconBox(icon: Icons.play_circle_outline_rounded),
-          const SizedBox(width: 14),
+          ShimmerBox(width: 40, height: 40, borderRadius: 12),
+          SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(session.protocol,
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: ThemeConstants.textPrimary)),
-                const SizedBox(height: 4),
-                Row(children: [
-                  Text('${session.date}  ·  ${session.duration}',
-                      style: TextStyle(
-                          fontSize: 12, color: ThemeConstants.textTertiary)),
-                ]),
+                ShimmerBox(width: 130, height: 13, borderRadius: 6),
+                SizedBox(height: 8),
+                ShimmerBox(width: double.infinity, height: 11, borderRadius: 6),
               ],
             ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: ThemeConstants.success.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text('-$improvement',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.success)),
-              ),
-              const SizedBox(height: 4),
-              Icon(
-                  session.synced
-                      ? Icons.cloud_done_rounded
-                      : Icons.cloud_off_rounded,
-                  size: 14,
-                  color: session.synced
-                      ? ThemeConstants.success.withValues(alpha: 0.5)
-                      : ThemeConstants.textTertiary),
-            ],
           ),
         ],
       ),
@@ -559,73 +700,69 @@ class _SessionCard extends StatelessWidget {
   }
 }
 
-class _LiveSessionCard extends StatelessWidget {
-  final SessionEngineState engine;
-  const _LiveSessionCard({required this.engine});
+class _HistorySessionCard extends StatelessWidget {
+  final SessionHistoryItem session;
+
+  const _HistorySessionCard({required this.session});
 
   @override
   Widget build(BuildContext context) {
-    final status = engine.status == session_model.SessionStatus.paused
-        ? 'Paused'
-        : 'Running';
-    final protocol = engine.protocol;
-    final protocolByDeviceId = <String, String>{
-      for (final entry in engine.protocolByDevice.entries)
-        entry.key: entry.value.id,
-    };
+    final protocolName = session.protocols.isNotEmpty
+        ? (session.protocols.first.protocol ?? 'Session')
+        : 'Session';
+    final deviceCount = session.protocols
+        .map((p) => p.deviceName)
+        .whereType<String>()
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .length;
+    final durationLabel = _formatHistoryDuration(_intakeDurationSeconds(session));
+    final dateLabel =
+        session.createdAt != null ? _formatHistoryDate(session.createdAt!) : '—';
+    final meta = StringBuffer('$dateLabel  •  $durationLabel');
+    if (deviceCount > 0) {
+      meta.write('  •  $deviceCount device(s)');
+    }
 
     return GradientCard(
-      onTap: () {
-        if (protocol == null) return;
-        context.pushNamed(
-          RouteNames.session,
-          extra: {
-            'protocolId': protocol.id,
-            'protocol': protocol,
-            'deviceIds': engine.deviceIds,
-            'transport': engine.transport == session_model.SessionTransport.wifi
-                ? 'wifi'
-                : 'ble',
-            'advancedSettings': engine.advancedSettings,
-            'advancedSettingsByDevice': engine.advancedSettingsByDevice,
-            'delayedDeviceId': engine.delayedDeviceId,
-            'protocolByDeviceId': protocolByDeviceId,
-            // Critical: keep current in-memory engine session as-is.
-            'skipEngineBootstrap': true,
-          },
-        );
-      },
-      padding: const EdgeInsets.all(16),
+      onTap: () => context.push('/history/${session.id ?? ''}', extra: session),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      showShadow: false,
       child: Row(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
-              color: ThemeConstants.accent.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(10),
+              color: ThemeConstants.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              Icons.graphic_eq_rounded,
+              Icons.history_rounded,
+              size: 20,
               color: ThemeConstants.accent,
             ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  protocol?.templateName ?? 'Live Session',
+                  protocolName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: ThemeConstants.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 Text(
-                  '${engine.deviceIds.length} device(s) connected',
+                  meta.toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     color: ThemeConstants.textTertiary,
@@ -634,27 +771,82 @@ class _LiveSessionCard extends StatelessWidget {
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: (engine.status == SessionStatus.paused
-                      ? ThemeConstants.warning
-                      : ThemeConstants.success)
-                  .withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              status,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: engine.status == SessionStatus.paused
-                    ? ThemeConstants.warning
-                    : ThemeConstants.success,
-              ),
-            ),
+          const SizedBox(width: 6),
+          Icon(
+            Icons.chevron_right_rounded,
+            color: ThemeConstants.textTertiary,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EmptyHistoryState extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback? onRetry;
+
+  const _EmptyHistoryState({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: ThemeConstants.border),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 36, color: ThemeConstants.textTertiary),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: ThemeConstants.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: ThemeConstants.textSecondary,
+              ),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 14),
+              TextButton.icon(
+                onPressed: onRetry,
+                icon: Icon(Icons.refresh_rounded,
+                    size: 18, color: ThemeConstants.accent),
+                label: Text(
+                  'Retry',
+                  style: TextStyle(
+                    color: ThemeConstants.accent,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

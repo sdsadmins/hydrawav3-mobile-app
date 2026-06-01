@@ -7,12 +7,15 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
+import '../../auth/presentation/providers/auth_provider.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
+import '../data/session_repository.dart';
 import '../domain/session_model.dart';
 
 /// Provider family that creates a separate SessionEngine instance for each session
@@ -36,6 +39,22 @@ class SessionEngineState {
   final Map<String, TimerState> deviceTimers;
   final Map<String, SessionStatus> deviceStatuses;
   final String? delayedDeviceId;
+
+  /// Protocol Plus template name (the sequence's own title), the ordered
+  /// sub-protocol names, and the index of the one currently running. Empty
+  /// sequence = not a Protocol Plus session. Drives the sequence tracker in the
+  /// live session screen.
+  final String protocolPlusName;
+  final List<String> protocolPlusSequence;
+  final int protocolPlusIndex;
+
+  /// Per-device Protocol Plus tracker state for mixed / multi-Plus sessions.
+  /// A device id present in [protocolPlusSequenceByDevice] is a Plus device and
+  /// gets its own progress card; absent ids are normal protocols.
+  final Map<String, String> protocolPlusNameByDevice;
+  final Map<String, List<String>> protocolPlusSequenceByDevice;
+  final Map<String, int> protocolPlusIndexByDevice;
+
   final String? error;
 
   const SessionEngineState({
@@ -51,6 +70,12 @@ class SessionEngineState {
     this.deviceTimers = const {},
     this.deviceStatuses = const {},
     this.delayedDeviceId,
+    this.protocolPlusName = '',
+    this.protocolPlusSequence = const [],
+    this.protocolPlusIndex = 0,
+    this.protocolPlusNameByDevice = const {},
+    this.protocolPlusSequenceByDevice = const {},
+    this.protocolPlusIndexByDevice = const {},
     this.error,
   });
 
@@ -67,6 +92,12 @@ class SessionEngineState {
     Map<String, TimerState>? deviceTimers,
     Map<String, SessionStatus>? deviceStatuses,
     String? delayedDeviceId,
+    String? protocolPlusName,
+    List<String>? protocolPlusSequence,
+    int? protocolPlusIndex,
+    Map<String, String>? protocolPlusNameByDevice,
+    Map<String, List<String>>? protocolPlusSequenceByDevice,
+    Map<String, int>? protocolPlusIndexByDevice,
     String? error,
   }) {
     return SessionEngineState(
@@ -84,6 +115,15 @@ class SessionEngineState {
       deviceTimers: deviceTimers ?? this.deviceTimers,
       deviceStatuses: deviceStatuses ?? this.deviceStatuses,
       delayedDeviceId: delayedDeviceId ?? this.delayedDeviceId,
+      protocolPlusName: protocolPlusName ?? this.protocolPlusName,
+      protocolPlusSequence: protocolPlusSequence ?? this.protocolPlusSequence,
+      protocolPlusIndex: protocolPlusIndex ?? this.protocolPlusIndex,
+      protocolPlusNameByDevice:
+          protocolPlusNameByDevice ?? this.protocolPlusNameByDevice,
+      protocolPlusSequenceByDevice:
+          protocolPlusSequenceByDevice ?? this.protocolPlusSequenceByDevice,
+      protocolPlusIndexByDevice:
+          protocolPlusIndexByDevice ?? this.protocolPlusIndexByDevice,
       error: error,
     );
   }
@@ -101,6 +141,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   int _cycleIndex = 0;
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
+  bool _historyCaptured = false; // Save session to history only once on start
+
+  /// True for a server-driven Protocol Plus run. While true, the engine must
+  /// NOT auto-STOP a device or mark it "completed" when a single protocol's
+  /// duration elapses — the firmware finishes that protocol on its own and the
+  /// next one arrives via START_PROTOCOL. Sending STOP here would kill the
+  /// device mid-sequence (timer keeps running, device goes dark).
+  bool _isProtocolPlus = false;
+
+  /// Device ids running a server-driven Protocol Plus sequence. In a mixed
+  /// session (some Plus, some normal) only these devices skip the auto-STOP /
+  /// "completed" transition when a single protocol's duration elapses.
+  final Set<String> _protocolPlusDeviceIds = <String>{};
+
   Future<void> _stateUpdateQueue = Future.value();
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
@@ -160,8 +214,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         appLogger.i(
           'WiFi: Publishing playCmd=$playCmd (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
         );
-        await dio.post(
-          ApiEndpoints.mqttPublish,
+        await postMqttPublishRequest(
+          dio,
           data: {
             'topic': 'HydraWav3Pro/config',
             'payload': payloadStr,
@@ -186,8 +240,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       appLogger.i(
         'WiFi: Publishing playCmd=$playCmd (topic=HydraWav3Pro/config, mac=$mac, payload=$payloadStr)',
       );
-      await dio.post(
-        ApiEndpoints.mqttPublish,
+      await postMqttPublishRequest(
+        dio,
         data: {
           'topic': 'HydraWav3Pro/config',
           'payload': payloadStr,
@@ -264,10 +318,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
       resolvedProtocolByDevice[id] = proto;
     }
-    final computedTotalDurationSeconds = _computeFirmwareTotalDurationSeconds(
-      protocol,
-      advancedSettings,
-    );
+    final selectedDeviceIds = List<String>.from(deviceIds);
+    final computedTotalDurationSeconds = selectedDeviceIds.isEmpty
+        ? _computeEffectiveTotalDurationSeconds(
+            protocol,
+            advancedSettings,
+            applyStartDelay: false,
+          )
+        : selectedDeviceIds
+            .map((id) {
+              final deviceProtocol = resolvedProtocolByDevice[id]!;
+              final deviceSettings = settingsByDevice[id] ?? advancedSettings;
+              return _computeEffectiveTotalDurationSeconds(
+                deviceProtocol,
+                deviceSettings,
+                applyStartDelay: _shouldApplyStartDelay(
+                  transportId: id,
+                  advancedSettings: deviceSettings,
+                ),
+              );
+            })
+            .reduce((a, b) => a > b ? a : b);
     appLogger
         .i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
     appLogger.i(
@@ -283,14 +354,17 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
     appLogger.i('═══════════════════════════════════════════════════');
 
-    final selectedDeviceIds = List<String>.from(deviceIds);
     final deviceTimers = <String, TimerState>{
       for (final id in selectedDeviceIds)
         id: TimerState(
           totalDuration: Duration(
-            seconds: _computeFirmwareTotalDurationSeconds(
+            seconds: _computeEffectiveTotalDurationSeconds(
               resolvedProtocolByDevice[id]!,
               settingsByDevice[id] ?? advancedSettings,
+              applyStartDelay: _shouldApplyStartDelay(
+                transportId: id,
+                advancedSettings: settingsByDevice[id] ?? advancedSettings,
+              ),
             ),
           ),
           totalCycles: resolvedProtocolByDevice[id]!.cycles.length,
@@ -382,14 +456,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               );
               final payloadStr = jsonEncode(payloadObj);
 
-              await dio.post(
-                ApiEndpoints.mqttPublish,
+              await postMqttPublishRequest(
+                dio,
                 data: {
                   'topic': 'HydraWav3Pro/config',
                   'payload': payloadStr,
                 },
               );
             }
+          } on DioException catch (e) {
+            appLogger.e(
+              'WiFi: config publish failed '
+              '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
+            );
+            if (!_isActive) return;
+            state = state.copyWith(
+              status: SessionStatus.stopped,
+              error: 'WiFi publish failed: ${e.message ?? e.toString()}',
+            );
+            return;
           } catch (e) {
             appLogger.e('WiFi: config publish failed: $e');
             if (!_isActive) return;
@@ -667,6 +752,226 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
   }
 
+  /// Protocol Plus: switch [mac] to [newProtocol] mid-session when the server
+  /// emits START_PROTOCOL. Re-sends the full config + PLAY over BLE, or
+  /// publishes config via MQTT for WiFi — reusing the exact senders the normal
+  /// run uses. Does NOT reset the session timer or disturb the normal flow.
+  Future<bool> applyProtocolPlusSwitch(
+    String mac,
+    Protocol newProtocol,
+    int protocolIndex,
+  ) async {
+    if (!_isActive) return false;
+    appLogger.i(
+      'ProtocolPlus: switching device=$mac to ${newProtocol.templateName} '
+      '(index=$protocolIndex, transport=${state.transport})',
+    );
+
+    // Reflect the new protocol per-device + advance the sequence indicator so
+    // the live session screen highlights the now-active protocol chip.
+    final updatedByDevice = Map<String, Protocol>.from(state.protocolByDevice)
+      ..[mac] = newProtocol;
+    // Re-derive this device's advanced settings from the NEW protocol so the
+    // switch payload uses that protocol's own cycle1/cycle5 (edge cycle) and
+    // vibration range — not the previous protocol's. Otherwise every protocol
+    // in the sequence inherits protocol[0]'s edge-cycle flags.
+    final updatedSettingsByDevice =
+        Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice)
+          ..[mac] = _advancedSettingsForProtocol(newProtocol);
+    final updatedIndexByDevice =
+        Map<String, int>.from(state.protocolPlusIndexByDevice)
+          ..[mac] = protocolIndex;
+    try {
+      state = state.copyWith(
+        protocolByDevice: updatedByDevice,
+        advancedSettingsByDevice: updatedSettingsByDevice,
+        protocolPlusIndex: protocolIndex,
+        protocolPlusIndexByDevice: updatedIndexByDevice,
+      );
+    } catch (_) {}
+
+    final payloadStr =
+        jsonEncode(_protocolToRs232Json(newProtocol, transportId: mac));
+
+    if (state.transport == SessionTransport.wifi) {
+      try {
+        await postMqttPublishRequest(
+          _ref.read(djangoDioProvider),
+          data: {
+            'topic': 'HydraWav3Pro/config',
+            'payload': payloadStr,
+          },
+        );
+        appLogger.i('ProtocolPlus: WiFi config published for $mac');
+        return true;
+      } catch (e) {
+        appLogger.e('ProtocolPlus: WiFi switch failed for $mac: $e');
+        return false;
+      }
+    }
+
+    // BLE: full config → settle delay → PLAY (same sequence as a fresh start).
+    final connector = _ref.read(bleConnectorProvider);
+
+    // The firmware physically stops when protocol[i-1] finishes and can drop
+    // BLE during the gap before this switch. The connector auto-reconnects, so
+    // wait briefly for it to come back instead of abandoning the switch.
+    if (!connector.isConnected(mac)) {
+      appLogger.w(
+        'ProtocolPlus: BLE device $mac not connected — waiting for reconnect…',
+      );
+      const pollEvery = Duration(milliseconds: 500);
+      const maxWait = Duration(seconds: 12);
+      var waited = Duration.zero;
+      while (waited < maxWait && !connector.isConnected(mac)) {
+        await Future<void>.delayed(pollEvery);
+        waited += pollEvery;
+        if (!_isActive) return false;
+      }
+      if (!connector.isConnected(mac)) {
+        appLogger.e(
+          'ProtocolPlus: BLE device $mac still not connected after '
+          '${maxWait.inSeconds}s — switch skipped',
+        );
+        return false;
+      }
+      appLogger.i('ProtocolPlus: BLE device $mac reconnected — switching now');
+    }
+
+    // STOP → reset → config → settle → PLAY, with one retry on failure.
+    //
+    // CRITICAL: a fresh start works because the device is IDLE when it receives
+    // config+PLAY. At a Protocol Plus switch the device has just FINISHED
+    // protocol[i-1] ("beep + stop") and is in a completed/BUSY state — if we
+    // send config+PLAY in that state the firmware only half-accepts it (device
+    // "runs a few parts then stops"). Sending STOP first forces the firmware
+    // back to idle so the new config+PLAY behaves exactly like a clean start.
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      // 1) Reset firmware to idle.
+      final okStop = await connector.writeToDevice(mac, [_bleStopByte]);
+      appLogger.i('ProtocolPlus: BLE pre-switch STOP for $mac → $okStop');
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+
+      // 2) Push the new protocol config.
+      final okPayload = await _sendLargePayload(mac, payloadStr);
+      if (!okPayload) {
+        appLogger.e(
+          'ProtocolPlus: BLE config send failed for $mac (attempt $attempt)',
+        );
+        if (attempt == 2 || !connector.isConnected(mac)) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        continue;
+      }
+
+      // 3) Settle, then PLAY (same timing as a fresh start).
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      final okPlay = await _sendPlayCommand(mac);
+      appLogger.i(
+        'ProtocolPlus: BLE switch PLAY for $mac → $okPlay (attempt $attempt)',
+      );
+      if (okPlay) return true;
+      if (attempt == 2) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
+    return false;
+  }
+
+  /// Protocol Plus: make the whole session span [seconds] (the protocol-plus
+  /// totalDuration) so it does NOT complete when protocol[0] ends — later
+  /// protocols (driven by START_PROTOCOL) keep counting toward this total.
+  /// Call right after loadSession(), before start().
+  /// Protocol Plus: store the sequence title + ordered sub-protocol names so
+  /// the live session screen can render the tracker and highlight the active
+  /// protocol.
+  void setProtocolPlusSequence(String plusName, List<String> names) {
+    if (!_isActive || names.isEmpty) return;
+    _isProtocolPlus = true;
+    state = state.copyWith(
+      protocolPlusName: plusName,
+      protocolPlusSequence: List<String>.from(names),
+      protocolPlusIndex: 0,
+    );
+    appLogger.i('ProtocolPlus: "$plusName" sequence → ${names.join(" → ")}');
+  }
+
+  /// Per-device Protocol Plus sequences for mixed / multi-Plus sessions. Each
+  /// Plus device gets its own tracker; normal devices are absent from these
+  /// maps and render normal controls instead of a progress card.
+  void setProtocolPlusSequencesByDevice(
+    Map<String, String> nameByDevice,
+    Map<String, List<String>> sequenceByDevice,
+  ) {
+    if (!_isActive || sequenceByDevice.isEmpty) return;
+    _isProtocolPlus = true;
+    state = state.copyWith(
+      protocolPlusNameByDevice: Map<String, String>.from(nameByDevice),
+      protocolPlusSequenceByDevice: {
+        for (final e in sequenceByDevice.entries)
+          e.key: List<String>.from(e.value),
+      },
+      protocolPlusIndexByDevice: {
+        for (final id in sequenceByDevice.keys) id: 0,
+      },
+    );
+    appLogger.i(
+      'ProtocolPlus: per-device sequences set for ${sequenceByDevice.keys.join(", ")}',
+    );
+  }
+
+  /// Mark which devices are running a server-driven Protocol Plus sequence so
+  /// the tick loop doesn't auto-complete them when one protocol's time elapses.
+  void setProtocolPlusDevices(Set<String> deviceIds) {
+    if (!_isActive) return;
+    _protocolPlusDeviceIds
+      ..clear()
+      ..addAll(deviceIds);
+    if (deviceIds.isNotEmpty) _isProtocolPlus = true;
+  }
+
+  /// Override per-device total durations (each Protocol Plus has its own total
+  /// length). The overall session timer tracks the longest device. Call after
+  /// loadSession(), before start().
+  void setDeviceTotalDurations(Map<String, int> secondsByDevice) {
+    if (!_isActive || secondsByDevice.isEmpty) return;
+    final devTimers = Map<String, TimerState>.from(state.deviceTimers);
+    secondsByDevice.forEach((id, secs) {
+      if (secs <= 0) return;
+      final t = devTimers[id];
+      if (t != null) {
+        devTimers[id] = t.copyWith(totalDuration: Duration(seconds: secs));
+      }
+    });
+    var maxDur = state.timer.totalDuration;
+    for (final t in devTimers.values) {
+      if (t.totalDuration > maxDur) maxDur = t.totalDuration;
+    }
+    state = state.copyWith(
+      deviceTimers: devTimers,
+      timer: state.timer.copyWith(totalDuration: maxDur),
+    );
+    appLogger.i(
+      'Session: per-device durations set (${secondsByDevice.length} devices, '
+      'overall=${maxDur.inSeconds}s)',
+    );
+  }
+
+  void setSessionTotalDuration(int seconds) {
+    if (!_isActive || seconds <= 0) return;
+    // Only Protocol Plus extends the session beyond a single protocol, so this
+    // is the reliable signal that we're in a server-driven sequence.
+    _isProtocolPlus = true;
+    final total = Duration(seconds: seconds);
+    final devTimers = <String, TimerState>{
+      for (final e in state.deviceTimers.entries)
+        e.key: e.value.copyWith(totalDuration: total),
+    };
+    state = state.copyWith(
+      timer: state.timer.copyWith(totalDuration: total),
+      deviceTimers: devTimers,
+    );
+    appLogger.i('Session: total duration overridden to ${seconds}s (protocol+)');
+  }
+
   void _beginRuntimeTimer() {
     appLogger.i(
       'Session: Runtime timer started (clockOffset=$_sessionClockOffset)',
@@ -693,6 +998,37 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // so remaining time and cycle/pad UI match the device immediately.
     _syncDisplayedTimerFromStopwatch();
     unawaited(_syncBackgroundRuntime('running'));
+    unawaited(_captureSessionHistoryOnce());
+  }
+
+  /// Persist this session to history exactly once, the moment it starts
+  /// running — independent of any screen being open. The repository also
+  /// dedupes by session id, so re-opening the live session never creates a
+  /// duplicate intake.
+  Future<void> _captureSessionHistoryOnce() async {
+    if (_historyCaptured) return;
+    if (state.protocol == null) return;
+    _historyCaptured = true;
+    try {
+      final userId = _ref.read(authStateProvider).user?.id;
+      final record = getSessionRecord(
+        sessionId: sessionId,
+        clientType: 'guest',
+        createdBy: userId,
+        updatedBy: userId,
+        discomfortBefore: 6,
+        discomfortAfter: 2,
+        notes: 'Guest session started from mobile app',
+      );
+      if (record == null) {
+        _historyCaptured = false;
+        return;
+      }
+      await _ref.read(sessionRepositoryProvider).saveSession(record);
+      appLogger.i('Session: history captured on start for $sessionId');
+    } catch (e) {
+      appLogger.e('Session: failed to capture history on start: $e');
+    }
   }
 
   Future<void> _syncBackgroundRuntime(String status) async {
@@ -731,19 +1067,31 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
   }
 
+  /// Advanced settings derived from a protocol's own fields. Keeps the
+  /// edge-cycle flags (cycle1/cycle5) and vibration range in sync with the
+  /// protocol so the firmware doesn't run an unexpected initiation cycle.
+  /// Mirrors the derivation used when launching a Protocol Plus run.
+  AdvancedSettings _advancedSettingsForProtocol(Protocol p) => AdvancedSettings(
+        cycle1Initiation: p.cycle1,
+        cycle5Completion: p.cycle5,
+        vibrationSweepMin: p.vibmin,
+        vibrationSweepMax: p.vibmax,
+        vibMin: p.vibmin,
+        vibMax: p.vibmax,
+        hotDrop: p.hotdrop,
+        coldDrop: p.colddrop,
+      );
+
   Map<String, dynamic> _protocolToRs232Json(
     Protocol p, {
     required String transportId,
   }) {
     final advancedSettings =
         state.advancedSettingsByDevice[transportId] ?? state.advancedSettings;
-    // In multi-device mode, apply start delay only to the selected device.
-    // If no delayed device is selected, keep legacy behavior and apply when > 0.
-    final selectedDelayedDeviceId = state.delayedDeviceId;
-    final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
-        state.deviceIds.contains(selectedDelayedDeviceId);
-    final applyDelay = advancedSettings.startDelay > 0 &&
-        (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
+    final applyDelay = _shouldApplyStartDelay(
+      transportId: transportId,
+      advancedSettings: advancedSettings,
+    );
     return _protocolToRs35Payload(
       p,
       mac: transportId,
@@ -831,8 +1179,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       p,
       advancedSettings,
     );
-    final totalDuration =
-        _computeFirmwareTotalDurationSeconds(p, advancedSettings);
+    final totalDuration = _computeEffectiveTotalDurationSeconds(
+      p,
+      advancedSettings,
+      applyStartDelay: applyStartDelay,
+    );
 
     return {
       'mac': mac,
@@ -898,6 +1249,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     return baseTimeline;
+  }
+
+  bool _shouldApplyStartDelay({
+    required String transportId,
+    required AdvancedSettings advancedSettings,
+  }) {
+    final selectedDelayedDeviceId = state.delayedDeviceId;
+    final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
+        state.deviceIds.contains(selectedDelayedDeviceId);
+    return advancedSettings.startDelay > 0 &&
+        (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
+  }
+
+  int _computeEffectiveTotalDurationSeconds(
+    Protocol p,
+    AdvancedSettings advancedSettings, {
+    required bool applyStartDelay,
+  }) {
+    final baseDuration = _computeFirmwareTotalDurationSeconds(
+      p,
+      advancedSettings,
+    );
+    return baseDuration + (applyStartDelay ? advancedSettings.startDelay : 0);
   }
 
   int _effectiveEdgeCycleDurationSeconds(
@@ -1160,22 +1534,43 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   SessionRecord? getSessionRecord({
+    String? sessionId,
     int? discomfortBefore,
     int? discomfortAfter,
     String? notes,
+    String clientType = 'guest',
+    String? createdBy,
+    String? updatedBy,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     if (state.protocol == null) return null;
+    final recordedAt = createdAt ?? DateTime.now();
+    final protocolByDeviceId =
+        <String, ({String name, int durationSeconds})>{
+      for (final entry in state.protocolByDevice.entries)
+        entry.key: (
+          name: entry.value.templateName,
+          durationSeconds: entry.value.totalDurationSeconds,
+        ),
+    };
     return SessionRecord(
-      id: const Uuid().v4(),
+      id: sessionId ?? const Uuid().v4(),
       protocolId: state.protocol!.id,
       protocolName: state.protocol!.templateName,
       deviceIds: state.deviceIds,
+      protocolByDeviceId: protocolByDeviceId,
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
       elapsedSeconds: _effectiveElapsed.inSeconds,
       discomfortBefore: discomfortBefore,
       discomfortAfter: discomfortAfter,
       notes: notes,
-      completedAt: DateTime.now(),
+      clientType: clientType,
+      createdBy: createdBy,
+      updatedBy: updatedBy,
+      createdAt: recordedAt,
+      updatedAt: updatedAt ?? recordedAt,
+      completedAt: recordedAt,
     );
   }
 
@@ -1185,8 +1580,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _sessionClockOffset = Duration.zero;
     _firstBlePlayAnchor = null;
     _startInProgress = false;
+    _historyCaptured = false;
     _cycleIndex = -1;
     _repetition = 0;
+    _isProtocolPlus = false;
+    _protocolPlusDeviceIds.clear();
     try {
       state = const SessionEngineState();
       unawaited(_ref
@@ -1242,13 +1640,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       if (status == SessionStatus.running) {
         final devElapsed = sw.elapsed;
         if (devElapsed >= timerState.totalDuration) {
-          completedDevices.add(id);
-          updatedStatuses[id] = SessionStatus.completed;
-          updatedTimers[id] = timerState.copyWith(
-            elapsed: timerState.totalDuration,
-            isRunning: false,
-          );
-          sw.stop();
+          // Protocol Plus: a single protocol finishing is NOT the end of the
+          // session. The firmware stops itself and the next protocol arrives
+          // via START_PROTOCOL, so DON'T mark completed or send STOP here —
+          // just clamp the displayed time and keep the device "running" so the
+          // session stays live for the upcoming switch.
+          final deviceIsPlus = _protocolPlusDeviceIds.contains(id) ||
+              (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty);
+          if (deviceIsPlus) {
+            updatedTimers[id] = timerState.copyWith(
+              elapsed: timerState.totalDuration,
+              isRunning: true,
+            );
+          } else {
+            completedDevices.add(id);
+            updatedStatuses[id] = SessionStatus.completed;
+            updatedTimers[id] = timerState.copyWith(
+              elapsed: timerState.totalDuration,
+              isRunning: false,
+            );
+            sw.stop();
+          }
         } else {
           updatedTimers[id] = timerState.copyWith(
             elapsed: devElapsed,

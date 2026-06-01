@@ -1,6 +1,7 @@
 class SessionHistoryItem {
   final String? id;
   final String? clientId;
+  final String? clientType;
   final List<HistoryProtocol> protocols;
   final List<HistoryDiscomfort> discomfortAreas;
   final String? sessionNotes;
@@ -9,16 +10,20 @@ class SessionHistoryItem {
   const SessionHistoryItem({
     this.id,
     this.clientId,
+    this.clientType,
     this.protocols = const [],
     this.discomfortAreas = const [],
     this.sessionNotes,
     this.createdAt,
   });
 
+  bool get isGuest => (clientType ?? '').toLowerCase() == 'guest';
+
   factory SessionHistoryItem.fromJson(Map<String, dynamic> json) {
     return SessionHistoryItem(
       id: json['_id'] as String? ?? json['id'] as String?,
       clientId: json['clientId'] as String?,
+      clientType: json['clientType'] as String?,
       protocols: (json['protocols'] as List<dynamic>?)
               ?.map((e) => HistoryProtocol.fromJson(e as Map<String, dynamic>))
               .toList() ??

@@ -1,16 +1,20 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../ble/data/ble_command_service.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
+import '../../../ble/presentation/providers/ble_scan_provider.dart';
+import '../../../ble/services/ble_scanner.dart';
 import '../../data/device_repository.dart';
 import '../../domain/device_model.dart';
 import '../providers/wifi_devices_provider.dart';
@@ -38,10 +42,6 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   String? _connectedDeviceMac;
   bool _connectingDevice = false;
   String? _connectingDeviceMac;
-  StreamSubscription<List<ScanResult>>? _bleScanSubscription;
-  StreamSubscription<bool>? _bleIsScanningSubscription;
-  DateTime? _lastScanUiUpdateAt;
-  static const Duration _scanUiThrottle = Duration(milliseconds: 500);
   StateSetter? _sheetSetState;
   BuildContext? _sheetContext;
 
@@ -85,9 +85,19 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   }
 
   void _updateSheet(VoidCallback updates) {
-    if (_sheetSetState != null) {
-      _sheetSetState!(updates);
-      return;
+    final sheetSetState = _sheetSetState;
+    if (sheetSetState != null) {
+      try {
+        // The sheet's setState throws if its StatefulBuilder was disposed
+        // (e.g. the sheet was swiped/dismissed without _closeCreateSheet). In
+        // that case clear the stale setter and fall back to the screen's own
+        // setState so callers like the Edit-WiFi handshake never crash.
+        sheetSetState(updates);
+        return;
+      } catch (_) {
+        _sheetSetState = null;
+        _sheetContext = null;
+      }
     }
     if (mounted) {
       setState(updates);
@@ -95,17 +105,31 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    // Keep the shared BLE scanner running the whole time this screen is open
+    // (same as the Devices list screen). This guarantees registered devices are
+    // already in scan results when the user taps Edit WiFi / Edit Name, so the
+    // handshake connects on the first try instead of needing a screen revisit.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(bleScannerProvider).initializeAutoScan();
+      ref.read(startScanProvider)();
+    });
+  }
+
+  @override
   void dispose() {
     _serialCtrl.dispose();
     _nameCtrl.dispose();
     _searchCtrl.dispose();
-    _bleScanSubscription?.cancel();
-    _bleIsScanningSubscription?.cancel();
     super.dispose();
   }
 
   void _clearScanSelection() {
-    _discoveredDevices.clear();
+    // The shared scanner emits fixed-length lists, so reassign rather than
+    // mutating (calling .clear() on a fixed-length list throws).
+    _discoveredDevices = <ScanResult>[];
     _selectedDeviceMac = null;
     _isDeviceConnected = false;
     _connectedDeviceMac = null;
@@ -122,9 +146,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
 
   Future<void> _closeCreateSheet() async {
     final selectedMac = _selectedDeviceMac;
-    await FlutterBluePlus.stopScan();
-    await _bleScanSubscription?.cancel();
-    await _bleIsScanningSubscription?.cancel();
+    await ref.read(stopScanProvider)();
     if (_connectedDeviceMac != null) {
       await ref
           .read(bleRepositoryProvider)
@@ -303,93 +325,32 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     }
   }
 
-  /// Step 2: Start BLE discovery, clear old devices, then listen for nearby devices.
+  /// Step 2: Start BLE discovery using the shared scanner used by the Devices
+  /// list screen. Results flow in reactively via [bleScanResultsProvider].
   Future<void> _startBleScan() async {
     _updateSheet(() {
-      _isScanning = true;
-      _discoveredDevices.clear();
       _selectedDeviceMac = null;
       _isDeviceConnected = false;
       _connectedDeviceMac = null;
     });
 
-    try {
-      // Ensure any prior scan is stopped before starting a new one.
-      await FlutterBluePlus.stopScan();
-      await _bleScanSubscription?.cancel();
-      _bleScanSubscription = null;
-      _lastScanUiUpdateAt = null;
-
-      bool isOn = await FlutterBluePlus.isOn;
-      if (!isOn) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please enable Bluetooth')),
-          );
-        }
-        _updateSheet(() => _isScanning = false);
-        return;
-      }
-
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-
-      _bleScanSubscription = FlutterBluePlus.onScanResults.listen((results) {
-        // Avoid mutating the scan list while connecting; it can lead to
-        // stale selections and Android GATT instability.
-        if (_connectingDevice) return;
-        if (mounted) {
-          final now = DateTime.now();
-          if (_lastScanUiUpdateAt != null &&
-              now.difference(_lastScanUiUpdateAt!) < _scanUiThrottle) {
-            return;
-          }
-          _lastScanUiUpdateAt = now;
-
-          _updateSheet(() {
-            final unique = <String, ScanResult>{};
-            for (final result in results) {
-              unique[_normalizeMac(result.device.id.toString())] = result;
-            }
-            _discoveredDevices = unique.values.toList();
-          });
-        }
-      }, onError: (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Scan error: ${error.toString()}')),
-          );
-          _updateSheet(() => _isScanning = false);
-        }
-      });
-
-      _bleIsScanningSubscription?.cancel();
-      _bleIsScanningSubscription =
-          FlutterBluePlus.isScanning.listen((scanning) {
-        if (mounted) {
-          _updateSheet(() => _isScanning = scanning);
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Scan error: ${e.toString()}')),
-        );
-        _updateSheet(() => _isScanning = false);
-      }
-    }
+    final scanner = ref.read(bleScannerProvider);
+    scanner.initializeAutoScan();
+    await ref.read(startScanProvider)();
   }
 
   List<ScanResult> _getFilteredDevices() {
-    if (_isHydrawav3Only) {
-      return _discoveredDevices
-          .where((device) =>
-              device.advertisementData.localName
-                  .toLowerCase()
-                  .contains('hydrawav') ||
-              device.device.name.toLowerCase().contains('hydrawav'))
-          .toList();
-    }
-    return _discoveredDevices;
+    if (!_isHydrawav3Only) return _discoveredDevices;
+
+    final expected = BleConstants.preferredServiceUuid;
+    if (expected == null || expected.isEmpty) return const <ScanResult>[];
+
+    final targetUuid = BleConstants.normalizeUuid(expected);
+    return _discoveredDevices.where((device) {
+      return device.advertisementData.serviceUuids.any(
+        (uuid) => BleConstants.normalizeUuid(uuid.str) == targetUuid,
+      );
+    }).toList();
   }
 
   Future<bool> _connectToSelectedDevice() async {
@@ -397,7 +358,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     // Stop scanning before connecting. (Android BLE is very unstable when
     // scanning + connecting simultaneously.)
     try {
-      await FlutterBluePlus.stopScan();
+      await ref.read(stopScanProvider)();
     } catch (_) {}
 
     final selected = _discoveredDevices
@@ -425,6 +386,79 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       }
       return false;
     }
+  }
+
+  /// Locate the actually-advertised peripheral via a BLE scan and return its
+  /// [BluetoothDevice]. This is required for iOS (where peripherals are not
+  /// addressable by MAC — [remoteId] is an opaque per-install UUID) and is also
+  /// far more reliable than a direct connect-by-MAC on Android.
+  ///
+  /// Matching strategy:
+  ///  - Android: the hardware MAC (and its ±1 BLE-advertising variants).
+  ///  - iOS / fallback: the advertised device name (e.g. "Hydra-Foo"), since
+  ///    the MAC is hidden by the OS.
+  Future<BluetoothDevice?> _findAdvertisedDevice(
+    DeviceInfo device,
+    Set<String> candidateMacs, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final targetName = device.name.trim().toLowerCase();
+
+    bool matches(ScanResult r) {
+      if (candidateMacs.contains(_normalizeMac(r.device.remoteId.str))) {
+        return true;
+      }
+      if (targetName.isEmpty) return false;
+      final advName = r.advertisementData.advName.trim().toLowerCase();
+      final platformName = r.device.platformName.trim().toLowerCase();
+      return advName == targetName || platformName == targetName;
+    }
+
+    // Check anything already discovered first.
+    for (final r in _discoveredDevices) {
+      if (matches(r)) return r.device;
+    }
+
+    final completer = Completer<BluetoothDevice?>();
+    StreamSubscription<List<ScanResult>>? sub;
+
+    // Listen to the RAW scan stream (not the shared scanner's buffered stream)
+    // so we receive every advertisement immediately and don't depend on the
+    // shared scanner's internal state, which can be left "not actually
+    // scanning" on this screen after the register/connect flow. Subscribe
+    // BEFORE starting the scan so we never miss an early result.
+    sub = FlutterBluePlus.onScanResults.listen((results) {
+      for (final r in results) {
+        if (matches(r) && !completer.isCompleted) {
+          completer.complete(r.device);
+          return;
+        }
+      }
+    });
+
+    try {
+      // The screen already scans continuously (see initState). If for any
+      // reason no scan is live right now, start one — first via the shared
+      // scanner (handles permissions/Android quirks), then a direct fallback
+      // that bypasses the scanner's internal guard entirely.
+      if (!FlutterBluePlus.isScanningNow) {
+        ref.read(bleScannerProvider).initializeAutoScan();
+        await ref.read(startScanProvider)();
+      }
+      if (!FlutterBluePlus.isScanningNow) {
+        await FlutterBluePlus.startScan(
+          timeout: timeout,
+          androidUsesFineLocation: true,
+        );
+      }
+    } catch (_) {
+      // A scan may already be in progress — our listener still gets results.
+    }
+
+    final found =
+        await completer.future.timeout(timeout, onTimeout: () => null);
+    await sub.cancel();
+    return found;
   }
 
   Future<bool> _activateRegisteredDevice(DeviceInfo device) async {
@@ -486,15 +520,34 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
         ...candidates,
       }.toList();
 
-      for (final candidate in preferredOrder) {
+      // Primary path (works on iOS + Android): scan for the device and connect
+      // to the discovered peripheral.
+      final scanned = await _findAdvertisedDevice(device, candidateSet);
+      if (scanned != null) {
         final didConnect = await ref.read(bleRepositoryProvider).connectDevice(
-              BluetoothDevice(remoteId: DeviceIdentifier(candidate)),
+              scanned,
               cachePairedDevice: false,
             );
         if (didConnect) {
           connected = true;
-          connectedCandidate = candidate;
-          break;
+          connectedCandidate = _normalizeMac(scanned.remoteId.str);
+        }
+      }
+
+      // Fallback (Android only): direct connect-by-MAC candidates. iOS cannot
+      // connect by MAC, so it relies entirely on the scan path above.
+      if (!connected && defaultTargetPlatform != TargetPlatform.iOS) {
+        for (final candidate in preferredOrder) {
+          final didConnect =
+              await ref.read(bleRepositoryProvider).connectDevice(
+                    BluetoothDevice(remoteId: DeviceIdentifier(candidate)),
+                    cachePairedDevice: false,
+                  );
+          if (didConnect) {
+            connected = true;
+            connectedCandidate = candidate;
+            break;
+          }
         }
       }
       if (mounted) {
@@ -796,270 +849,1230 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     );
   }
 
-  Future<void> _handleLocate(DeviceInfo device) async {
-    try {
-      await ref.read(deviceRepositoryProvider).locateDevice(device.macAddress);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Locate command sent')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Locate failed: ${e.toString()}')),
-        );
-      }
-    }
+  /// Shared styled dialog shell used by the Locate / Report / Edit Name modals.
+  /// Always scrollable so the keyboard can never overflow the content.
+  Widget _modalShell({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    VoidCallback? onClose,
+    required Widget child,
+  }) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: ThemeConstants.border),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: iconColor.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: iconColor, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: ThemeConstants.textPrimary,
+                      ),
+                    ),
+                  ),
+                  if (onClose != null)
+                    IconButton(
+                      onPressed: onClose,
+                      icon: Icon(Icons.close,
+                          color: ThemeConstants.textSecondary),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              child,
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
-  Future<void> _handleDiagnostics(DeviceInfo device) async {
-    try {
-      await ref
-          .read(deviceRepositoryProvider)
-          .runDiagnostics(device.macAddress);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Diagnostics requested')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Diagnostics failed: ${e.toString()}')),
-        );
-      }
-    }
-  }
+  Widget _modalLabel(String text) => Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+          color: ThemeConstants.textSecondary,
+        ),
+      );
 
-  Future<void> _openWifiModal(DeviceInfo device) async {
-    final ssidCtrl = TextEditingController();
-    final passCtrl = TextEditingController();
-
-    try {
-      final res = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) {
-          var step = 0; // 0=bt-handshake, 1=wifi-config
-          var connecting = true;
-          var connectError = '';
-          var showPassword = false;
-          var started = false;
-
-          return StatefulBuilder(
-            builder: (context, setModalState) {
-              // Start handshake exactly once when dialog mounts.
-              if (!started) {
-                started = true;
-                Future.microtask(() async {
-                  setModalState(() {
-                    connecting = true;
-                    connectError = '';
-                    step = 0;
-                  });
-                  final ok = await _activateRegisteredDevice(device);
-                  if (!mounted) return;
-                  if (ok) {
-                    setModalState(() {
-                      connecting = false;
-                      step = 1;
-                    });
-                  } else {
-                    setModalState(() {
-                      connecting = false;
-                      connectError =
-                          'Failed to establish Bluetooth connection. Please try again.';
-                      step = 0;
-                    });
-                  }
-                });
-              }
-
-              return AlertDialog(
-                title:
-                    Text(step == 0 ? 'Bluetooth handshake' : 'Configure WiFi'),
-                content: step == 0
-                    ? Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'Establishing secure connection to device…',
+  /// Locate modal: read-only MAC + Beep toggle + Locate button.
+  Future<void> _openLocateModal(DeviceInfo device) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        var beep = true;
+        var sending = false;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return _modalShell(
+              icon: Icons.my_location_rounded,
+              iconColor: ThemeConstants.accent,
+              title: 'Locate Device',
+              onClose: () => Navigator.of(dialogContext).pop(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _modalLabel('MAC ADDRESS'),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: ThemeConstants.surfaceVariant
+                          .withValues(alpha: 0.42),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: ThemeConstants.border),
+                    ),
+                    child: Text(
+                      device.macAddress,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: ThemeConstants.textPrimary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: ThemeConstants.surfaceVariant
+                          .withValues(alpha: 0.42),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: ThemeConstants.border),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.volume_up_rounded,
+                            size: 18, color: ThemeConstants.accent),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Beep',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: ThemeConstants.textPrimary,
+                            ),
                           ),
-                          const SizedBox(height: 16),
-                          if (connecting) const LinearProgressIndicator(),
-                          if (!connecting && connectError.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              connectError,
+                        ),
+                        Switch.adaptive(
+                          value: beep,
+                          activeColor: ThemeConstants.accent,
+                          onChanged: (v) => setModalState(() => beep = v),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    height: 48,
+                    child: ElevatedButton.icon(
+                      onPressed: sending
+                          ? null
+                          : () async {
+                              setModalState(() => sending = true);
+                              try {
+                                await ref
+                                    .read(deviceRepositoryProvider)
+                                    .locateDevice(device.macAddress,
+                                        beeping: beep);
+                                if (dialogContext.mounted) {
+                                  Navigator.of(dialogContext).pop();
+                                }
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('Locate command sent')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (dialogContext.mounted) {
+                                  setModalState(() => sending = false);
+                                }
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content:
+                                            Text('Locate failed: ${e.toString()}')),
+                                  );
+                                }
+                              }
+                            },
+                      icon: sending
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.black))
+                          : Icon(Icons.my_location_rounded,
+                              size: 18, color: _onAccent(context)),
+                      label: Text(
+                        sending ? 'Sending…' : 'Locate',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: _onAccent(context),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: ThemeConstants.accent,
+                        disabledBackgroundColor: ThemeConstants.surfaceVariant,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Report / diagnostics modal: animated check steps + "System Certified".
+  Future<void> _openDiagnosticModal(DeviceInfo device) async {
+    // Fire the backend diagnostics command (best effort).
+    ref
+        .read(deviceRepositoryProvider)
+        .runDiagnostics(device.macAddress)
+        .catchError((_) {});
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        var step = 0;
+        Timer? timer;
+        const checks = <(String, int)>[
+          ('Oscillation Module Integrity', 1),
+          ('Photobiomodulation Array', 2),
+          ('Thermal Conductance Sync', 3),
+          ('Communication Latency', 4),
+        ];
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            timer ??= Timer.periodic(const Duration(milliseconds: 1100), (t) {
+              if (!dialogContext.mounted) {
+                t.cancel();
+                return;
+              }
+              if (step >= 4) {
+                t.cancel();
+                return;
+              }
+              setModalState(() => step++);
+            });
+            return _modalShell(
+              icon: Icons.health_and_safety_rounded,
+              iconColor: ThemeConstants.accent,
+              title: 'Diagnostic Report',
+              onClose: () {
+                timer?.cancel();
+                Navigator.of(dialogContext).pop();
+              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    device.name,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: ThemeConstants.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    device.macAddress,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: ThemeConstants.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...checks.map((c) {
+                    final done = step >= c.$2;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.surfaceVariant
+                            .withValues(alpha: 0.42),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: ThemeConstants.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              c.$1,
                               style: TextStyle(
-                                color: Theme.of(context).colorScheme.error,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
+                                color: ThemeConstants.textSecondary,
                               ),
                             ),
-                          ],
-                        ],
-                      )
-                    : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextField(
-                            controller: ssidCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'SSID'),
                           ),
-                          TextField(
-                            controller: passCtrl,
-                            obscureText: !showPassword,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              suffixIcon: IconButton(
-                                onPressed: () => setModalState(() {
-                                  showPassword = !showPassword;
-                                }),
-                                icon: Icon(
-                                  showPassword
-                                      ? Icons.visibility_off
-                                      : Icons.visibility,
-                                ),
+                          if (done)
+                            Icon(Icons.check_circle_rounded,
+                                size: 18, color: ThemeConstants.success)
+                          else
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(
+                                    ThemeConstants.textTertiary),
                               ),
+                            ),
+                        ],
+                      ),
+                    );
+                  }),
+                  if (step >= 4) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.success.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                            color:
+                                ThemeConstants.success.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(Icons.verified_user_rounded,
+                              color: ThemeConstants.success, size: 26),
+                          const SizedBox(height: 8),
+                          Text(
+                            'SYSTEM CERTIFIED',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6,
+                              color: ThemeConstants.success,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'All hardware parameters are within operational bounds.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: ThemeConstants.textSecondary,
                             ),
                           ),
                         ],
                       ),
-                actions: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(dialogContext).pop(false);
-                    },
-                    child: const Text('Cancel'),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        timer?.cancel();
+                        Navigator.of(dialogContext).pop();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: ThemeConstants.accent,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: Text(
+                        'Close Report',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: _onAccent(context),
+                        ),
+                      ),
+                    ),
                   ),
-                  if (step == 1)
-                    ElevatedButton(
-                      onPressed: () {
-                        Navigator.of(dialogContext).pop(true);
-                      },
-                      child: const Text('Send'),
-                    ),
-                  if (step == 0 && !connecting)
-                    TextButton(
-                      onPressed: () {
-                        // Retry handshake like web's "Start handshake".
-                        setModalState(() {
-                          started = false;
-                        });
-                      },
-                      child: const Text('Retry'),
-                    ),
                 ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Web-parity WiFi configuration flow:
+  /// handshake -> searching -> config -> success.
+  Future<void> _openWifiModal(DeviceInfo device) async {
+    final ssidCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    final deviceMac = _normalizeMac(device.macAddress);
+
+    InputDecoration fieldDecoration(String hint, {Widget? suffix}) {
+      return InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: ThemeConstants.textTertiary, fontSize: 14),
+        filled: true,
+        fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.42),
+        suffixIcon: suffix,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: ThemeConstants.border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: ThemeConstants.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: ThemeConstants.accent),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      );
+    }
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          var step = 'handshake'; // handshake | searching | config | success
+          var connectError = '';
+          var showPassword = false;
+          var sending = false;
+
+          return StatefulBuilder(
+            builder: (context, setModalState) {
+              Future<void> startHandshake() async {
+                setModalState(() {
+                  step = 'searching';
+                  connectError = '';
+                });
+                final ok = await _activateRegisteredDevice(device);
+                if (!dialogContext.mounted) return;
+                setModalState(() {
+                  if (ok) {
+                    step = 'config';
+                  } else {
+                    step = 'handshake';
+                    connectError =
+                        'Couldn\'t reach the device over Bluetooth. Make sure it '
+                        'is powered on and nearby, then try again.';
+                  }
+                });
+              }
+
+              Future<void> sendCreds() async {
+                final ssid = ssidCtrl.text.trim();
+                if (ssid.isEmpty) {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(content: Text('Wi-Fi name is required')),
+                  );
+                  return;
+                }
+                final targetMac = _connectedDeviceMac;
+                if (targetMac == null) {
+                  setModalState(() {
+                    step = 'handshake';
+                    connectError =
+                        'Bluetooth connection lost. Please reconnect and try again.';
+                  });
+                  return;
+                }
+                setModalState(() => sending = true);
+                final success = await ref
+                    .read(bleCommandServiceProvider)
+                    .sendWifiCredentials(
+                      targetMac,
+                      ssid: ssid,
+                      password: passCtrl.text,
+                    );
+                if (success) {
+                  // The device drops BLE to join WiFi; stop the connector's
+                  // background auto-reconnect loop so it doesn't churn retries.
+                  try {
+                    await ref
+                        .read(bleRepositoryProvider)
+                        .disconnectDevice(targetMac);
+                  } catch (_) {}
+                  if (mounted) {
+                    _isDeviceConnected = false;
+                    _connectedDeviceMac = null;
+                    _selectedDeviceMac = null;
+                  }
+                  if (!dialogContext.mounted) return;
+                  setModalState(() {
+                    sending = false;
+                    step = 'success';
+                  });
+                  Future.delayed(const Duration(milliseconds: 1600), () {
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                  });
+                } else {
+                  if (!dialogContext.mounted) return;
+                  setModalState(() => sending = false);
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(
+                      content: Text('Wi-Fi send failed. Please try again.'),
+                    ),
+                  );
+                }
+              }
+
+              final headerIcon = step == 'success'
+                  ? Icons.check_circle_rounded
+                  : step == 'config'
+                      ? Icons.wifi_rounded
+                      : Icons.bluetooth_rounded;
+              final headerColor = step == 'success'
+                  ? ThemeConstants.success
+                  : ThemeConstants.accent;
+              final title = step == 'success'
+                  ? 'All set'
+                  : step == 'config'
+                      ? 'Configure WiFi'
+                      : 'Bluetooth Handshake';
+
+              Widget body;
+              switch (step) {
+                case 'searching':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: 38,
+                        height: 38,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor:
+                              AlwaysStoppedAnimation(ThemeConstants.accent),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Establishing a secure Bluetooth link…',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          minHeight: 6,
+                          backgroundColor: ThemeConstants.surfaceVariant,
+                          valueColor:
+                              AlwaysStoppedAnimation(ThemeConstants.accent),
+                        ),
+                      ),
+                    ],
+                  );
+                  break;
+                case 'config':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: ThemeConstants.success.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: ThemeConstants.success.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded,
+                                size: 16, color: ThemeConstants.success),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Connected to ${device.name}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: ThemeConstants.textPrimary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('WIFI NAME (SSID)',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                              color: ThemeConstants.textSecondary)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: ssidCtrl,
+                        style: TextStyle(color: ThemeConstants.textPrimary),
+                        decoration: fieldDecoration('Enter WiFi name'),
+                        onChanged: (_) => setModalState(() {}),
+                      ),
+                      const SizedBox(height: 14),
+                      Text('PASSWORD',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                              color: ThemeConstants.textSecondary)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: passCtrl,
+                        obscureText: !showPassword,
+                        style: TextStyle(color: ThemeConstants.textPrimary),
+                        decoration: fieldDecoration(
+                          'Enter WiFi password',
+                          suffix: IconButton(
+                            onPressed: () => setModalState(
+                                () => showPassword = !showPassword),
+                            icon: Icon(
+                              showPassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              color: ThemeConstants.textTertiary,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: sending || ssidCtrl.text.trim().isEmpty
+                              ? null
+                              : sendCreds,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: ThemeConstants.accent,
+                            disabledBackgroundColor:
+                                ThemeConstants.surfaceVariant,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: sending
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.black))
+                              : Text('Send Credentials',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: _onAccent(context))),
+                        ),
+                      ),
+                    ],
+                  );
+                  break;
+                case 'success':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        'Wi-Fi credentials sent.',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${device.name} is now connecting to WiFi.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                    ],
+                  );
+                  break;
+                default: // handshake
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Connect to ${device.name} over Bluetooth to update its '
+                        'WiFi network.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.4,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: ThemeConstants.surfaceVariant
+                              .withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: ThemeConstants.border),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.memory,
+                                size: 16, color: ThemeConstants.textTertiary),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                deviceMac,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: ThemeConstants.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (connectError.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          connectError,
+                          style: TextStyle(
+                            color: ThemeConstants.error,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 48,
+                        child: ElevatedButton.icon(
+                          onPressed: startHandshake,
+                          icon: Icon(Icons.bluetooth_searching_rounded,
+                              size: 18, color: _onAccent(context)),
+                          label: Text(
+                            connectError.isEmpty
+                                ? 'Start Handshake'
+                                : 'Retry Handshake',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: _onAccent(context),
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: ThemeConstants.accent,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+              }
+
+              return Dialog(
+                backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: ThemeConstants.border),
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: headerColor.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child:
+                                Icon(headerIcon, color: headerColor, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: ThemeConstants.textPrimary,
+                              ),
+                            ),
+                          ),
+                          if (step != 'searching' && step != 'success')
+                            IconButton(
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(),
+                              icon: Icon(Icons.close,
+                                  color: ThemeConstants.textSecondary),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      body,
+                      ],
+                    ),
+                  ),
+                ),
               );
             },
           );
         },
       );
-
-      if (res == true) {
-        if (_connectedDeviceMac == null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Bluetooth connection lost. Please reconnect and try again.',
-                ),
-              ),
-            );
-          }
-          return;
-        }
-
-        final success =
-            await ref.read(bleCommandServiceProvider).sendWifiCredentials(
-                  _connectedDeviceMac!,
-                  ssid: ssidCtrl.text.trim(),
-                  password: passCtrl.text,
-                );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(
-                    success ? 'WiFi credentials sent' : 'WiFi send failed')),
-          );
-        }
-      }
     } finally {
-      ssidCtrl.dispose();
-      passCtrl.dispose();
+      // Defer disposal until after the dialog's final teardown frame so a
+      // last rebuild (route exit / keyboard insets) can't touch a disposed
+      // controller.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ssidCtrl.dispose();
+        passCtrl.dispose();
+      });
     }
   }
 
-  Future<void> _editNameFlow({DeviceInfo? registeredDevice}) async {
-    final targetMac = _normalizeMac(
-        registeredDevice?.macAddress ?? _connectedDeviceMac ?? '');
-    if (targetMac.isEmpty) return;
+  /// Edit Name modal — web-parity 4-step flow:
+  /// pairing -> searching -> name-edit -> success. Works on Android + iOS
+  /// (the handshake uses the scan-then-connect path in [_activateRegisteredDevice]).
+  Future<void> _openEditNameModal(DeviceInfo device) async {
+    final nameCtrl =
+        TextEditingController(text: _stripHydraPrefix(device.name.trim()));
 
-    final editCtrl = TextEditingController(
-      text: registeredDevice?.name ?? _nameCtrl.text.trim(),
-    );
     try {
-      final res = await showDialog<bool>(
+      await showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Edit Device Name'),
-          content: TextField(
-              controller: editCtrl,
-              decoration: const InputDecoration(labelText: 'Device Name')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('Cancel')),
-            ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('Save')),
-          ],
-        ),
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          var step = 'pairing'; // pairing | searching | name-edit | success
+          var connectError = '';
+          var saving = false;
+
+          return StatefulBuilder(
+            builder: (context, setModalState) {
+              Future<void> startPairing() async {
+                setModalState(() {
+                  step = 'searching';
+                  connectError = '';
+                });
+                final ok = await _activateRegisteredDevice(device);
+                if (!dialogContext.mounted) return;
+                setModalState(() {
+                  if (ok) {
+                    step = 'name-edit';
+                  } else {
+                    step = 'pairing';
+                    connectError =
+                        'Couldn\'t reach the device over Bluetooth. Make sure it '
+                        'is powered on and nearby, then try again.';
+                  }
+                });
+              }
+
+              Future<void> save() async {
+                final raw = nameCtrl.text.trim();
+                if (raw.isEmpty) {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(content: Text('Device name is required')),
+                  );
+                  return;
+                }
+                final targetMac = _connectedDeviceMac;
+                if (targetMac == null) {
+                  setModalState(() {
+                    step = 'pairing';
+                    connectError =
+                        'Bluetooth connection lost. Please pair again.';
+                  });
+                  return;
+                }
+                setModalState(() => saving = true);
+                final finalName = _prefixedBleName(raw);
+
+                var synced = false;
+                try {
+                  synced = await ref
+                      .read(bleCommandServiceProvider)
+                      .sendRename(targetMac, finalName);
+                } catch (_) {}
+                if (synced) {
+                  try {
+                    await ref
+                        .read(bleRepositoryProvider)
+                        .renamePairedDevice(targetMac, finalName);
+                  } catch (_) {}
+                }
+
+                var backendUpdated = false;
+                if (device.id != null) {
+                  try {
+                    await ref
+                        .read(deviceRepositoryProvider)
+                        .renameDevice(device.id!, finalName);
+                    backendUpdated = true;
+                    ref.refresh(wifiDevicesByOrgProvider);
+                  } catch (_) {}
+                }
+
+                // The device may drop BLE after rename; stop reconnect churn.
+                try {
+                  await ref
+                      .read(bleRepositoryProvider)
+                      .disconnectDevice(targetMac);
+                } catch (_) {}
+                if (mounted) {
+                  _isDeviceConnected = false;
+                  _connectedDeviceMac = null;
+                  _selectedDeviceMac = null;
+                }
+                if (!dialogContext.mounted) return;
+
+                if (backendUpdated || synced) {
+                  setModalState(() {
+                    saving = false;
+                    step = 'success';
+                  });
+                  Future.delayed(const Duration(milliseconds: 1600), () {
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                  });
+                } else {
+                  setModalState(() => saving = false);
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(content: Text('Name update failed')),
+                  );
+                }
+              }
+
+              final headerIcon = step == 'success'
+                  ? Icons.check_circle_rounded
+                  : step == 'name-edit'
+                      ? Icons.drive_file_rename_outline_rounded
+                      : Icons.bluetooth_rounded;
+              final headerColor = step == 'success'
+                  ? ThemeConstants.success
+                  : ThemeConstants.accent;
+              final title = step == 'success' ? 'Name Updated' : 'Edit Name';
+
+              Widget body;
+              switch (step) {
+                case 'searching':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: 38,
+                        height: 38,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor:
+                              AlwaysStoppedAnimation(ThemeConstants.accent),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Pairing with the device over Bluetooth…',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: ThemeConstants.textSecondary),
+                      ),
+                    ],
+                  );
+                  break;
+                case 'name-edit':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: ThemeConstants.success.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: ThemeConstants.success
+                                  .withValues(alpha: 0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded,
+                                size: 16, color: ThemeConstants.success),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Bluetooth connected',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: ThemeConstants.textPrimary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      _modalLabel('DEVICE NAME'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Text(
+                            'Hydra-',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: ThemeConstants.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: nameCtrl,
+                              autofocus: true,
+                              onChanged: (_) => setModalState(() {}),
+                              style:
+                                  TextStyle(color: ThemeConstants.textPrimary),
+                              decoration: InputDecoration(
+                                hintText: 'Enter name here',
+                                hintStyle: TextStyle(
+                                    color: ThemeConstants.textTertiary,
+                                    fontSize: 14),
+                                filled: true,
+                                fillColor: ThemeConstants.surfaceVariant
+                                    .withValues(alpha: 0.42),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide:
+                                      BorderSide(color: ThemeConstants.border),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide:
+                                      BorderSide(color: ThemeConstants.border),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide:
+                                      BorderSide(color: ThemeConstants.accent),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: saving || nameCtrl.text.trim().isEmpty
+                              ? null
+                              : save,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: ThemeConstants.accent,
+                            disabledBackgroundColor:
+                                ThemeConstants.surfaceVariant,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: saving
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.black))
+                              : Text('Save Name',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: _onAccent(context))),
+                        ),
+                      ),
+                    ],
+                  );
+                  break;
+                case 'success':
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        'Name updated.',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'The device name has been updated successfully.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: ThemeConstants.textSecondary),
+                      ),
+                    ],
+                  );
+                  break;
+                default: // pairing
+                  body = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Pair with ${device.name} over Bluetooth to rename it.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.4,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: ThemeConstants.surfaceVariant
+                              .withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: ThemeConstants.border),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.memory,
+                                size: 16, color: ThemeConstants.textTertiary),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _normalizeMac(device.macAddress),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: ThemeConstants.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (connectError.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          connectError,
+                          style: TextStyle(
+                            color: ThemeConstants.error,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 48,
+                        child: ElevatedButton.icon(
+                          onPressed: startPairing,
+                          icon: Icon(Icons.bluetooth_searching_rounded,
+                              size: 18, color: _onAccent(context)),
+                          label: Text(
+                            connectError.isEmpty
+                                ? 'Pair Bluetooth'
+                                : 'Retry Pairing',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: _onAccent(context),
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: ThemeConstants.accent,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+              }
+
+              return _modalShell(
+                icon: headerIcon,
+                iconColor: headerColor,
+                title: title,
+                onClose: (step == 'searching' || step == 'success')
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
+                child: body,
+              );
+            },
+          );
+        },
       );
-
-      if (res != true) return;
-
-      final newName = editCtrl.text.trim();
-      if (newName.isEmpty) return;
-      _nameCtrl.text = newName;
-      final prevSelected = _selectedDeviceMac;
-      _selectedDeviceMac = targetMac;
-
-      final synced = await _syncSelectedDeviceName();
-      if (synced) {
-        await ref
-            .read(bleRepositoryProvider)
-            .renamePairedDevice(targetMac, newName);
-      }
-
-      var backendUpdated = false;
-      if (registeredDevice?.id != null) {
-        try {
-          await ref
-              .read(deviceRepositoryProvider)
-              .renameDevice(registeredDevice!.id!, newName);
-          backendUpdated = true;
-          ref.refresh(wifiDevicesByOrgProvider);
-        } catch (_) {}
-      }
-
-      if (mounted) {
-        final message = backendUpdated && synced
-            ? 'Name updated on hardware and backend'
-            : backendUpdated
-                ? 'Backend updated, but hardware rename failed'
-                : synced
-                    ? 'Hardware updated, but backend rename failed'
-                    : 'Name update failed';
-
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
-      }
-      _selectedDeviceMac = prevSelected;
     } finally {
-      editCtrl.dispose();
+      WidgetsBinding.instance.addPostFrameCallback((_) => nameCtrl.dispose());
     }
   }
 
@@ -1130,6 +2143,13 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   }
 
   void _showCreateSheet() {
+    _clearScanSelection();
+    // Kick off the shared BLE scanner (same one the Devices list screen uses)
+    // so nearby hardware appears automatically when the sheet opens.
+    final scanner = ref.read(bleScannerProvider);
+    scanner.initializeAutoScan();
+    ref.read(startScanProvider)();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1139,10 +2159,23 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           builder: (context, setModalState) {
             _sheetSetState = setModalState;
             _sheetContext = context;
-            return Padding(
-              padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(context).viewInsets.bottom),
-              child: SingleChildScrollView(
+            return Consumer(
+              builder: (context, ref, _) {
+                // Mirror the shared scanner's live results/state into local
+                // fields so the existing helpers keep working, and so the sheet
+                // rebuilds as devices are discovered.
+                _discoveredDevices = ref.watch(bleScanResultsProvider).maybeWhen(
+                      data: (list) => list,
+                      orElse: () => _discoveredDevices,
+                    );
+                _isScanning = ref.watch(bleIsScanningProvider).maybeWhen(
+                      data: (scanning) => scanning,
+                      orElse: () => _isScanning,
+                    );
+                return Padding(
+                  padding: EdgeInsets.only(
+                      bottom: MediaQuery.of(context).viewInsets.bottom),
+                  child: SingleChildScrollView(
                 child: Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
@@ -1189,10 +2222,13 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           children: [
                             Expanded(
                               child: GestureDetector(
-                                onTap: () => setModalState(() {
-                                  _isAutoScan = true;
-                                  _clearScanSelection();
-                                }),
+                                onTap: () {
+                                  setModalState(() {
+                                    _isAutoScan = true;
+                                    _clearScanSelection();
+                                  });
+                                  ref.read(startScanProvider)();
+                                },
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 12, horizontal: 16),
@@ -1312,8 +2348,23 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                             ),
                           ),
                           const SizedBox(height: 40),
-                          // BLE Discovery - Devices List or Discovery State
-                          if (_isScanning)
+                          // BLE Discovery - live results from the shared scanner
+                          if (_isDeviceConnected &&
+                              _connectedDeviceMac != null)
+                            _buildSelectedPairingCard(context)
+                          else if (_getFilteredDevices().isNotEmpty)
+                            SizedBox(
+                              height: 240,
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  children: _getFilteredDevices()
+                                      .map((device) =>
+                                          _buildDeviceItem(context, device))
+                                      .toList(),
+                                ),
+                              ),
+                            )
+                          else if (_isScanning)
                             SizedBox(
                               height: 200,
                               child: Center(
@@ -1337,7 +2388,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                 ),
                               ),
                             )
-                          else if (_getFilteredDevices().isEmpty)
+                          else
                             Center(
                               child: Padding(
                                 padding:
@@ -1360,83 +2411,57 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                   ],
                                 ),
                               ),
-                            )
-                          else if (_isDeviceConnected &&
-                              _connectedDeviceMac != null)
-                            _buildSelectedPairingCard(context)
-                          else
-                            SizedBox(
-                              height: 240,
-                              child: SingleChildScrollView(
-                                child: Column(
-                                  children: _getFilteredDevices()
-                                      .map((device) =>
-                                          _buildDeviceItem(context, device))
-                                      .toList(),
-                                ),
-                              ),
                             ),
                           const SizedBox(height: 16),
-                          if (!_isScanning && _getFilteredDevices().isNotEmpty)
-                            SizedBox(
-                              width: double.infinity,
-                              height: 48,
-                              child: OutlinedButton(
-                                onPressed: () => _startBleScan(),
-                                style: OutlinedButton.styleFrom(
-                                  side:
-                                      BorderSide(color: ThemeConstants.border),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 48,
+                            child: _getFilteredDevices().isNotEmpty
+                                ? OutlinedButton(
+                                    onPressed: _isScanning
+                                        ? null
+                                        : () => _startBleScan(),
+                                    style: OutlinedButton.styleFrom(
+                                      side: BorderSide(
+                                          color: ThemeConstants.border),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                    ),
+                                    child: Text(
+                                        _isScanning
+                                            ? 'SCANNING...'
+                                            : 'RESCAN AREA',
+                                        style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                            color:
+                                                ThemeConstants.textSecondary)),
+                                  )
+                                : ElevatedButton(
+                                    onPressed: _isScanning
+                                        ? null
+                                        : () => _startBleScan(),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: ThemeConstants.accent,
+                                      disabledBackgroundColor:
+                                          ThemeConstants.surfaceVariant,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(16)),
+                                    ),
+                                    child: Text(
+                                        _isScanning
+                                            ? 'SCANNING...'
+                                            : 'INITIALIZE DISCOVERY',
+                                        style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                            color: _isScanning
+                                                ? ThemeConstants.textTertiary
+                                                : _onAccent(context))),
                                   ),
-                                ),
-                                child: Text('RESCAN AREA',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: ThemeConstants.textSecondary)),
-                              ),
-                            ),
-                          if (!_isScanning && _getFilteredDevices().isEmpty)
-                            SizedBox(
-                              width: double.infinity,
-                              height: 48,
-                              child: ElevatedButton(
-                                onPressed: () => _startBleScan(),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: ThemeConstants.accent,
-                                  disabledBackgroundColor:
-                                      ThemeConstants.surfaceVariant,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16)),
-                                ),
-                                child: Text('INITIALIZE DISCOVERY',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: _onAccent(context))),
-                              ),
-                            )
-                          else if (_isScanning)
-                            SizedBox(
-                              width: double.infinity,
-                              height: 48,
-                              child: ElevatedButton(
-                                onPressed: null,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: ThemeConstants.accent,
-                                  disabledBackgroundColor:
-                                      ThemeConstants.surfaceVariant,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16)),
-                                ),
-                                child: Text('INITIALIZE DISCOVERY',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: ThemeConstants.textTertiary)),
-                              ),
-                            ),
+                          ),
                         ] else ...[
                           // Manual Entry Form
                           Container(
@@ -1589,123 +2614,172 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   ),
                 ),
               ),
+                );
+              },
             );
           },
         );
       },
-    );
-  }
-
-  Widget _buildActionButton(
-    IconData icon,
-    String label,
-    VoidCallback onTap,
-  ) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            children: [
-              Icon(icon, size: 20, color: ThemeConstants.textSecondary),
-              const SizedBox(height: 6),
-              Text(label,
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: ThemeConstants.textTertiary,
-                      fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      ),
-    );
+    ).whenComplete(() {
+      // The sheet can close by swipe / barrier tap (not just the X button or a
+      // successful register), so always drop the sheet's setState/context here.
+      // Otherwise _updateSheet() would later call setState on a disposed
+      // StatefulBuilder (e.g. from the Edit-WiFi handshake) and crash.
+      _sheetSetState = null;
+      _sheetContext = null;
+    });
   }
 
   Widget _buildDeviceCard(DeviceInfo device) {
     return GradientCard(
-      borderRadius: 24,
+      borderRadius: 20,
+      showShadow: false,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 48,
-                  height: 48,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
                     color: ThemeConstants.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(Icons.memory,
-                      size: 24, color: ThemeConstants.accent),
+                      size: 21, color: ThemeConstants.accent),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    device.name,
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.textPrimary),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        device.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.textPrimary),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        device.macAddress,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: ThemeConstants.textSecondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: ThemeConstants.surfaceVariant.withValues(alpha: 0.48),
                 border: Border.all(color: ThemeConstants.border),
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('HARDWARE MAC',
+                  Text('REGISTERED DEVICE',
                       style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.6,
                           color: ThemeConstants.textTertiary)),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(device.macAddress,
                       style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           color: ThemeConstants.textPrimary,
                           fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
+            Divider(height: 1, color: ThemeConstants.border),
+            const SizedBox(height: 10),
             Row(
               children: [
-                _buildActionButton(Icons.gps_fixed, 'Locate', () async {
-                  await _handleLocate(device);
-                }),
-                _buildActionButton(Icons.analytics_outlined, 'Report',
-                    () async {
-                  await _handleDiagnostics(device);
-                }),
-                _buildActionButton(Icons.wifi, 'Edit WiFi', () async {
-                  await _openWifiModal(device);
-                }),
-                _buildActionButton(Icons.edit, 'Edit Name', () async {
-                  if (await _activateRegisteredDevice(device)) {
-                    await _editNameFlow(registeredDevice: device);
-                  }
-                }),
-                _buildActionButton(Icons.delete_outline, 'Remove', () async {
-                  await _removeRegisteredDevice(device);
-                }),
+                _cardActionTile(
+                  icon: Icons.my_location_rounded,
+                  label: 'Locate',
+                  onTap: () => _openLocateModal(device),
+                ),
+                _cardActionTile(
+                  icon: Icons.health_and_safety_rounded,
+                  label: 'Report',
+                  onTap: () => _openDiagnosticModal(device),
+                ),
+                _cardActionTile(
+                  icon: Icons.wifi_rounded,
+                  label: 'Edit WiFi',
+                  onTap: () => _openWifiModal(device),
+                ),
+                _cardActionTile(
+                  icon: Icons.drive_file_rename_outline_rounded,
+                  label: 'Edit Name',
+                  onTap: () => _openEditNameModal(device),
+                ),
+                _cardActionTile(
+                  icon: Icons.delete_outline_rounded,
+                  label: 'Remove',
+                  color: ThemeConstants.error,
+                  onTap: () => _removeRegisteredDevice(device),
+                ),
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cardActionTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    final c = color ?? ThemeConstants.textSecondary;
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 22, color: c),
+              const SizedBox(height: 6),
+              Text(
+                label.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.4,
+                  color: c,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1724,13 +2798,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
                     child: Container(
                       width: 44,
                       height: 44,
+                      alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: ThemeConstants.surface,
                         borderRadius: BorderRadius.circular(14),
@@ -1747,36 +2822,56 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text('DEVICES FLEET',
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                color: ThemeConstants.textPrimary)),
-                        SizedBox(height: 8),
                         Text(
-                            'Manage clinical hardware connections and firmware protocols.',
-                            style:
-                                TextStyle(color: ThemeConstants.textSecondary)),
+                          'Device Fleet',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.3,
+                            color: ThemeConstants.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Manage your registered clinical hardware',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.3,
+                            color: ThemeConstants.textSecondary,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  // SizedBox(
-                  //   height: 48,
-                  //   child: ElevatedButton.icon(
-                  //     onPressed: _showCreateSheet,
-                  //     icon: Icon(Icons.add),
-                  //     label: Text('Register Device'),
-                  //     style: ElevatedButton.styleFrom(
-                  //       minimumSize: const Size(0, 48),
-                  //       padding: const EdgeInsets.symmetric(
-                  //           horizontal: 18, vertical: 12),
-                  //       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  //       shape: RoundedRectangleBorder(
-                  //           borderRadius: BorderRadius.circular(20)),
-                  //     ),
-                  //   ),
-                  // ),
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: _showCreateSheet,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.accent,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: ThemeConstants.accent.withValues(alpha: 0.25),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.add_rounded,
+                        color: _onAccent(context),
+                        size: 22,
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 24),

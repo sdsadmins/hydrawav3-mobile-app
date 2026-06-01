@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/utils/logger.dart';
 import '../domain/ble_command.dart';
 import 'ble_connector.dart';
@@ -127,12 +128,18 @@ class BleTreatmentWriter {
 
   Future<bool> _sendViaMqtt(BleCommand command) async {
     try {
-      await _djangoDio.post(
-        ApiEndpoints.mqttPublish,
+      await postMqttPublishRequest(
+        _djangoDio,
         data: command.toMqttPayload(),
       );
       appLogger.i('MQTT command sent successfully');
       return true;
+    } on DioException catch (e) {
+      appLogger.e(
+        'MQTT command error '
+        '(status=${e.response?.statusCode}, data=${e.response?.data}, message=${e.message})',
+      );
+      return false;
     } catch (e) {
       appLogger.e('MQTT command error: $e');
       return false;

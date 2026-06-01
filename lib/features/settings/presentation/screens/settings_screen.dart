@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/constants/legal_content.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
@@ -305,6 +306,98 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  void _showInfoSheet(
+    BuildContext context, {
+    required String title,
+    String? subtitle,
+    required List<InfoSheetSection> sections,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.92,
+        child: Container(
+          decoration: BoxDecoration(
+            color: ThemeConstants.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(top: 8),
+                decoration: BoxDecoration(
+                  color: ThemeConstants.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: ThemeConstants.textPrimary,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Divider(
+                height: 1,
+                color: ThemeConstants.border.withValues(alpha: 0.5),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                  itemCount: sections.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 18),
+                  itemBuilder: (context, index) =>
+                      _InfoSheetSection(section: sections[index]),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ThemeConstants.accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: const Text('Close'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authStateProvider).user;
@@ -411,8 +504,9 @@ class SettingsScreen extends ConsumerWidget {
                           onTap: () => context.push(RoutePaths.profileEdit)),
                       _Item(Icons.lock_outline_rounded, 'Change Password',
                           onTap: () => context.push(RoutePaths.changePassword)),
-                      _Item(Icons.fingerprint_rounded, 'Biometric Login',
-                          trailing: _comingSoonBadge()),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.fingerprint_rounded, 'Biometric Login',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -436,10 +530,10 @@ class SettingsScreen extends ConsumerWidget {
                     child: _SettingsGroup(title: 'DEVICE', items: [
                       _Item(
                           Icons.app_registration_rounded, 'Device Registration',
-                          enabled: false,
-                          trailing: _comingSoonBadge()),
-                      _Item(Icons.verified_user_outlined, 'Warranty Status',
-                          trailing: _comingSoonBadge()),
+                          onTap: () => context.push(RoutePaths.deviceRegister)),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.verified_user_outlined, 'Warranty Status',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -447,14 +541,25 @@ class SettingsScreen extends ConsumerWidget {
                 AnimatedEntrance(
                     index: 3,
                     child: _SettingsGroup(title: 'GENERAL', items: [
-                      _Item(Icons.notifications_outlined, 'Notifications',
-                          trailing: _comingSoonBadge()),
-                      _Item(Icons.shield_outlined, 'Privacy & Security'),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.notifications_outlined, 'Notifications',
+                      //     trailing: _comingSoonBadge()),
+                      _Item(
+                        Icons.shield_outlined,
+                        'Privacy & Security',
+                        onTap: () => _showInfoSheet(
+                          context,
+                          title: 'Privacy & Security',
+                          subtitle: 'How Hydrawav3 handles permissions and account protection.',
+                          sections: LegalContent.privacyAndSecuritySections,
+                        ),
+                      ),
                       _Item(Icons.help_outline_rounded, 'Help & Support',
                           onTap: () => _openExternalUrl(
                               context, 'https://www.hydrawav3.com/help-center')),
-                      _Item(Icons.payment_outlined, 'Payment Methods',
-                          trailing: _comingSoonBadge()),
+                      // Coming soon — hidden for now
+                      // _Item(Icons.payment_outlined, 'Payment Methods',
+                      //     trailing: _comingSoonBadge()),
                     ])),
                 const SizedBox(height: 16),
 
@@ -462,12 +567,26 @@ class SettingsScreen extends ConsumerWidget {
                 AnimatedEntrance(
                     index: 4,
                     child: _SettingsGroup(title: 'LEGAL', items: [
-                      _Item(Icons.privacy_tip_outlined, 'Privacy Policy',
-                          onTap: () => launchUrl(
-                              Uri.parse(AppConstants.privacyPolicyUrl))),
-                      _Item(Icons.description_outlined, 'Terms & Conditions',
-                          onTap: () =>
-                              launchUrl(Uri.parse(AppConstants.termsUrl))),
+                      _Item(
+                        Icons.privacy_tip_outlined,
+                        'Privacy Policy',
+                        onTap: () => _showInfoSheet(
+                          context,
+                          title: 'Privacy Policy',
+                          subtitle: 'Information about data collection, storage, sharing, and your choices.',
+                          sections: LegalContent.privacyPolicySections,
+                        ),
+                      ),
+                      _Item(
+                        Icons.description_outlined,
+                        'Terms & Conditions',
+                        onTap: () => _showInfoSheet(
+                          context,
+                          title: 'Terms & Conditions',
+                          subtitle: 'Rules and responsibilities for using the Hydrawav3 app.',
+                          sections: LegalContent.termsAndConditionsSections,
+                        ),
+                      ),
                     ])),
                 const SizedBox(height: 20),
                 const SizedBox(height: 16),
@@ -763,6 +882,7 @@ class _Item extends StatelessWidget {
     this.title, {
     this.onTap,
     this.trailing,
+    // ignore: unused_element_parameter
     this.enabled = true,
   });
 
@@ -801,6 +921,81 @@ class _Item extends StatelessWidget {
   }
 }
 
+class _InfoSheetSection extends StatelessWidget {
+  final InfoSheetSection section;
+
+  const _InfoSheetSection({required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          section.heading,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: ThemeConstants.textPrimary,
+          ),
+        ),
+        if (section.paragraphs.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ...section.paragraphs.map(
+            (paragraph) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                paragraph,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.55,
+                  color: ThemeConstants.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ],
+        if (section.bullets.isNotEmpty) ...[
+          if (section.paragraphs.isEmpty) const SizedBox(height: 8),
+          ...section.bullets.map(
+            (bullet) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: ThemeConstants.accent,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      bullet,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.55,
+                        color: ThemeConstants.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// ignore: unused_element
 Widget _comingSoonBadge() {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

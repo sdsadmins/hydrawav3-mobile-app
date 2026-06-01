@@ -11,7 +11,9 @@ class ApiEndpoints {
   static const String login = '/auth/login';
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
-  static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
+  //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
+  static const String nodeBaseUrl =
+      'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -47,6 +49,7 @@ class ApiEndpoints {
 
   // Intake / Sessions
   static const String intake = '/intake';
+  static const String intakeAll = '/intake/all';
   static String intakeByClient(String clientId) => '/intake/client/$clientId';
   static String intakeDashboard(String orgId) => '/intake/dashboard/$orgId';
 
@@ -75,6 +78,27 @@ class ApiEndpoints {
   /// Returns active sessions with per-device `moon` / `sun` pad strings.
   static String sessionsActive(String organizationId) =>
       'sessions/active/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/sessions/:sessionId/pause/:organizationId`
+  static String sessionPause(String sessionId, String organizationId) =>
+      'sessions/$sessionId/pause/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/sessions/:sessionId/resume/:organizationId`
+  static String sessionResume(String sessionId, String organizationId) =>
+      'sessions/$sessionId/resume/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/sessions/:sessionId/stop/:organizationId`
+  static String sessionStop(String sessionId, String organizationId) =>
+      'sessions/$sessionId/stop/$organizationId';
+
+  /// Node Nest: `GET /hydrawav/v1/protocol-plus` (list) and `/protocol-plus/:id`
+  /// (detail). Returns Protocol Plus templates (ordered `protocolIds`).
+  static const String protocolPlus = 'protocol-plus';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/start`
+  /// Starts a Protocol Plus sequence (server starts protocol[0] + schedules
+  /// the remaining protocol switches, emitted over the `/sessions` socket).
+  static const String protocolPlusStart = 'protocol-plus/start';
 
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';

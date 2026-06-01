@@ -149,8 +149,14 @@ class AppDatabase extends _$AppDatabase {
   Future<List<LocalSession>> getUnsyncedSessions() =>
       (select(localSessions)..where((t) => t.synced.equals(false))).get();
 
+  Future<LocalSession?> getLocalSession(String id) =>
+      (select(localSessions)..where((t) => t.id.equals(id))).getSingleOrNull();
+
   Future<void> insertSession(LocalSessionsCompanion session) =>
       into(localSessions).insert(session);
+
+  Future<void> upsertSession(LocalSessionsCompanion session) =>
+      into(localSessions).insertOnConflictUpdate(session);
 
   Future<void> markSessionSynced(String id) =>
       (update(localSessions)..where((t) => t.id.equals(id)))

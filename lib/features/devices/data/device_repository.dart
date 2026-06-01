@@ -28,6 +28,28 @@ class DeviceRepository {
 
   String _normalizeMac(String macAddress) => macAddress.trim().toUpperCase();
 
+  /// Hydra units advertise BLE on a MAC adjacent (±1 in the last byte) to the
+  /// registered WiFi MAC, and the BLE cache/connection is keyed by that BLE
+  /// MAC. So to fully disconnect + forget a device we must target the
+  /// registered MAC *and* its adjacent variants.
+  List<String> _macCandidates(String macAddress) {
+    final normalized = _normalizeMac(macAddress);
+    final candidates = <String>{normalized};
+    final parts = normalized.split(':');
+    if (parts.length == 6) {
+      final last = int.tryParse(parts.last, radix: 16);
+      if (last != null) {
+        for (final delta in const [1, -1]) {
+          final next = (last + delta) & 0xFF;
+          final variant = [...parts]
+            ..[5] = next.toRadixString(16).padLeft(2, '0').toUpperCase();
+          candidates.add(variant.join(':'));
+        }
+      }
+    }
+    return candidates.toList();
+  }
+
   /// Get all registered devices from backend.
   Future<List<DeviceInfo>> getRegisteredDevices() => _remoteSource.getDevices();
 
@@ -80,15 +102,20 @@ class DeviceRepository {
       sensorId: sensorId,
       removeOrgIds: [organizationId],
     );
-    await _bleRepository.removePairedDevice(_normalizeMac(macAddress));
+    for (final mac in _macCandidates(macAddress)) {
+      await _bleRepository.removePairedDevice(mac);
+    }
   }
 
   /// Watch paired devices from local DB.
   Stream<List<PairedDevice>> watchPairedDevices() => _db.watchPairedDevices();
 
-  /// Remove a paired device.
-  Future<void> forgetDevice(String macAddress) =>
-      _bleRepository.removePairedDevice(_normalizeMac(macAddress));
+  /// Remove a paired device (and its adjacent BLE MAC variants).
+  Future<void> forgetDevice(String macAddress) async {
+    for (final mac in _macCandidates(macAddress)) {
+      await _bleRepository.removePairedDevice(mac);
+    }
+  }
 
   Future<void> locateDevice(String macAddress, {bool beeping = true}) =>
       _remoteSource.publishMqttPayload({
