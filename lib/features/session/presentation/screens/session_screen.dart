@@ -16,6 +16,7 @@ import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../services/session_engine.dart';
+import '../../services/protocol_plus_controller.dart';
 import '../../domain/session_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
@@ -46,6 +47,13 @@ class SessionScreen extends ConsumerStatefulWidget {
   final String? delayedDeviceId;
   final bool wifiConfigAlreadyPublished;
 
+  /// Protocol Plus wiring (null for a normal single-protocol run).
+  /// When set, this screen opens the `/sessions` socket and applies each
+  /// server `START_PROTOCOL` switch to the running engine.
+  final String? protocolPlusId;
+  final String? protocolPlusServerSessionId;
+  final String? protocolPlusMac;
+
   const SessionScreen({
     super.key,
     this.sessionId,
@@ -60,6 +68,9 @@ class SessionScreen extends ConsumerStatefulWidget {
     this.delayedDeviceId,
     this.skipEngineBootstrap = false,
     this.wifiConfigAlreadyPublished = false,
+    this.protocolPlusId,
+    this.protocolPlusServerSessionId,
+    this.protocolPlusMac,
   });
 
   @override
@@ -85,6 +96,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   final Map<String, String> _deviceLabelById = {};
 
+  /// Captured in initState so it can be disposed without touching `ref` later.
+  ProtocolPlusController? _protocolPlusController;
+
   String _deviceLabel(String id) {
     final key = _normalizeMac(id);
     return _deviceLabelById[key] ?? id;
@@ -102,6 +116,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         if (!mounted) return;
         final prevS = prev?.status;
         final nextS = next.status;
+        _maybeSyncProtocolPlusServer(prevS, nextS);
         final deviceStatusesChanged = prev == null
             ? next.deviceStatuses.isNotEmpty
             : !mapEquals(prev.deviceStatuses, next.deviceStatuses);
@@ -275,8 +290,68 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     // reached, so the session stayed idle (no timer / no pause controls).
     WidgetsBinding.instance.addPostFrameCallback((_) => bootstrap());
 
+    // Protocol Plus: open the socket and apply server-driven protocol switches.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initProtocolPlus());
+
     // Load device names once so the session UI can show user-friendly labels.
     unawaited(_loadDeviceNames());
+  }
+
+  /// When this is a Protocol Plus run, connect the `/sessions` socket so each
+  /// server `START_PROTOCOL` event switches the running engine to the next
+  /// protocol. Protocol[0] was already started by the launching screen.
+  void _initProtocolPlus() {
+    if (!mounted) return;
+    final serverSessionId = widget.protocolPlusServerSessionId;
+    if (widget.protocolPlusId == null ||
+        serverSessionId == null ||
+        serverSessionId.isEmpty) {
+      return;
+    }
+
+    final mac = widget.protocolPlusMac ??
+        (widget.deviceIds.isNotEmpty ? widget.deviceIds.first : '');
+    final engineKey = widget.sessionId ?? _engineKey;
+    final engine = ref.read(sessionEngineFamilyProvider(engineKey).notifier);
+
+    _protocolPlusController = ref.read(protocolPlusControllerProvider);
+    unawaited(
+      _protocolPlusController!.connect(
+        sessionId: serverSessionId,
+        macAddress: mac,
+        engine: engine,
+      ),
+    );
+    appLogger.i(
+      'ProtocolPlus: SessionScreen connected socket '
+      '(serverSessionId=$serverSessionId, mac=$mac)',
+    );
+  }
+
+  /// Keep the server-side Protocol Plus session in sync with the local engine
+  /// on pause/resume/stop. No-op for normal (non Protocol Plus) sessions.
+  void _maybeSyncProtocolPlusServer(
+    SessionStatus? prevS,
+    SessionStatus nextS,
+  ) {
+    final controller = _protocolPlusController;
+    final serverSessionId = widget.protocolPlusServerSessionId;
+    if (controller == null ||
+        serverSessionId == null ||
+        serverSessionId.isEmpty ||
+        prevS == nextS) {
+      return;
+    }
+
+    if (prevS == SessionStatus.running && nextS == SessionStatus.paused) {
+      unawaited(controller.pauseServerSession());
+    } else if (prevS == SessionStatus.paused &&
+        nextS == SessionStatus.running) {
+      unawaited(controller.resumeServerSession());
+    } else if (nextS == SessionStatus.stopped ||
+        nextS == SessionStatus.completed) {
+      unawaited(controller.stopServerSession());
+    }
   }
 
   Future<void> _loadDeviceNames() async {
@@ -312,7 +387,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
-    // ⚠️ DO NOT use ref in dispose() - widget is already unmounted
+    // ⚠️ DO NOT use ref in dispose() - widget is already unmounted.
+    // We use the controller reference captured in initState (no ref access).
+    _protocolPlusController?.dispose();
     // Session engine cleanup happens automatically
     super.dispose();
   }
@@ -737,6 +814,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           children: [
             const SizedBox(height: 8),
+            // Protocol Plus sequence tracker (highlights the active protocol).
+            if (engine.protocolPlusSequence.isNotEmpty &&
+                status != SessionStatus.idle) ...[
+              _buildProtocolPlusSequence(engine),
+              const SizedBox(height: 16),
+            ],
             if (status == SessionStatus.idle) ...[
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
@@ -832,6 +915,196 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             const SizedBox(height: 16),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Protocol Plus tracker — a horizontal route map: the sequence title on top,
+  /// then stops (stations) laid out left→right and joined by a track whose
+  /// traveled portion is filled. The active stop pulses; passed stops show ✓.
+  /// Advances on each START_PROTOCOL.
+  Widget _buildProtocolPlusSequence(SessionEngineState engineState) {
+    final names = engineState.protocolPlusSequence;
+    var currentIndex = engineState.protocolPlusIndex;
+    if (currentIndex < 0) currentIndex = 0;
+    if (currentIndex > names.length - 1) currentIndex = names.length - 1;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title row: Protocol Plus name + step counter.
+          Row(
+            children: [
+              Icon(Icons.route_rounded, size: 18, color: ThemeConstants.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  engineState.protocolPlusName.isNotEmpty
+                      ? engineState.protocolPlusName
+                      : 'Protocol Plus',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: ThemeConstants.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${currentIndex + 1}/${names.length}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: ThemeConstants.accent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Horizontal route: stations + connecting track.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < names.length; i++) ...[
+                Expanded(
+                  child: _routeStop(
+                    index: i,
+                    name: names[i],
+                    isActive: i == currentIndex,
+                    isPast: i < currentIndex,
+                  ),
+                ),
+                if (i < names.length - 1) _routeTrack(done: i < currentIndex),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A single station on the horizontal route: the dot on top, name below.
+  Widget _routeStop({
+    required int index,
+    required String name,
+    required bool isActive,
+    required bool isPast,
+  }) {
+    final Color dotBg;
+    final Color dotFg;
+    if (isActive) {
+      dotBg = ThemeConstants.accent;
+      dotFg = Colors.white;
+    } else if (isPast) {
+      dotBg = ThemeConstants.accent.withValues(alpha: 0.20);
+      dotFg = ThemeConstants.accent;
+    } else {
+      dotBg = ThemeConstants.surfaceVariant;
+      dotFg = ThemeConstants.textTertiary;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          width: isActive ? 30 : 26,
+          height: isActive ? 30 : 26,
+          decoration: BoxDecoration(
+            color: dotBg,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isActive
+                  ? ThemeConstants.accent
+                  : isPast
+                      ? ThemeConstants.accent.withValues(alpha: 0.35)
+                      : ThemeConstants.border,
+              width: 2,
+            ),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: ThemeConstants.accent.withValues(alpha: 0.40),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
+          ),
+          alignment: Alignment.center,
+          child: isPast
+              ? Icon(Icons.check_rounded, size: 15, color: dotFg)
+              : Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: dotFg,
+                  ),
+                ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          name,
+          maxLines: 2,
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 11,
+            height: 1.15,
+            fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+            color: isActive
+                ? ThemeConstants.textPrimary
+                : isPast
+                    ? ThemeConstants.textTertiary
+                    : ThemeConstants.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 3),
+        if (isActive)
+          Text(
+            'RUNNING',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: ThemeConstants.accent,
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// The connecting track segment between two stations. Sits at dot height.
+  Widget _routeTrack({required bool done}) {
+    return Padding(
+      // Vertically center against the ~26-30px dot (not the text below it).
+      padding: const EdgeInsets.only(top: 13),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        width: 22,
+        height: 3,
+        decoration: BoxDecoration(
+          color: done
+              ? ThemeConstants.accent.withValues(alpha: 0.55)
+              : ThemeConstants.border,
+          borderRadius: BorderRadius.circular(3),
         ),
       ),
     );
@@ -968,6 +1241,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     );
   }
 
+  /// True when this screen is running a server-driven Protocol Plus sequence.
+  bool get _isProtocolPlus =>
+      widget.protocolPlusId != null ||
+      (widget.protocolPlusServerSessionId?.isNotEmpty ?? false);
+
   Widget _buildPerDeviceControls(
     String deviceId,
     SessionStatus status,
@@ -975,6 +1253,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
+
+    // Protocol Plus runs on a server-scheduled timeline; pausing/resuming would
+    // desync the scheduled protocol switches, so only Stop is offered.
+    if (_isProtocolPlus &&
+        (status == SessionStatus.running || status == SessionStatus.paused)) {
+      return SizedBox(
+        height: 44,
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: () => ctrl.stopDevice(deviceId),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: ThemeConstants.error,
+            foregroundColor: ThemeConstants.textPrimary,
+          ),
+          child: const Text('Stop'),
+        ),
+      );
+    }
+
     if (status == SessionStatus.running) {
       return Row(
         children: [

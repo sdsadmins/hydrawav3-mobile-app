@@ -15,6 +15,13 @@ class Protocol {
   final String description;
   final String? deviceId;
 
+  /// True when this entry is actually a Protocol Plus template (the backend
+  /// merges protocol-plus docs into the protocols list / by-id endpoint).
+  final bool isProtocolPlus;
+
+  /// Ordered sub-protocol ids when [isProtocolPlus] is true.
+  final List<String> protocolPlusIds;
+
   const Protocol({
     required this.id,
     required this.templateName,
@@ -31,6 +38,8 @@ class Protocol {
     this.sessionPause = 0,
     this.description = '',
     this.deviceId,
+    this.isProtocolPlus = false,
+    this.protocolPlusIds = const [],
   });
 
   factory Protocol.fromJson(Map<String, dynamic> json) {
@@ -62,7 +71,24 @@ class Protocol {
       sessionPause: (data['session_pause'] as num?)?.toDouble() ?? 0,
       description: data['description'] as String? ?? '',
       deviceId: _parseDeviceId(data),
+      isProtocolPlus: data['protocolPlus'] as bool? ?? false,
+      protocolPlusIds: _parseProtocolPlusIds(data),
     );
+  }
+
+  static List<String> _parseProtocolPlusIds(Map<String, dynamic> data) {
+    final raw = data['protocolIds'];
+    if (raw is! List) return const [];
+    final ids = <String>[];
+    for (final item in raw) {
+      if (item is String) {
+        ids.add(item);
+      } else if (item is Map) {
+        final id = item['_id']?.toString() ?? item['id']?.toString();
+        if (id != null && id.isNotEmpty) ids.add(id);
+      }
+    }
+    return ids;
   }
 
   static String? _parseDeviceId(Map<String, dynamic> json) {

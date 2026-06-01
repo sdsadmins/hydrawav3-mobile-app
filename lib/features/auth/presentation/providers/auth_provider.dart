@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/error/exceptions.dart';
+import '../../../splash/presentation/providers/app_bootstrap_provider.dart';
 import '../../data/auth_repository.dart';
 import '../../domain/auth_models.dart';
 import '../../services/biometric_service.dart';
@@ -9,6 +10,11 @@ import '../../services/biometric_service.dart';
 class AuthState {
   final bool isAuthenticated;
   final bool isLoading;
+
+  /// True once the initial stored-token check (checkAuthStatus) has completed.
+  /// The splash screen waits on this before routing to login vs home.
+  final bool isInitialized;
+
   final UserProfile? user;
   final String? error;
 
@@ -18,6 +24,7 @@ class AuthState {
   const AuthState({
     this.isAuthenticated = false,
     this.isLoading = false,
+    this.isInitialized = false,
     this.user,
     this.error,
     this.selectedOrgId,
@@ -27,6 +34,7 @@ class AuthState {
   AuthState copyWith({
     bool? isAuthenticated,
     bool? isLoading,
+    bool? isInitialized,
     UserProfile? user,
     String? error,
     String? selectedOrgId,
@@ -35,6 +43,7 @@ class AuthState {
     return AuthState(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
       isLoading: isLoading ?? this.isLoading,
+      isInitialized: isInitialized ?? this.isInitialized,
       user: user ?? this.user,
       error: error,
       selectedOrgId: selectedOrgId != null ? selectedOrgId : this.selectedOrgId,
@@ -47,8 +56,9 @@ class AuthState {
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
   final BiometricService _biometricService;
+  final Ref _ref;
 
-  AuthNotifier(this._repository, this._biometricService)
+  AuthNotifier(this._repository, this._biometricService, this._ref)
       : super(const AuthState());
 
   Future<void> checkAuthStatus() async {
@@ -68,6 +78,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
               state = state.copyWith(
                 isAuthenticated: false,
                 isLoading: false,
+                isInitialized: true,
               );
               return;
             }
@@ -84,6 +95,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
+            isInitialized: true,
             user: profile,
             selectedOrgId: selectedOrgId,
             selectedOrgName: selectedOrgName,
@@ -96,6 +108,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           state = state.copyWith(
             isAuthenticated: true,
             isLoading: false,
+            isInitialized: true,
             selectedOrgId: selectedOrgId,
             selectedOrgName: selectedOrgName,
           );
@@ -104,12 +117,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
         state = state.copyWith(
           isAuthenticated: false,
           isLoading: false,
+          isInitialized: true,
         );
       }
     } catch (_) {
       state = state.copyWith(
         isAuthenticated: false,
         isLoading: false,
+        isInitialized: true,
       );
     }
   }
@@ -145,7 +160,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> logout() async {
     await _repository.logout();
     await _repository.clearSelectedOrganization();
-    state = const AuthState();
+    // Reset the splash warm-up flag so the next login re-loads core data.
+    _ref.read(appWarmedUpProvider.notifier).state = false;
+    // Keep isInitialized true so the router goes straight to login, not splash.
+    state = const AuthState(isInitialized: true);
   }
 
   /// ✅ ADD THIS (IMPORTANT 🔥)
@@ -164,6 +182,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = AuthState(
       isAuthenticated: true,
       isLoading: false,
+      isInitialized: true,
       user: const UserProfile(
         id: 'demo-user',
         username: 'demo',
@@ -188,6 +207,7 @@ final authStateProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   return AuthNotifier(
     ref.read(authRepositoryProvider),
     ref.read(biometricServiceProvider),
+    ref,
   );
 });
 

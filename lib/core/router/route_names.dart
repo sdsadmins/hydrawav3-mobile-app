@@ -1,6 +1,9 @@
 class RouteNames {
   RouteNames._();
 
+  // Splash / bootstrap
+  static const String splash = 'splash';
+
   // Auth
   static const String login = 'login';
   static const String signup = 'signup';
@@ -15,6 +18,7 @@ class RouteNames {
 
   // Protocol sub-routes
   static const String protocolDetail = 'protocol-detail';
+  static const String protocolPlus = 'protocol-plus';
 
   // Session
   static const String session = 'session';
@@ -40,6 +44,9 @@ class RouteNames {
 class RoutePaths {
   RoutePaths._();
 
+  // Splash / bootstrap (initial route; decides login vs home from stored token)
+  static const String splash = '/';
+
   // Auth
   static const String login = '/login';
   static const String signup = '/signup';
@@ -54,6 +61,7 @@ class RoutePaths {
 
   // Sub-routes
   static const String protocolDetail = '/protocols/:id';
+  static const String protocolPlus = '/protocol-plus';
   static const String session = '/session';
   static const String sessionSetup = '/session-setup';
   static const String deviceRegister = '/devices/register';

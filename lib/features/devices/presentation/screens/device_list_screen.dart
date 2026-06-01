@@ -27,6 +27,7 @@ import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
+import '../../../session/services/protocol_plus_controller.dart';
 import '../../../session/services/session_engine.dart';
 
 final pairedDevicesProvider = StreamProvider((ref) {
@@ -819,6 +820,19 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       );
 
       final commonProtocol = fullProtocolById[firstProtocolId]!;
+
+      // AUTO-DETECT: a Protocol Plus selection runs the server-driven sequence.
+      if (commonProtocol.isProtocolPlus) {
+        await launchProtocolPlusSession(
+          ref,
+          context,
+          plusId: commonProtocol.id,
+          deviceId: firstId,
+          transport: transport == SessionTransport.wifi ? 'wifi' : 'ble',
+        );
+        return;
+      }
+
       final protocolByDevice = <String, Protocol>{
         for (final id in runIds)
           id: fullProtocolById[_protocolIdByDeviceId[id]!]!,
@@ -892,8 +906,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       width: double.infinity,
       height: 50,
       child: ElevatedButton.icon(
-        onPressed:
-            enabled ? () => _startSession(runIds: runIds, transport: transport) : null,
+        onPressed: enabled
+            ? () => _startSession(runIds: runIds, transport: transport)
+            : null,
         icon: Icon(
           _starting ? Icons.hourglass_top_rounded : Icons.play_arrow_rounded,
           size: 20,
@@ -929,6 +944,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final showAdvanced = _showAdvancedByDeviceId[data.id] ?? false;
     final canEditAdvanced = isIncluded &&
         selectedProtocol != null &&
+        // Protocol Plus runs a fixed server-driven sequence; advanced settings
+        // don't apply, so the Advanced control is locked for it.
+        !selectedProtocol.isProtocolPlus &&
         settings != null &&
         !busyDeviceIds.contains(data.id);
     final protocolMeta = selectedProtocol == null

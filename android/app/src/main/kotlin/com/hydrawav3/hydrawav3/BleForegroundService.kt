@@ -44,18 +44,30 @@ class BleForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
+
+        // CRITICAL: When launched via startForegroundService(), Android requires
+        // startForeground() to be called within ~5s for EVERY start — otherwise it
+        // throws ForegroundServiceDidNotStartInTimeException and kills the app.
+        // A session that completes instantly (e.g. a 1s protocol) can race a STOP
+        // ahead of START, so we satisfy the contract first thing for every action.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("Session running"))
+        } catch (e: Exception) {
+            android.util.Log.e("BLE_SERVICE", "startForeground failed: $e")
+        }
+
         when (action) {
             ACTION_START -> {
                 android.util.Log.d("BLE_SERVICE", "startForeground called for ACTION_START")
                 startedAtEpochMs = intent?.getLongExtra(EXTRA_STARTED_AT_EPOCH_MS, System.currentTimeMillis())
                     ?: System.currentTimeMillis()
                 status = STATUS_RUNNING
-                
+
                 // Add device info from intent
                 val deviceIds = intent?.getStringArrayListExtra("deviceIds")
                 val deviceNamesList = intent?.getStringArrayListExtra("deviceNames")
                 val protocolName = intent?.getStringExtra("protocolName") ?: "Unknown Protocol"
-                
+
                 if (deviceIds != null && deviceNamesList != null) {
                     android.util.Log.d("BLE_SERVICE", "Adding ${deviceIds.size} devices to notification")
                     for (i in deviceIds.indices) {
@@ -68,8 +80,9 @@ class BleForegroundService : Service() {
                 } else {
                     android.util.Log.d("BLE_SERVICE", "No device IDs or names received")
                 }
-                
-                startForeground(NOTIFICATION_ID, buildNotification("Session running"))
+
+                // Refresh the notification now that device info is populated.
+                updateNotification("Session running")
                 emitState("started")
                 startTicking()
             }

@@ -14,6 +14,7 @@ import '../../features/history/presentation/screens/session_detail_screen.dart';
 import '../../features/history/domain/session_history_model.dart';
 import '../../features/protocols/presentation/screens/protocol_detail_screen.dart';
 import '../../features/protocols/presentation/screens/protocol_list_screen.dart';
+import '../../features/protocols/presentation/screens/protocol_plus_list_screen.dart';
 import '../../features/protocols/domain/protocol_model.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
@@ -51,6 +52,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       /// ✅ ONLY use local selection
       final hasSelectedOrg = authState.selectedOrgId != null;
 
+      // ⏳ Still checking the stored token → don't redirect yet. The user waits
+      // on the login screen (the initial route) until the check completes; an
+      // already-authenticated user is then sent straight to home below.
+      if (!authState.isInitialized) {
+        return null;
+      }
+
       // ❌ Not logged in
       if (!isAuth && !isAuthRoute) {
         return RoutePaths.login;
@@ -69,7 +77,8 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       return null;
     },
-    routes: [
+    routes: 
+    [
       GoRoute(
           path: RoutePaths.login,
           name: RouteNames.login,
@@ -114,6 +123,20 @@ final routerProvider = Provider<GoRouter>((ref) {
           name: RouteNames.protocolDetail,
           builder: (c, s) =>
               ProtocolDetailScreen(protocolId: s.pathParameters['id']!)),
+      GoRoute(
+        path: RoutePaths.protocolPlus,
+        name: RouteNames.protocolPlus,
+        builder: (c, s) {
+          final extra = s.extra as Map<String, dynamic>?;
+          final deviceIds =
+              extra?['deviceIds'] as List<String>? ?? const <String>[];
+          final transport = extra?['transport'] as String? ?? 'ble';
+          return ProtocolPlusListScreen(
+            deviceIds: deviceIds,
+            transport: transport,
+          );
+        },
+      ),
       GoRoute(
         path: RoutePaths.sessionSetup,
         name: RouteNames.sessionSetup,
@@ -191,6 +214,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               delayedDeviceId: delayedDeviceId,
               skipEngineBootstrap: skipEngineBootstrap,
               wifiConfigAlreadyPublished: wifiConfigAlreadyPublished,
+              protocolPlusId: extra?['protocolPlusId'] as String?,
+              protocolPlusServerSessionId:
+                  extra?['protocolPlusServerSessionId'] as String?,
+              protocolPlusMac: extra?['protocolPlusMac'] as String?,
             );
           }),
       GoRoute(

@@ -17,6 +17,7 @@ import '../../../presets/data/preset_repository.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../services/protocol_plus_controller.dart';
 import '../../services/session_engine.dart';
 
 // This screen is the “web-like” setup:
@@ -740,6 +741,13 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 style: TextStyle(
                                     color: ThemeConstants.textSecondary),
                               ),
+                            ] else if (selectedProtocol.isProtocolPlus) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Advanced settings are not available for Protocol Plus.',
+                                style: TextStyle(
+                                    color: ThemeConstants.textSecondary),
+                              ),
                             ] else ...[
                               const SizedBox(height: 4),
                               InkWell(
@@ -878,6 +886,21 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
 
                                 final commonProtocol =
                                     fullProtocolById[firstProtocolId]!;
+
+                                // AUTO-DETECT: if the selected protocol is
+                                // actually a Protocol Plus template, run the
+                                // server-driven sequence instead of a single
+                                // protocol (no separate button needed).
+                                if (commonProtocol.isProtocolPlus) {
+                                  await launchProtocolPlusSession(
+                                    ref,
+                                    context,
+                                    plusId: commonProtocol.id,
+                                    deviceId: firstId,
+                                    transport: widget.transport,
+                                  );
+                                  return;
+                                }
 
                                 final protocolByDevice = <String, Protocol>{};
                                 for (final id in runIds) {
