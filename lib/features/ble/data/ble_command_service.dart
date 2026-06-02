@@ -152,6 +152,17 @@ class BleCommandService {
     String deviceId, {
     Duration timeout = const Duration(seconds: 8),
   }) async {
+    // Web parity (`getMacFromDevice` / `lastMacRef`): the firmware usually
+    // publishes its MAC right after connect — before this call runs. The
+    // connector caches any MAC seen on the notify channel, so prefer that.
+    // This is what makes iOS work: there the BLE `deviceId` is an opaque UUID,
+    // so the `_extractMacFromText(deviceId)` fallback below yields null and the
+    // only real source of the MAC is the firmware notification.
+    final cached = _connector.getHardwareMac(deviceId);
+    if (cached != null && _macRegex.hasMatch(cached)) {
+      return cached;
+    }
+
     StreamSubscription<BleNotification>? sub;
     final completer = Completer<String?>();
 
@@ -196,11 +207,19 @@ class BleCommandService {
         completeIfNeeded(_extractMacFromText(deviceId));
       }
 
+      // On timeout, re-check the connector cache (the MAC may have arrived on
+      // the notify channel while we were sending the trigger writes), then fall
+      // back to the BLE id. That fallback yields a MAC on Android but null on
+      // iOS — which is correct: iOS has no usable MAC fallback.
       final resolved = await completer.future.timeout(
         timeout,
-        onTimeout: () => _extractMacFromText(deviceId),
+        onTimeout: () =>
+            _connector.getHardwareMac(deviceId) ??
+            _extractMacFromText(deviceId),
       );
-      return resolved ?? _extractMacFromText(deviceId);
+      return resolved ??
+          _connector.getHardwareMac(deviceId) ??
+          _extractMacFromText(deviceId);
     } finally {
       await sub.cancel();
     }

@@ -51,6 +51,15 @@ class BleConnector {
   final Set<String> _manualDisconnects = {};
   final Map<String, Future<bool>> _connectInFlight = {};
   final Map<String, BleGattInfo> _gattInfoByDevice = {};
+  // Mirrors the web app's `lastMacRef`: the firmware publishes its hardware MAC
+  // over the notify channel (often right after connect). We cache it here so a
+  // later resolveHardwareMac() can return it immediately — essential on iOS,
+  // where the BLE id is an opaque UUID and can't stand in for the MAC.
+  final Map<String, String> _hardwareMacByDevice = {};
+
+  // Matches a colon-form MAC anywhere in a notification payload (raw or JSON).
+  static final RegExp _macInTextRegex =
+      RegExp(r'([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}');
 
   Stream<Map<String, BleConnectionStatus>> get connectionStates =>
       _stateController.stream;
@@ -66,6 +75,10 @@ class BleConnector {
   BleGattInfo? getGattInfo(String deviceId) => _gattInfoByDevice[deviceId];
   String? getFirmwareSessionId(String deviceId) =>
       _firmwareSessionIdByDevice[deviceId];
+
+  /// The hardware MAC captured from the firmware's notifications for [deviceId],
+  /// or null if none has been seen yet. Mirrors the web app's `lastMacRef`.
+  String? getHardwareMac(String deviceId) => _hardwareMacByDevice[deviceId];
 
   /// Wait for a post-config notification from firmware.
   /// Returns true when an ACK-like message is observed, false on timeout.
@@ -316,6 +329,7 @@ class BleConnector {
             BleNotification(deviceId: deviceId, value: value),
           );
           _tryCaptureFirmwareSessionId(deviceId, value);
+          _tryCaptureHardwareMac(deviceId, value);
           appLogger.d('BLE: Notification from $deviceId: $value');
         }, onError: (e) {
           appLogger.e('BLE: Notification stream error for $deviceId: $e');
@@ -425,6 +439,28 @@ class BleConnector {
       }
     } catch (_) {
       // Ignore: not JSON / not UTF8.
+    }
+  }
+
+  /// Capture the hardware MAC from a firmware notification and cache it.
+  ///
+  /// The firmware reports its MAC over the notify channel (raw `AA:BB:..` or
+  /// inside JSON like `{"mac":"AA:BB:.."}`). We grab the first colon-form MAC
+  /// in the payload so a later resolveHardwareMac() can return it instantly.
+  /// First write wins — the firmware shouldn't change MAC mid-session.
+  void _tryCaptureHardwareMac(String deviceId, List<int> value) {
+    if (_hardwareMacByDevice.containsKey(deviceId)) return;
+    try {
+      final s = utf8.decode(value, allowMalformed: true).trim();
+      if (s.isEmpty) return;
+      final match = _macInTextRegex.firstMatch(s);
+      if (match != null) {
+        final mac = match.group(0)!.toUpperCase();
+        _hardwareMacByDevice[deviceId] = mac;
+        appLogger.i('BLE: [$deviceId] Captured hardware MAC = $mac');
+      }
+    } catch (_) {
+      // Ignore: not UTF8 / no MAC present.
     }
   }
 
