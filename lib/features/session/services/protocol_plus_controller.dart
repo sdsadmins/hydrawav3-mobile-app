@@ -15,6 +15,7 @@ import '../../../core/storage/secure_storage.dart';
 import '../../../core/utils/logger.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../ble/services/ble_connector.dart';
+import '../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../protocols/domain/protocol_model.dart';
 import '../../protocols/domain/protocol_plus_model.dart';
 import '../../protocols/presentation/providers/protocol_provider.dart';
@@ -347,16 +348,35 @@ class ProtocolPlusController {
     required List<ProtocolPlusBinding> bindings,
     required SessionEngine engine,
   }) async {
+    final incoming =
+        bindings.where((b) => b.serverSessionId.isNotEmpty).toList();
+    if (incoming.isEmpty) {
+      appLogger.w('ProtocolPlus: connectAll called with no valid bindings');
+      return;
+    }
+
+    // If a live socket is already wired to these exact bindings (e.g. the user
+    // navigated away and back into the session screen mid-run), keep it instead
+    // of recycling. This removes the brief reconnect gap during which a server
+    // START_PROTOCOL switch could be missed. The SessionEngine for a given
+    // sessionId is the same cached instance across re-entry, so the existing
+    // socket's handler still targets the right engine.
+    if (_socket != null &&
+        (_socket?.connected ?? false) &&
+        _sameBindings(_bindings, incoming)) {
+      appLogger.i(
+        'ProtocolPlus: reusing existing live socket '
+        '(${incoming.length} binding(s)) — skipping reconnect',
+      );
+      return;
+    }
+
     // Tear down any previous connection before opening a new one.
     dispose();
 
     _bindings
       ..clear()
-      ..addAll(bindings.where((b) => b.serverSessionId.isNotEmpty));
-    if (_bindings.isEmpty) {
-      appLogger.w('ProtocolPlus: connectAll called with no valid bindings');
-      return;
-    }
+      ..addAll(incoming);
 
     final token = await _ref.read(secureStorageProvider).getAccessToken();
 
@@ -499,6 +519,20 @@ class ProtocolPlusController {
     }
 
     return protocol;
+  }
+
+  /// True when two binding lists describe the same run — same set of
+  /// (localMac, serverSessionId) pairs — so a live socket can be reused instead
+  /// of being torn down and reconnected.
+  bool _sameBindings(
+    List<ProtocolPlusBinding> a,
+    List<ProtocolPlusBinding> b,
+  ) {
+    if (a.length != b.length) return false;
+    String key(ProtocolPlusBinding x) => '${x.localMac}|${x.serverSessionId}';
+    final sa = a.map(key).toSet();
+    final sb = b.map(key).toSet();
+    return sa.length == sb.length && sa.containsAll(sb);
   }
 
   void dispose() {
@@ -688,6 +722,51 @@ Future<void> launchSession(
     engine.applySessionClockOffsetFromWallAnchor(DateTime.now());
     await engine.start();
 
+    // Resolve each device's registered name (the name assigned in the org
+    // device list) so the server records it instead of the raw MAC / BLE id.
+    // BLE units advertise on a MAC adjacent (±1 in the last byte) to the
+    // registered hardware MAC, so we match the device id and its ±1 variants.
+    // The server matches START_PROTOCOL on macAddress / bluetoothId, so
+    // deviceName is display-only — falls back to the device id if no match.
+    final nameByDevice = <String, String>{};
+    if (plusPlans.isNotEmpty) {
+      String norm(String s) => s.trim().toUpperCase();
+      String? adjacentMac(String mac, int delta) {
+        final parts = norm(mac).split(':');
+        if (parts.length != 6) return null;
+        final last = int.tryParse(parts.last, radix: 16);
+        if (last == null) return null;
+        parts[5] =
+            ((last + delta) & 0xFF).toRadixString(16).padLeft(2, '0').toUpperCase();
+        return parts.join(':');
+      }
+
+      try {
+        final registered = await ref.read(wifiDevicesByOrgProvider.future);
+        final nameByMac = <String, String>{
+          for (final d in registered)
+            if (d.name.trim().isNotEmpty) norm(d.macAddress): d.name,
+        };
+        for (final plan in plusPlans) {
+          final id = norm(plan.deviceId);
+          final candidates = <String>[id];
+          final plusOne = adjacentMac(id, 1);
+          if (plusOne != null) candidates.add(plusOne);
+          final minusOne = adjacentMac(id, -1);
+          if (minusOne != null) candidates.add(minusOne);
+          for (final c in candidates) {
+            final name = nameByMac[c];
+            if (name != null) {
+              nameByDevice[id] = name;
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        appLogger.w('ProtocolPlus: could not resolve device names: $e');
+      }
+    }
+
     // Register each Protocol Plus device with the server + build socket bindings.
     // BLE devices register by their firmware-reported bluetoothId (captured over
     // BLE after connect), not the phone-local id; Wi-Fi uses the macAddress.
@@ -706,10 +785,12 @@ Future<void> launchSession(
           );
         }
       }
+      final deviceName =
+          nameByDevice[plan.deviceId.trim().toUpperCase()] ?? plan.deviceId;
       try {
         final result = await controller.startProtocolPlus(
           protocolPlusId: plan.plusId,
-          deviceName: plan.deviceId,
+          deviceName: deviceName,
           macAddress: serverDeviceId,
           transport: transport,
           advancedSettings: plan.advanced.toJson(),
