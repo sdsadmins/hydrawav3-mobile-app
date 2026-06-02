@@ -225,7 +225,8 @@ class ProtocolPlusController {
     final userId = await storage.getUserId();
     final orgId = await storage.getSelectedOrgId();
     if (orgId == null || orgId.isEmpty) {
-      appLogger.w('ProtocolPlus: no organizationId — cannot sync session state');
+      appLogger
+          .w('ProtocolPlus: no organizationId — cannot sync session state');
       return null;
     }
 
@@ -254,7 +255,8 @@ class ProtocolPlusController {
           data: {'macAddress': b.localMac},
           options: ctx.options,
         );
-        appLogger.i('ProtocolPlus: ⇐ POST pause payload:\n${_pretty(res.data)}');
+        appLogger
+            .i('ProtocolPlus: ⇐ POST pause payload:\n${_pretty(res.data)}');
       } on DioException catch (e) {
         appLogger.e(
           'ProtocolPlus: pause failed (status=${e.response?.statusCode}) '
@@ -380,17 +382,33 @@ class ProtocolPlusController {
 
     final token = await _ref.read(secureStorageProvider).getAccessToken();
 
-    // nodeBaseUrl is e.g. `https://host/hydrawav/v1/` → socket lives at host root.
-    final wsBase = ApiEndpoints.nodeBaseUrl
-        .replaceAll('/hydrawav/v1/', '')
-        .replaceAll(RegExp(r'/$'), '');
+    // Derive the socket endpoint from the REST base so it tracks config changes.
+    // nodeBaseUrl is like `https://host[/<proxyPrefix>]/hydrawav/v1/`.
+    //   • The Nest server uses global prefix `hydrawav/v1` and serves socket.io
+    //     at the default path `/socket.io`, gateway namespace `/sessions`.
+    //   • Any path segment BEFORE `hydrawav/v1` (e.g. `/api`) is a reverse-proxy
+    //     prefix that also fronts socket.io, so the external socket path is
+    //     `<proxyPrefix>/socket.io`. Unlike the browser web app (which can use a
+    //     relative URL resolved against window.origin), Flutter must dial an
+    //     absolute origin — a bare `/sessions` has no host and just times out.
+    final restUri = Uri.parse(ApiEndpoints.nodeBaseUrl);
+    final origin = '${restUri.scheme}://${restUri.host}'
+        '${restUri.hasPort ? ':${restUri.port}' : ''}';
+    final proxyPrefix = restUri.path
+        .split('hydrawav/v1')
+        .first
+        .replaceAll(RegExp(r'/+$'), ''); // e.g. `/api` or ``
+    final socketUrl = '$origin/sessions';
+    final socketPath = '$proxyPrefix/socket.io';
 
-    appLogger.i('ProtocolPlus: connecting socket → $wsBase/sessions');
+    appLogger.i(
+      'ProtocolPlus: connecting socket → $socketUrl (path=$socketPath)',
+    );
 
     final socket = io.io(
-      '$wsBase/sessions',
+      socketUrl,
       io.OptionBuilder()
-          .setPath('/socket.io')
+          .setPath(socketPath)
           .setTransports(['websocket', 'polling'])
           .setAuth({'token': token})
           // ngrok free tier injects a browser-warning page that breaks the
@@ -663,8 +681,7 @@ Future<void> launchSession(
           first = await ref.read(protocolDetailProvider(fid).future);
         }
         if (first.cycles.isEmpty) {
-          throw StateError(
-              'protocol[0] (${first.templateName}) has no cycles');
+          throw StateError('protocol[0] (${first.templateName}) has no cycles');
         }
         final advanced = _advancedFromProtocol(first);
         protocolByDevice[sel.deviceId] = first;
@@ -736,8 +753,10 @@ Future<void> launchSession(
         if (parts.length != 6) return null;
         final last = int.tryParse(parts.last, radix: 16);
         if (last == null) return null;
-        parts[5] =
-            ((last + delta) & 0xFF).toRadixString(16).padLeft(2, '0').toUpperCase();
+        parts[5] = ((last + delta) & 0xFF)
+            .toRadixString(16)
+            .padLeft(2, '0')
+            .toUpperCase();
         return parts.join(':');
       }
 
