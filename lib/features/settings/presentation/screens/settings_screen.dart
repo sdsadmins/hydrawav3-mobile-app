@@ -570,12 +570,8 @@ class SettingsScreen extends ConsumerWidget {
                       _Item(
                         Icons.privacy_tip_outlined,
                         'Privacy Policy',
-                        onTap: () => _showInfoSheet(
-                          context,
-                          title: 'Privacy Policy',
-                          subtitle: 'Information about data collection, storage, sharing, and your choices.',
-                          sections: LegalContent.privacyPolicySections,
-                        ),
+                        onTap: () => _openExternalUrl(
+                            context, 'https://www.hydrawav3.com/privacy'),
                       ),
                       _Item(
                         Icons.description_outlined,

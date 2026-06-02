@@ -363,7 +363,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       unawaited(controller.resumeServerSession());
     } else if (nextS == SessionStatus.stopped ||
         nextS == SessionStatus.completed) {
-      unawaited(controller.stopServerSession());
+      // The run is over — sync the server, then close the now app-scoped socket
+      // so it doesn't linger past the session. (Navigating away no longer
+      // disposes it, so this is where the socket's life actually ends.)
+      unawaited(
+        controller.stopServerSession().whenComplete(controller.dispose),
+      );
     }
   }
 
@@ -400,9 +405,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
-    // ⚠️ DO NOT use ref in dispose() - widget is already unmounted.
-    // We use the controller reference captured in initState (no ref access).
-    _protocolPlusController?.dispose();
+    // NOTE: We intentionally do NOT dispose the Protocol Plus socket here.
+    // The socket must outlive this screen: a Protocol Plus run keeps receiving
+    // the server's START_PROTOCOL switches and applying them via the
+    // app-scoped SessionEngine even after the user navigates away from the
+    // session screen. The socket is instead torn down when the run actually
+    // ends (stop/complete — see _maybeSyncProtocolPlusServer) or when the next
+    // session's connectAll() replaces it. The controller is an app-scoped
+    // provider, so it (and its socket) survive this widget being unmounted.
     // Session engine cleanup happens automatically
     super.dispose();
   }
