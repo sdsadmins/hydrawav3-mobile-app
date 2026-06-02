@@ -24,12 +24,29 @@ class AuthInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    final storage = _ref.read(secureStorageProvider);
-    final token = await storage.getAccessToken();
-    final cleanToken = token?.withoutBearerPrefix;
+    // The login and token-refresh endpoints never need a stored token. Skipping
+    // the secure-storage read for them keeps a hung/corrupted Android keystore
+    // from ever freezing sign-in: otherwise the read could block here, the HTTP
+    // request would never start, Dio's timeouts wouldn't apply, and the user
+    // would see an infinite login spinner with no error.
+    final path = options.path;
+    final isAuthRoute = path.contains(ApiEndpoints.login) ||
+        path.contains(ApiEndpoints.refreshToken);
 
-    if (cleanToken != null && cleanToken.isNotEmpty) {
-      options.headers['Authorization'] = 'Bearer $cleanToken';
+    if (!isAuthRoute) {
+      try {
+        final storage = _ref.read(secureStorageProvider);
+        final token = await storage.getAccessToken();
+        final cleanToken = token?.withoutBearerPrefix;
+
+        if (cleanToken != null && cleanToken.isNotEmpty) {
+          options.headers['Authorization'] = 'Bearer $cleanToken';
+        }
+      } catch (e) {
+        // Never let token attachment block the request — proceed unauthenticated
+        // and let the normal 401 flow handle it.
+        print('🔵 AUTH INTERCEPTOR: token read failed, proceeding: $e');
+      }
     }
 
     print('🔵 REQUEST: ${options.method} ${options.path}');
