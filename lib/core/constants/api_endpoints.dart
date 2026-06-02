@@ -12,8 +12,9 @@ class ApiEndpoints {
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
+  ///static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String nodeBaseUrl =
-      'https://api.hydrawav3.studio/api/hydrawav/v1/';
+      'https://6141-2401-4900-939b-c510-21c9-de96-7c0b-8093.ngrok-free.app/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth

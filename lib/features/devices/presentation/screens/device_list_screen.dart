@@ -1893,7 +1893,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1960,15 +1960,15 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 14),
               InkWell(
                 onTap: onSelectProtocol,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 9,
+                    horizontal: 12,
+                    vertical: 16,
                   ),
                   decoration: BoxDecoration(
                     color:
@@ -1984,19 +1984,19 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                     children: [
                       Icon(
                         Icons.science_outlined,
-                        size: 15,
+                        size: 17,
                         color: inUse
                             ? ThemeConstants.accent
                             : ThemeConstants.textTertiary,
                       ),
-                      const SizedBox(width: 7),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           protocolTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w800,
                             color: ThemeConstants.textPrimary,
                           ),
@@ -2012,13 +2012,13 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 14),
               Row(
                 children: [
                   Expanded(
                     flex: 4,
                     child: Container(
-                      height: 30,
+                      height: 34,
                       padding: const EdgeInsets.only(left: 8, right: 2),
                       decoration: BoxDecoration(
                         color: inUse
@@ -2038,7 +2038,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                             inUse
                                 ? Icons.play_arrow_rounded
                                 : Icons.pause_rounded,
-                            size: 14,
+                            size: 15,
                             color: inUse
                                 ? ThemeConstants.accent
                                 : ThemeConstants.textTertiary,
@@ -2050,7 +2050,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 10,
+                                fontSize: 11,
                                 fontWeight: FontWeight.w700,
                                 color: inUse
                                     ? ThemeConstants.textPrimary
@@ -2083,7 +2083,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                       onTap: onToggleAdvanced,
                       borderRadius: BorderRadius.circular(999),
                       child: Container(
-                        height: 30,
+                        height: 34,
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         decoration: BoxDecoration(
                           color: advancedEnabled
@@ -2101,7 +2101,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                           children: [
                             Icon(
                               Icons.tune_rounded,
-                              size: 14,
+                              size: 15,
                               color: advancedEnabled
                                   ? ThemeConstants.accent
                                   : ThemeConstants.textTertiary,
@@ -2113,7 +2113,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 10,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w700,
                                   color: advancedEnabled
                                       ? ThemeConstants.textPrimary
@@ -2143,7 +2143,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                       onTap: onDisconnect,
                       borderRadius: BorderRadius.circular(999),
                       child: Container(
-                        height: 30,
+                        height: 34,
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         decoration: BoxDecoration(
                           color: ThemeConstants.surfaceVariant,
@@ -2155,7 +2155,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                           children: [
                             Icon(
                               Icons.link_off_rounded,
-                              size: 14,
+                              size: 15,
                               color: ThemeConstants.textSecondary,
                             ),
                             const SizedBox(width: 4),
@@ -2165,7 +2165,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 10,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w700,
                                   color: ThemeConstants.textPrimary,
                                 ),
@@ -2184,7 +2184,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                 child: !showAdvanced || advancedChild == null
                     ? const SizedBox.shrink()
                     : Padding(
-                        padding: const EdgeInsets.only(top: 10),
+                        padding: const EdgeInsets.only(top: 14),
                         child: advancedChild,
                       ),
               ),
