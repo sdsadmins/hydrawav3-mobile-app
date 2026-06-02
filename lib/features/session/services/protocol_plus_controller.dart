@@ -89,6 +89,40 @@ final protocolPlusListProvider = FutureProvider<List<ProtocolPlus>>((ref) {
   return ref.read(protocolPlusControllerProvider).getProtocolPlusList();
 });
 
+/// Delivery channel for the server-generated Protocol Plus socket bindings,
+/// keyed by the local sessionId (the engine key). The session screen now opens
+/// IMMEDIATELY when devices start — before the (network) server registration
+/// finishes — so the bindings can't travel in the route arguments. Background
+/// registration publishes them here, and the session screen watches this
+/// provider and wires its `/sessions` socket the moment they arrive.
+///
+/// Not auto-disposed on purpose: the writer (background registration) and the
+/// reader (session screen) may subscribe in either order, so the value must
+/// survive until the screen has read it regardless of timing.
+final protocolPlusBindingsProvider =
+    StateProvider.family<List<ProtocolPlusBinding>, String>(
+        (ref, sessionId) => const <ProtocolPlusBinding>[]);
+
+/// One device's registration request — what the background registration needs
+/// to register a Plus run with the server. The server device id (BLE firmware
+/// bluetoothId vs Wi-Fi mac) is resolved during registration.
+class ProtocolPlusRegistration {
+  /// Local write target — BLE remoteId / Wi-Fi macAddress.
+  final String deviceId;
+
+  /// The Protocol Plus template id to run.
+  final String plusId;
+
+  /// Advanced settings to register with the server (derived from protocol[0]).
+  final AdvancedSettings advanced;
+
+  const ProtocolPlusRegistration({
+    required this.deviceId,
+    required this.plusId,
+    required this.advanced,
+  });
+}
+
 /// Server-driven Protocol Plus orchestration (parity with the web app):
 ///   1. POST /protocol-plus/start  → server starts protocol[0] + schedules the
 ///      remaining protocol switches as delayed jobs.
@@ -341,6 +375,132 @@ class ProtocolPlusController {
       ],
       engine: engine,
     );
+  }
+
+  /// Register every Plus device with the server (POST /protocol-plus/start) and
+  /// publish the resulting socket bindings to [protocolPlusBindingsProvider] so
+  /// the already-open session screen can wire its socket when they arrive.
+  ///
+  /// Runs in the BACKGROUND after navigation — this is what lets the session
+  /// screen open the instant the devices start instead of waiting on these
+  /// network calls. The POSTs run concurrently; per-device failures are logged
+  /// and skipped (the others still register). Returns the bindings it produced.
+  Future<List<ProtocolPlusBinding>> registerAndPublishBindings({
+    required String sessionId,
+    required List<ProtocolPlusRegistration> plans,
+    required String transport,
+  }) async {
+    if (plans.isEmpty) return const [];
+
+    // Resolve registered (display) names once for all devices — best-effort.
+    final nameByDevice =
+        await _resolveRegisteredNames(plans.map((p) => p.deviceId).toList());
+
+    final results = await Future.wait(plans.map((plan) async {
+      // BLE registers by the firmware-reported bluetoothId (captured over BLE
+      // after connect), not the phone-local id; Wi-Fi uses the macAddress.
+      var serverDeviceId = plan.deviceId;
+      if (transport == 'ble') {
+        final fwId =
+            _ref.read(bleConnectorProvider).getFirmwareSessionId(plan.deviceId);
+        if (fwId != null && fwId.isNotEmpty) {
+          serverDeviceId = fwId;
+        } else {
+          appLogger.w(
+            'ProtocolPlus: no firmware bluetoothId for ${plan.deviceId}; '
+            'using local id',
+          );
+        }
+      }
+      final deviceName =
+          nameByDevice[plan.deviceId.trim().toUpperCase()] ?? plan.deviceId;
+      try {
+        final result = await startProtocolPlus(
+          protocolPlusId: plan.plusId,
+          deviceName: deviceName,
+          macAddress: serverDeviceId,
+          transport: transport,
+          advancedSettings: plan.advanced.toJson(),
+        );
+        if (result.sessionId.isEmpty) {
+          appLogger
+              .e('ProtocolPlus: empty server sessionId for ${plan.deviceId}');
+          return null;
+        }
+        appLogger.i(
+          'ProtocolPlus: registered ${plan.deviceId} '
+          '(serverSessionId=${result.sessionId}, count=${result.protocolCount})',
+        );
+        return ProtocolPlusBinding(
+          localMac: plan.deviceId,
+          serverDeviceId: serverDeviceId,
+          serverSessionId: result.sessionId,
+          plusId: plan.plusId,
+        );
+      } catch (e) {
+        appLogger.e('ProtocolPlus: failed to register ${plan.deviceId}: $e');
+        return null;
+      }
+    }));
+
+    final bindings = results.whereType<ProtocolPlusBinding>().toList();
+    // Publish — the session screen is (or will be) watching this key. Setting
+    // the value is safe whether the screen subscribed before or after us.
+    _ref.read(protocolPlusBindingsProvider(sessionId).notifier).state = bindings;
+    appLogger.i(
+      'ProtocolPlus: published ${bindings.length} binding(s) for session '
+      '$sessionId',
+    );
+    return bindings;
+  }
+
+  /// Best-effort map of (normalized device id) → registered org device name.
+  /// BLE units advertise on a MAC ±1 (last byte) from the registered hardware
+  /// MAC, so each id and its ±1 variants are matched. Display-only — falls back
+  /// to the device id when no match is found, so failures here never block a run.
+  Future<Map<String, String>> _resolveRegisteredNames(
+    List<String> deviceIds,
+  ) async {
+    final nameByDevice = <String, String>{};
+    if (deviceIds.isEmpty) return nameByDevice;
+    String norm(String s) => s.trim().toUpperCase();
+    String? adjacentMac(String mac, int delta) {
+      final parts = norm(mac).split(':');
+      if (parts.length != 6) return null;
+      final last = int.tryParse(parts.last, radix: 16);
+      if (last == null) return null;
+      parts[5] = ((last + delta) & 0xFF)
+          .toRadixString(16)
+          .padLeft(2, '0')
+          .toUpperCase();
+      return parts.join(':');
+    }
+
+    try {
+      final registered = await _ref.read(wifiDevicesByOrgProvider.future);
+      final nameByMac = <String, String>{
+        for (final d in registered)
+          if (d.name.trim().isNotEmpty) norm(d.macAddress): d.name,
+      };
+      for (final deviceId in deviceIds) {
+        final id = norm(deviceId);
+        final candidates = <String>[id];
+        final plusOne = adjacentMac(id, 1);
+        if (plusOne != null) candidates.add(plusOne);
+        final minusOne = adjacentMac(id, -1);
+        if (minusOne != null) candidates.add(minusOne);
+        for (final c in candidates) {
+          final name = nameByMac[c];
+          if (name != null) {
+            nameByDevice[id] = name;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      appLogger.w('ProtocolPlus: could not resolve device names: $e');
+    }
+    return nameByDevice;
   }
 
   /// Open ONE `/sessions` socket and route each server `START_PROTOCOL` to the
@@ -654,8 +814,7 @@ Future<void> launchSession(
     final advancedByDevice = <String, AdvancedSettings>{};
     final plusDeviceIds = <String>{};
     final durationsByDevice = <String, int>{};
-    final plusPlans =
-        <({String deviceId, String plusId, AdvancedSettings advanced})>[];
+    final plusPlans = <ProtocolPlusRegistration>[];
     // Per-device tracker data so each Plus device gets its own progress card.
     final plusNameByDevice = <String, String>{};
     final plusSequenceByDevice = <String, List<String>>{};
@@ -690,7 +849,7 @@ Future<void> launchSession(
         if (detail.totalDuration > 0) {
           durationsByDevice[sel.deviceId] = detail.totalDuration;
         }
-        plusPlans.add((
+        plusPlans.add(ProtocolPlusRegistration(
           deviceId: sel.deviceId,
           plusId: sel.protocol.id,
           advanced: advanced,
@@ -739,107 +898,18 @@ Future<void> launchSession(
     engine.applySessionClockOffsetFromWallAnchor(DateTime.now());
     await engine.start();
 
-    // Resolve each device's registered name (the name assigned in the org
-    // device list) so the server records it instead of the raw MAC / BLE id.
-    // BLE units advertise on a MAC adjacent (±1 in the last byte) to the
-    // registered hardware MAC, so we match the device id and its ±1 variants.
-    // The server matches START_PROTOCOL on macAddress / bluetoothId, so
-    // deviceName is display-only — falls back to the device id if no match.
-    final nameByDevice = <String, String>{};
-    if (plusPlans.isNotEmpty) {
-      String norm(String s) => s.trim().toUpperCase();
-      String? adjacentMac(String mac, int delta) {
-        final parts = norm(mac).split(':');
-        if (parts.length != 6) return null;
-        final last = int.tryParse(parts.last, radix: 16);
-        if (last == null) return null;
-        parts[5] = ((last + delta) & 0xFF)
-            .toRadixString(16)
-            .padLeft(2, '0')
-            .toUpperCase();
-        return parts.join(':');
-      }
-
-      try {
-        final registered = await ref.read(wifiDevicesByOrgProvider.future);
-        final nameByMac = <String, String>{
-          for (final d in registered)
-            if (d.name.trim().isNotEmpty) norm(d.macAddress): d.name,
-        };
-        for (final plan in plusPlans) {
-          final id = norm(plan.deviceId);
-          final candidates = <String>[id];
-          final plusOne = adjacentMac(id, 1);
-          if (plusOne != null) candidates.add(plusOne);
-          final minusOne = adjacentMac(id, -1);
-          if (minusOne != null) candidates.add(minusOne);
-          for (final c in candidates) {
-            final name = nameByMac[c];
-            if (name != null) {
-              nameByDevice[id] = name;
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        appLogger.w('ProtocolPlus: could not resolve device names: $e');
-      }
-    }
-
-    // Register each Protocol Plus device with the server + build socket bindings.
-    // BLE devices register by their firmware-reported bluetoothId (captured over
-    // BLE after connect), not the phone-local id; Wi-Fi uses the macAddress.
-    final bindings = <ProtocolPlusBinding>[];
-    for (final plan in plusPlans) {
-      var serverDeviceId = plan.deviceId;
-      if (transport == 'ble') {
-        final fwId =
-            ref.read(bleConnectorProvider).getFirmwareSessionId(plan.deviceId);
-        if (fwId != null && fwId.isNotEmpty) {
-          serverDeviceId = fwId;
-        } else {
-          appLogger.w(
-            'ProtocolPlus: no firmware bluetoothId for ${plan.deviceId}; '
-            'using local id',
-          );
-        }
-      }
-      final deviceName =
-          nameByDevice[plan.deviceId.trim().toUpperCase()] ?? plan.deviceId;
-      try {
-        final result = await controller.startProtocolPlus(
-          protocolPlusId: plan.plusId,
-          deviceName: deviceName,
-          macAddress: serverDeviceId,
-          transport: transport,
-          advancedSettings: plan.advanced.toJson(),
-        );
-        if (result.sessionId.isNotEmpty) {
-          bindings.add(ProtocolPlusBinding(
-            localMac: plan.deviceId,
-            serverDeviceId: serverDeviceId,
-            serverSessionId: result.sessionId,
-            plusId: plan.plusId,
-          ));
-          appLogger.i(
-            'ProtocolPlus: registered ${plan.deviceId} '
-            '(serverSessionId=${result.sessionId}, count=${result.protocolCount})',
-          );
-        } else {
-          appLogger.e(
-            'ProtocolPlus: empty server sessionId for ${plan.deviceId}',
-          );
-        }
-      } catch (e) {
-        appLogger.e('ProtocolPlus: failed to register ${plan.deviceId}: $e');
-      }
-    }
-
+    // Open the session screen IMMEDIATELY — before any server registration.
+    // The devices are already running after engine.start(); waiting on the
+    // (network) Protocol Plus registration here used to leave them running with
+    // no UI, so impatient users navigated away and the run was recorded
+    // nowhere. Registration now runs in the BACKGROUND below and delivers the
+    // socket bindings to the screen via [protocolPlusBindingsProvider].
+    final sid = sessionId;
     if (!context.mounted) return;
     context.push(
       RoutePaths.session,
       extra: {
-        'sessionId': sessionId,
+        'sessionId': sid,
         'protocolId': commonProtocol.id,
         'protocol': commonProtocol,
         'deviceIds': deviceIds,
@@ -851,11 +921,24 @@ Future<void> launchSession(
         },
         'delayedDeviceId': effectiveDelayedDeviceId,
         'skipEngineBootstrap': true,
-        if (bindings.isNotEmpty) 'protocolPlusId': bindings.first.plusId,
-        if (bindings.isNotEmpty)
-          'protocolPlusBindings': bindings.map((b) => b.toMap()).toList(),
+        // Tell the screen a Plus run is registering — it watches the bindings
+        // provider and wires its socket the moment they arrive.
+        if (plusPlans.isNotEmpty) ...{
+          'protocolPlusPending': true,
+          'protocolPlusId': plusPlans.first.plusId,
+        },
       },
     );
+
+    // Register the Plus device(s) with the server in the background; the
+    // session screen connects its socket when the bindings are published.
+    if (plusPlans.isNotEmpty) {
+      unawaited(controller.registerAndPublishBindings(
+        sessionId: sid,
+        plans: plusPlans,
+        transport: transport,
+      ));
+    }
   } catch (e) {
     if (sessionId != null) {
       ref.read(sessionEngineFamilyProvider(sessionId).notifier).reset();

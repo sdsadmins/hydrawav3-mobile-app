@@ -233,6 +233,8 @@ final routerProvider = Provider<GoRouter>((ref) {
                   extra?['protocolPlusServerSessionId'] as String?,
               protocolPlusMac: extra?['protocolPlusMac'] as String?,
               protocolPlusBindings: protocolPlusBindings,
+              protocolPlusPending:
+                  extra?['protocolPlusPending'] as bool? ?? false,
             );
           }),
       GoRoute(

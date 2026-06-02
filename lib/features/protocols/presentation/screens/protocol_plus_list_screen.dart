@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,7 +9,6 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
-import '../../../ble/services/ble_connector.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/services/protocol_plus_controller.dart';
@@ -129,37 +130,12 @@ class _ProtocolPlusListScreenState
       engine.applySessionClockOffsetFromWallAnchor(DateTime.now());
       await engine.start();
 
-      // BLE devices register with the server by their firmware-reported
-      // bluetoothId (e.g. "24Qt…=="), captured over BLE after connect — not the
-      // phone-local remoteId/MAC. Wi-Fi uses the macAddress directly.
-      String serverDeviceId = deviceId;
-      if (widget.transport == 'ble') {
-        final fwId =
-            ref.read(bleConnectorProvider).getFirmwareSessionId(deviceId);
-        if (fwId == null || fwId.isEmpty) {
-          appLogger.w(
-            'ProtocolPlus: no firmware bluetoothId captured for $deviceId yet; '
-            'falling back to local id',
-          );
-        } else {
-          serverDeviceId = fwId;
-        }
-      }
-
-      // Register the server-driven sequence (schedules protocol[1..N]).
-      final result = await controller.startProtocolPlus(
-        protocolPlusId: template.id,
-        deviceName: deviceId,
-        macAddress: serverDeviceId,
-        transport: widget.transport,
-        advancedSettings: advanced.toJson(),
-      );
-
-      appLogger.i(
-        'ProtocolPlus: started "${template.templateName}" '
-        '(serverSessionId=${result.sessionId}, count=${result.protocolCount})',
-      );
-
+      // Open the session screen IMMEDIATELY — the device is already running
+      // after engine.start(). Waiting on the (network) server registration here
+      // left the device running with no UI, so impatient users navigated away
+      // and the run was recorded nowhere. Registration now runs in the
+      // background and delivers the socket binding via the bindings provider,
+      // which the session screen wires up when it arrives.
       if (!mounted) return;
       context.push(
         RoutePaths.session,
@@ -173,12 +149,27 @@ class _ProtocolPlusListScreenState
           'advancedSettingsByDevice': {deviceId: advanced},
           'protocolByDeviceId': {deviceId: firstProtocol.id},
           'skipEngineBootstrap': true,
-          // Protocol Plus wiring — drives the socket auto-switches.
+          // Protocol Plus wiring — registration is in flight; the screen waits
+          // for the binding and then drives the socket auto-switches.
+          'protocolPlusPending': true,
           'protocolPlusId': template.id,
-          'protocolPlusServerSessionId': result.sessionId,
-          'protocolPlusMac': deviceId,
         },
       );
+
+      // Register the server-driven sequence (schedules protocol[1..N]) in the
+      // background; the session screen connects its socket when the binding is
+      // published via protocolPlusBindingsProvider.
+      unawaited(controller.registerAndPublishBindings(
+        sessionId: sessionId,
+        plans: [
+          ProtocolPlusRegistration(
+            deviceId: deviceId,
+            plusId: template.id,
+            advanced: advanced,
+          ),
+        ],
+        transport: widget.transport,
+      ));
     } catch (e) {
       if (sessionId != null) {
         ref.read(sessionEngineFamilyProvider(sessionId).notifier).reset();
