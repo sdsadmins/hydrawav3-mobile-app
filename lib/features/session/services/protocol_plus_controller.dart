@@ -20,6 +20,8 @@ import '../../protocols/domain/protocol_model.dart';
 import '../../protocols/domain/protocol_plus_model.dart';
 import '../../protocols/presentation/providers/protocol_provider.dart';
 import '../domain/session_model.dart';
+import '../presentation/providers/active_sessions_provider.dart';
+import 'background_session_runtime.dart';
 import 'session_engine.dart';
 
 /// Result of starting a Protocol Plus run on the backend.
@@ -140,6 +142,21 @@ class ProtocolPlusController {
   /// socket is a global broadcast, so each inbound `START_PROTOCOL` is matched
   /// against these bindings to find the right device + server session.
   final List<ProtocolPlusBinding> _bindings = <ProtocolPlusBinding>[];
+
+  /// The LOCAL engine/session id (Uuid) for the current run — used to remove the
+  /// active session when the run ends, independent of any screen.
+  String? _localSessionId;
+
+  /// Org id, captured to (re)join the org room so the server's room-scoped
+  /// `session-event` (SESSION_STOPPED) broadcasts reach this client.
+  String? _organizationId;
+
+  /// Removes the engine state listener wired in [connectAll]. Lets the
+  /// app-scoped controller detect run completion even with no screen mounted.
+  void Function()? _removeEngineListener;
+
+  /// Guards the one-time end-of-run teardown ([_finishRun]).
+  bool _terminalHandled = false;
 
   ProtocolPlusController(this._ref);
 
@@ -363,6 +380,7 @@ class ProtocolPlusController {
     required SessionEngine engine,
     String? serverDeviceId,
     String plusId = '',
+    String? localSessionId,
   }) {
     return connectAll(
       bindings: [
@@ -374,6 +392,7 @@ class ProtocolPlusController {
         ),
       ],
       engine: engine,
+      localSessionId: localSessionId,
     );
   }
 
@@ -509,6 +528,7 @@ class ProtocolPlusController {
   Future<void> connectAll({
     required List<ProtocolPlusBinding> bindings,
     required SessionEngine engine,
+    String? localSessionId,
   }) async {
     final incoming =
         bindings.where((b) => b.serverSessionId.isNotEmpty).toList();
@@ -539,8 +559,28 @@ class ProtocolPlusController {
     _bindings
       ..clear()
       ..addAll(incoming);
+    _localSessionId = localSessionId;
+    _terminalHandled = false;
 
-    final token = await _ref.read(secureStorageProvider).getAccessToken();
+    final storage = _ref.read(secureStorageProvider);
+    final token = await storage.getAccessToken();
+    _organizationId = await storage.getSelectedOrgId();
+
+    // Detect run completion app-scoped (not tied to the screen): when the engine
+    // reaches a terminal state, end the run everywhere — even if no SessionScreen
+    // is mounted. This is what frees the device after an off-screen Plus finish.
+    // fireImmediately:true also covers the race where the run already ended
+    // before registration produced these bindings (engine already terminal).
+    _removeEngineListener?.call();
+    _removeEngineListener = engine.addListener(
+      (state) {
+        if (state.status == SessionStatus.completed ||
+            state.status == SessionStatus.stopped) {
+          unawaited(_finishRun(stopServer: true));
+        }
+      },
+      fireImmediately: true,
+    );
 
     // Derive the socket endpoint from the REST base so it tracks config changes.
     // nodeBaseUrl is like `https://host[/<proxyPrefix>]/hydrawav/v1/`.
@@ -580,9 +620,21 @@ class ProtocolPlusController {
     );
     _socket = socket;
 
-    socket.onConnect(
-      (_) => appLogger.i('ProtocolPlus: ✅ socket connected (id=${socket.id})'),
-    );
+    socket.onConnect((_) {
+      appLogger.i('ProtocolPlus: ✅ socket connected (id=${socket.id})');
+      // Join the org room so the server's room-scoped `session-event`
+      // (SESSION_STOPPED) broadcasts reach us — mirrors the web app. Re-emitted
+      // on every (re)connect so it survives reconnects.
+      final orgId = int.tryParse(_organizationId ?? '');
+      if (orgId != null) {
+        socket.emit('subscribe-organization', {'organizationId': orgId});
+        appLogger.i('ProtocolPlus: subscribed to organization-$orgId');
+      } else {
+        appLogger.w(
+          'ProtocolPlus: no organizationId — cannot subscribe to stop events',
+        );
+      }
+    });
     socket.onDisconnect(
         (r) => appLogger.w('ProtocolPlus: socket disconnected ($r)'));
     socket.onConnectError(
@@ -655,6 +707,27 @@ class ProtocolPlusController {
       }
     });
 
+    // Server lifecycle events (room-scoped). When the server reports this run
+    // STOPPED — whether from our own completion stop, a manual stop, or another
+    // client/device — free the device locally so it leaves the live/busy list,
+    // even if no SessionScreen is mounted.
+    socket.on('session-event', (data) {
+      try {
+        if (data is! Map) return;
+        final type = data['type']?.toString();
+        if (type != 'SESSION_STOPPED') return;
+        final evSession = data['sessionId']?.toString();
+        if (evSession == null || evSession.isEmpty) return;
+        final matches = _bindings.any((b) => b.serverSessionId == evSession);
+        if (!matches) return;
+        appLogger.i('ProtocolPlus: ⇐ SESSION_STOPPED for $evSession — ending run');
+        // Server already ended it; just free locally (don't re-call stop).
+        unawaited(_finishRun(stopServer: false));
+      } catch (e) {
+        appLogger.e('ProtocolPlus: failed to handle session-event: $e');
+      }
+    });
+
     socket.connect();
   }
 
@@ -713,12 +786,55 @@ class ProtocolPlusController {
     return sa.length == sb.length && sa.containsAll(sb);
   }
 
+  /// End-of-run teardown, app-scoped so it works even with no screen mounted:
+  ///   1. (optionally) tell the server to stop — it deletes the session, cancels
+  ///      the remaining Plus jobs, and broadcasts SESSION_STOPPED to other clients.
+  ///   2. remove the LOCAL active session so the device leaves the busy list.
+  ///   3. stop the background service and tear down the socket.
+  /// Idempotent — runs once per run via [_terminalHandled].
+  Future<void> _finishRun({required bool stopServer}) async {
+    if (_terminalHandled) return;
+    _terminalHandled = true;
+    final localId = _localSessionId;
+
+    if (stopServer) {
+      try {
+        await stopServerSession();
+      } catch (e) {
+        appLogger.e('ProtocolPlus: stopServerSession during finish failed: $e');
+      }
+    }
+
+    if (localId != null && localId.isNotEmpty) {
+      try {
+        await _ref
+            .read(activeSessionsProvider.notifier)
+            .removeSession(localId);
+      } catch (e) {
+        appLogger.e('ProtocolPlus: removeSession($localId) failed: $e');
+      }
+      try {
+        await _ref
+            .read(backgroundSessionRuntimeProvider.notifier)
+            .stopService(sessionId: localId);
+      } catch (e) {
+        appLogger.e('ProtocolPlus: stopService($localId) failed: $e');
+      }
+    }
+
+    dispose();
+  }
+
   void dispose() {
+    _removeEngineListener?.call();
+    _removeEngineListener = null;
     try {
       _socket?.dispose();
     } catch (_) {}
     _socket = null;
     _bindings.clear();
+    _localSessionId = null;
+    _organizationId = null;
   }
 }
 

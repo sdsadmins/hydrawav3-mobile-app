@@ -393,7 +393,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     _protocolPlusController = ref.read(protocolPlusControllerProvider);
     unawaited(
-      _protocolPlusController!.connectAll(bindings: bindings, engine: engine),
+      _protocolPlusController!.connectAll(
+        bindings: bindings,
+        engine: engine,
+        localSessionId: engineKey,
+      ),
     );
     appLogger.i(
       'ProtocolPlus: SessionScreen connected socket '
@@ -402,19 +406,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     unawaited(_persistPlusBindings(bindings));
 
-    // If the user already stopped/finished the run before the (background)
-    // registration produced these bindings, the server's schedule is still
-    // live — tear it down now so it doesn't keep firing switches.
-    final status = ref.read(sessionEngineFamilyProvider(engineKey)).status;
-    if (status == SessionStatus.stopped ||
-        status == SessionStatus.completed) {
-      final controller = _protocolPlusController;
-      if (controller != null) {
-        unawaited(
-          controller.stopServerSession().whenComplete(controller.dispose),
-        );
-      }
-    }
+    // The "run already ended before bindings arrived" race is handled inside
+    // connectAll: its engine listener fires immediately and, if the engine is
+    // already terminal, ends the run (stop server + free device + dispose).
   }
 
   /// Write the (possibly late-arriving) Plus bindings onto the tracked active
@@ -452,15 +446,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     } else if (prevS == SessionStatus.paused &&
         nextS == SessionStatus.running) {
       unawaited(controller.resumeServerSession());
-    } else if (nextS == SessionStatus.stopped ||
-        nextS == SessionStatus.completed) {
-      // The run is over — sync the server, then close the now app-scoped socket
-      // so it doesn't linger past the session. (Navigating away no longer
-      // disposes it, so this is where the socket's life actually ends.)
-      unawaited(
-        controller.stopServerSession().whenComplete(controller.dispose),
-      );
     }
+    // Terminal (stopped/completed) is intentionally NOT handled here. The
+    // app-scoped controller owns end-of-run via its own engine listener, so the
+    // server stop + active-session removal + socket teardown happen even when
+    // this screen is not mounted (e.g. a Plus run that finishes off-screen).
   }
 
   Future<void> _loadDeviceNames() async {

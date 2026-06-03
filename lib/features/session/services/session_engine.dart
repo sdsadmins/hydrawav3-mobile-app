@@ -1482,6 +1482,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
   }
 
+  /// A BLE disconnect is a CONNECTIVITY event, NOT a session-ending one. The
+  /// Hydra firmware keeps running the loaded protocol autonomously after the
+  /// link drops, so we keep the session and its timers running and never
+  /// force-stop anything — parity with the web app, whose `gattserverdisconnected`
+  /// handler only updates a connection badge and leaves the run alive.
+  ///
+  /// Applies to ALL BLE sessions (normal protocol and Protocol Plus). The BLE
+  /// connector auto-reconnects in the background; if a Protocol Plus switch is
+  /// due while disconnected, the write path reconnects on demand. The run ends
+  /// only on its natural timer completion (or an explicit user stop) — not here.
   Future<void> handleBleDisconnect(String deviceId) async {
     if (!_isActive) return;
     if (state.transport != SessionTransport.ble) return;
@@ -1493,44 +1503,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return;
     }
 
+    // Intentionally do NOT mark the device/session stopped, freeze its timer, or
+    // stop the background runtime — the session continues through the disconnect.
+    // The live connection state for the UI is tracked separately via
+    // bleConnectionStatesProvider; this method must not end the run.
     appLogger.w(
-      'Session: Marking device=$deviceId as stopped after BLE disconnect '
-      '(session=$sessionId)',
+      'Session: BLE device=$deviceId disconnected — keeping the session '
+      'running (no forced stop; auto-reconnect in progress; session=$sessionId)',
     );
-
-    _deviceStopwatches[deviceId]?.stop();
-
-    final updatedTimers = Map<String, TimerState>.from(state.deviceTimers);
-    final disconnectedTimer = updatedTimers[deviceId];
-    if (disconnectedTimer != null) {
-      updatedTimers[deviceId] = disconnectedTimer.copyWith(isRunning: false);
-    }
-
-    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
-      ..[deviceId] = SessionStatus.stopped;
-    final hasLiveDevices = statuses.values.any(
-      (status) =>
-          status == SessionStatus.running || status == SessionStatus.paused,
-    );
-    final overallStatus =
-        hasLiveDevices ? _deriveOverallStatus(statuses) : SessionStatus.stopped;
-
-    if (!hasLiveDevices) {
-      _timer?.cancel();
-      _timer = null;
-      _stopwatch.stop();
-    }
-
-    state = state.copyWith(
-      deviceTimers: updatedTimers,
-      deviceStatuses: statuses,
-      status: overallStatus,
-      error: 'BLE device disconnected: $deviceId',
-    );
-
-    if (!hasLiveDevices) {
-      unawaited(_syncBackgroundRuntime('stopped'));
-    }
   }
 
   SessionRecord? getSessionRecord({
