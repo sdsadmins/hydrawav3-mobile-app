@@ -195,6 +195,28 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     await _saveActiveSessions();
   }
 
+  /// Persist the Protocol Plus socket bindings onto an existing session. The
+  /// session screen now opens before server registration completes, so the
+  /// bindings (needed to re-attach the socket / stop the server schedule when
+  /// re-opening from history) are written in once they're known. No-op if the
+  /// session isn't tracked yet.
+  Future<void> updateProtocolPlusBindings(
+      String sessionId, List<Map<String, String>> bindings) async {
+    final sessionIndex = state.indexWhere((s) => s.id == sessionId);
+    if (sessionIndex == -1) return;
+
+    final updatedSession =
+        state[sessionIndex].copyWith(protocolPlusBindings: bindings);
+    state = [
+      ...state.sublist(0, sessionIndex),
+      updatedSession,
+      ...state.sublist(sessionIndex + 1),
+    ];
+    await _saveActiveSessions();
+    appLogger.i(
+        'Updated Protocol Plus bindings (${bindings.length}) for $sessionId');
+  }
+
   Future<void> updateDeviceNames(
       String sessionId, Map<String, String> deviceNames) async {
     final sessionIndex = state.indexWhere((s) => s.id == sessionId);

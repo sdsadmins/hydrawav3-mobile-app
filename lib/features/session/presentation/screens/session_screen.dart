@@ -59,6 +59,12 @@ class SessionScreen extends ConsumerStatefulWidget {
   /// / [protocolPlusMac] fields (which remain for the single-device path).
   final List<ProtocolPlusBinding> protocolPlusBindings;
 
+  /// True when this is a Protocol Plus run whose server registration is still
+  /// in flight at navigation time (the instant-UI launch). The screen then
+  /// watches [protocolPlusBindingsProvider] and wires its socket when the
+  /// bindings arrive, instead of receiving them up-front in [protocolPlusBindings].
+  final bool protocolPlusPending;
+
   const SessionScreen({
     super.key,
     this.sessionId,
@@ -77,6 +83,7 @@ class SessionScreen extends ConsumerStatefulWidget {
     this.protocolPlusServerSessionId,
     this.protocolPlusMac,
     this.protocolPlusBindings = const [],
+    this.protocolPlusPending = false,
   });
 
   @override
@@ -104,6 +111,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   /// Captured in initState so it can be disposed without touching `ref` later.
   ProtocolPlusController? _protocolPlusController;
+
+  /// Guards the one-time socket connect (bindings can arrive synchronously via
+  /// the widget or late via [protocolPlusBindingsProvider] — connect only once).
+  bool _plusSocketConnected = false;
+
+  /// The bindings this screen actually wired its socket with. For the instant-UI
+  /// launch they arrive AFTER navigation, so they're tracked here to (a) persist
+  /// onto the active session and (b) gate the server pause/resume/stop sync.
+  List<ProtocolPlusBinding> _resolvedPlusBindings = const [];
+
+  /// Subscription to the late-binding delivery provider (instant-UI launch).
+  ProviderSubscription<List<ProtocolPlusBinding>>? _plusBindingsSub;
 
   String _deviceLabel(String id) {
     final key = _normalizeMac(id);
@@ -309,38 +328,99 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   void _initProtocolPlus() {
     if (!mounted) return;
 
-    // Prefer the multi-device bindings; fall back to the single-device fields.
-    var bindings = widget.protocolPlusBindings;
-    if (bindings.isEmpty) {
-      final serverSessionId = widget.protocolPlusServerSessionId;
-      if (widget.protocolPlusId == null ||
-          serverSessionId == null ||
-          serverSessionId.isEmpty) {
+    // Case 1: bindings already known — synchronous launch / history re-open /
+    // the single-device legacy fields. Connect straight away.
+    final immediate = _resolveImmediateBindings();
+    if (immediate.isNotEmpty) {
+      _connectProtocolPlus(immediate);
+      return;
+    }
+
+    // Case 2: instant-UI launch — registration is still in flight. Watch the
+    // delivery provider and connect the moment the server bindings arrive.
+    if (widget.protocolPlusPending) {
+      final sessionId = widget.sessionId ?? _engineKey;
+      // They may have already arrived before this post-frame callback ran.
+      final current = ref.read(protocolPlusBindingsProvider(sessionId));
+      if (current.isNotEmpty) {
+        _connectProtocolPlus(current);
         return;
       }
-      final mac = widget.protocolPlusMac ??
-          (widget.deviceIds.isNotEmpty ? widget.deviceIds.first : '');
-      bindings = [
-        ProtocolPlusBinding(
-          localMac: mac,
-          serverDeviceId: mac,
-          serverSessionId: serverSessionId,
-          plusId: widget.protocolPlusId ?? '',
-        ),
-      ];
+      _plusBindingsSub = ref.listenManual<List<ProtocolPlusBinding>>(
+        protocolPlusBindingsProvider(sessionId),
+        (prev, next) {
+          if (next.isNotEmpty) _connectProtocolPlus(next);
+        },
+      );
     }
+  }
+
+  /// Bindings available up-front (not the pending instant-UI path): the
+  /// multi-device list, or the single-device legacy fields.
+  List<ProtocolPlusBinding> _resolveImmediateBindings() {
+    if (widget.protocolPlusBindings.isNotEmpty) {
+      return widget.protocolPlusBindings;
+    }
+    final serverSessionId = widget.protocolPlusServerSessionId;
+    if (widget.protocolPlusId == null ||
+        serverSessionId == null ||
+        serverSessionId.isEmpty) {
+      return const [];
+    }
+    final mac = widget.protocolPlusMac ??
+        (widget.deviceIds.isNotEmpty ? widget.deviceIds.first : '');
+    return [
+      ProtocolPlusBinding(
+        localMac: mac,
+        serverDeviceId: mac,
+        serverSessionId: serverSessionId,
+        plusId: widget.protocolPlusId ?? '',
+      ),
+    ];
+  }
+
+  /// Wire the `/sessions` socket exactly once, persist the bindings onto the
+  /// active session (so history re-open can re-attach / stop the schedule), and
+  /// cover the rare case where the run already ended before registration
+  /// completed (stop the server schedule immediately).
+  void _connectProtocolPlus(List<ProtocolPlusBinding> bindings) {
+    if (!mounted || _plusSocketConnected || bindings.isEmpty) return;
+    _plusSocketConnected = true;
+    _resolvedPlusBindings = bindings;
 
     final engineKey = widget.sessionId ?? _engineKey;
     final engine = ref.read(sessionEngineFamilyProvider(engineKey).notifier);
 
     _protocolPlusController = ref.read(protocolPlusControllerProvider);
     unawaited(
-      _protocolPlusController!.connectAll(bindings: bindings, engine: engine),
+      _protocolPlusController!.connectAll(
+        bindings: bindings,
+        engine: engine,
+        localSessionId: engineKey,
+      ),
     );
     appLogger.i(
       'ProtocolPlus: SessionScreen connected socket '
       '(${bindings.length} device binding(s))',
     );
+
+    unawaited(_persistPlusBindings(bindings));
+
+    // The "run already ended before bindings arrived" race is handled inside
+    // connectAll: its engine listener fires immediately and, if the engine is
+    // already terminal, ends the run (stop server + free device + dispose).
+  }
+
+  /// Write the (possibly late-arriving) Plus bindings onto the tracked active
+  /// session so re-opening from history can re-attach the socket / stop the
+  /// server schedule. No-op until the active session exists.
+  Future<void> _persistPlusBindings(List<ProtocolPlusBinding> bindings) async {
+    final sessionId = _activeSessionId;
+    if (sessionId == null || bindings.isEmpty) return;
+    await ref.read(activeSessionsProvider.notifier).updateProtocolPlusBindings(
+          sessionId,
+          bindings.map((b) => b.toMap()).toList(),
+        );
   }
 
   /// Keep the server-side Protocol Plus session in sync with the local engine
@@ -351,7 +431,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   ) {
     final controller = _protocolPlusController;
     final hasPlus = widget.protocolPlusBindings.isNotEmpty ||
-        (widget.protocolPlusServerSessionId?.isNotEmpty ?? false);
+        (widget.protocolPlusServerSessionId?.isNotEmpty ?? false) ||
+        widget.protocolPlusPending ||
+        _resolvedPlusBindings.isNotEmpty;
+    // `controller` is only set once the socket is wired (bindings in hand), so
+    // before that there is nothing on the server to pause/resume/stop yet — the
+    // terminal-before-connect case is handled in [_connectProtocolPlus].
     if (controller == null || !hasPlus || prevS == nextS) {
       return;
     }
@@ -361,15 +446,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     } else if (prevS == SessionStatus.paused &&
         nextS == SessionStatus.running) {
       unawaited(controller.resumeServerSession());
-    } else if (nextS == SessionStatus.stopped ||
-        nextS == SessionStatus.completed) {
-      // The run is over — sync the server, then close the now app-scoped socket
-      // so it doesn't linger past the session. (Navigating away no longer
-      // disposes it, so this is where the socket's life actually ends.)
-      unawaited(
-        controller.stopServerSession().whenComplete(controller.dispose),
-      );
     }
+    // Terminal (stopped/completed) is intentionally NOT handled here. The
+    // app-scoped controller owns end-of-run via its own engine listener, so the
+    // server stop + active-session removal + socket teardown happen even when
+    // this screen is not mounted (e.g. a Plus run that finishes off-screen).
   }
 
   Future<void> _loadDeviceNames() async {
@@ -405,6 +486,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
+    _plusBindingsSub?.close();
     // NOTE: We intentionally do NOT dispose the Protocol Plus socket here.
     // The socket must outlive this screen: a Protocol Plus run keeps receiving
     // the server's START_PROTOCOL switches and applying them via the
@@ -510,9 +592,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       deviceIds: widget.deviceIds,
       transport: widget.transport,
       // Persist Plus bindings so re-opening from history can re-attach the
-      // socket and stop the server-side schedule.
-      protocolPlusBindings:
-          widget.protocolPlusBindings.map((b) => b.toMap()).toList(),
+      // socket and stop the server-side schedule. Prefer bindings resolved at
+      // runtime (instant-UI launch) over the up-front widget bindings.
+      protocolPlusBindings: (_resolvedPlusBindings.isNotEmpty
+              ? _resolvedPlusBindings
+              : widget.protocolPlusBindings)
+          .map((b) => b.toMap())
+          .toList(),
     );
     appLogger.i(
         'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
