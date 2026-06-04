@@ -1388,6 +1388,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
 
+    // While a BLE device's link is down during a live run, its pause/stop/resume
+    // commands can't reach it — keep the buttons visible but DISABLED (greyed).
+    // Reconnect happens silently in the background; no extra UI/label. WiFi is
+    // unaffected (commands go over MQTT, no live BLE link needed).
+    final isLive =
+        status == SessionStatus.running || status == SessionStatus.paused;
+    final disconnected = widget.transport == 'ble' &&
+        isLive &&
+        ref.watch(bleDeviceStatusProvider(deviceId)) !=
+            BleConnectionStatus.connected;
+
     // Protocol Plus runs on a server-scheduled timeline; pausing/resuming would
     // desync the scheduled protocol switches, so only Stop is offered. Normal
     // protocol devices (incl. those in a mixed session) keep pause/resume.
@@ -1397,7 +1408,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         height: 44,
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: () => ctrl.stopDevice(deviceId),
+          onPressed: disconnected ? null : () => ctrl.stopDevice(deviceId),
           style: ElevatedButton.styleFrom(
             backgroundColor: ThemeConstants.error,
             foregroundColor: ThemeConstants.textPrimary,
@@ -1414,7 +1425,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: OutlinedButton(
-                onPressed: () => ctrl.pauseDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.pauseDevice(deviceId),
                 style: OutlinedButton.styleFrom(
                   backgroundColor: softSurface,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1429,7 +1441,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.stopDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1448,7 +1461,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.resumeDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.resumeDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.accent,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1462,7 +1476,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.stopDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,

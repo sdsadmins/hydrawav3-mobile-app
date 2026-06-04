@@ -164,6 +164,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   SessionEngine(this._ref, {required this.sessionId})
       : super(const SessionEngineState());
 
+  /// Public, read-only view of the session transport (the underlying [state] is
+  /// protected on StateNotifier). Used by [ProtocolPlusController] to decide
+  /// whether a held switch is gated on a BLE link.
+  SessionTransport get transport => state.transport;
+
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
       if (!_isActive) return;
@@ -1423,6 +1428,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 3);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      // Safety net: never write to (or flip the status of) a device whose BLE
+      // link is down — the command can't reach it and would desync app/device.
+      // The UI also disables the control while disconnected.
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: pauseDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_blePauseByte]);
     }
     _deviceStopwatches[deviceId]?.stop();
@@ -1440,6 +1452,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 4);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: resumeDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_bleResumeByte]);
     }
     _deviceStopwatches[deviceId]?.start();
@@ -1459,6 +1475,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 2);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: stopDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_bleStopByte]);
     }
     _deviceStopwatches[deviceId]?.stop();

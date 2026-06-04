@@ -57,6 +57,28 @@ class BleConnector {
   // where the BLE id is an opaque UUID and can't stand in for the MAC.
   final Map<String, String> _hardwareMacByDevice = {};
 
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
+  BluetoothAdapterState? _lastAdapterState;
+
+  BleConnector() {
+    // React to the Bluetooth adapter being toggled OFF→ON. While BT is off,
+    // the per-device reconnect loop ([_attemptReconnect]) exhausts its attempts;
+    // reset those counters so future drops can retry, and let the scan-driven
+    // AutoConnectManager reconnect everything from fresh scan results.
+    _adapterSub = FlutterBluePlus.adapterState.listen((state) {
+      final prev = _lastAdapterState;
+      _lastAdapterState = state;
+      if (state == BluetoothAdapterState.on &&
+          prev == BluetoothAdapterState.off) {
+        appLogger.i(
+          'BLE: adapter ON — resetting reconnect attempts so devices can '
+          'reconnect (scan-driven auto-connect will reconnect matching devices)',
+        );
+        _reconnectAttempts.clear();
+      }
+    });
+  }
+
   // Matches a colon-form MAC anywhere in a notification payload (raw or JSON).
   static final RegExp _macInTextRegex =
       RegExp(r'([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}');
@@ -881,6 +903,8 @@ class BleConnector {
   }
 
   void dispose() {
+    _adapterSub?.cancel();
+    _adapterSub = null;
     for (final sub in _connectionSubs.values) {
       sub.cancel();
     }

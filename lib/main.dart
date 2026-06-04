@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'core/storage/preferences.dart';
 import 'features/auth/presentation/providers/auth_provider.dart';
+import 'features/ble/services/auto_connect_manager.dart';
 import 'features/session/presentation/providers/active_sessions_provider.dart';
 import 'features/session/services/background_session_runtime.dart';
 
@@ -49,6 +50,8 @@ class _AppBootstrapState extends ConsumerState<_AppBootstrap> {
     Future.microtask(() {
       ref.read(authStateProvider.notifier).checkAuthStatus();
       ref.read(backgroundSessionRuntimeProvider.notifier).initialize();
+      // Start the app-wide BLE auto-connect/reconnect manager.
+      ref.read(autoConnectManagerProvider);
 
       ref.listen<BackgroundSessionState>(
         backgroundSessionRuntimeProvider,
