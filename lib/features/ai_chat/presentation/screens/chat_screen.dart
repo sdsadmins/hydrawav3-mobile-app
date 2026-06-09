@@ -5,7 +5,6 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../data/chat_repository.dart';
 import '../../domain/chat_message.dart';
-import '../../services/voice_input_service.dart';
 
 final chatMessagesProvider = StateProvider<List<ChatMessageModel>>((ref) => []);
 final isSendingProvider = StateProvider<bool>((ref) => false);
@@ -19,7 +18,6 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
-  bool _listening = false;
 
   @override
   void dispose() {
@@ -121,35 +119,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
             child: SafeArea(
               child: Row(children: [
-                // Mic
-                GestureDetector(
-                  onTap: () async {
-                    final v = ref.read(voiceInputServiceProvider);
-                    if (_listening) {
-                      await v.stopListening();
-                      setState(() => _listening = false);
-                    } else {
-                      setState(() => _listening = true);
-                      await v.startListening((t) => _ctrl.text = t);
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: _listening
-                          ? ThemeConstants.error.withValues(alpha: 0.15)
-                          : ThemeConstants.surfaceVariant,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                        _listening ? Icons.mic_rounded : Icons.mic_none_rounded,
-                        color: _listening
-                            ? ThemeConstants.error
-                            : ThemeConstants.textTertiary,
-                        size: 20),
-                  ),
-                ),
-                const SizedBox(width: 10),
                 Expanded(
                     child: TextField(
                   controller: _ctrl,

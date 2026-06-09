@@ -1,7 +1,7 @@
 name: hydrawav3
 description: Hydrawav3 - Physical therapy device control app
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.6.0
@@ -40,18 +40,12 @@ dependencies:
   # Secure Storage
   flutter_secure_storage: ^9.2.3
 
-  # Authentication
-  local_auth: ^2.3.0
-
   # JSON Serialization
   freezed_annotation: ^2.4.4
   json_annotation: ^4.9.0
 
   # Payments
   flutter_stripe: ^11.2.0
-
-  # Voice Input
-  speech_to_text: ^7.0.0
 
   # Social Sharing
   share_plus: ^10.1.3

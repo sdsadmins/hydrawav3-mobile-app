@@ -4,7 +4,6 @@ import '../../../../core/error/exceptions.dart';
 import '../../../splash/presentation/providers/app_bootstrap_provider.dart';
 import '../../data/auth_repository.dart';
 import '../../domain/auth_models.dart';
-import '../../services/biometric_service.dart';
 
 // Auth state
 class AuthState {
@@ -55,11 +54,9 @@ class AuthState {
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
-  final BiometricService _biometricService;
   final Ref _ref;
 
-  AuthNotifier(this._repository, this._biometricService, this._ref)
-      : super(const AuthState());
+  AuthNotifier(this._repository, this._ref) : super(const AuthState());
 
   Future<void> checkAuthStatus() async {
     state = state.copyWith(isLoading: true);
@@ -68,23 +65,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final isLoggedIn = await _repository.isLoggedIn();
 
       if (isLoggedIn) {
-        try {
-          final biometricEnabled = await _biometricService.isEnabled();
-
-          if (biometricEnabled) {
-            final authenticated = await _biometricService.authenticate();
-
-            if (!authenticated) {
-              state = state.copyWith(
-                isAuthenticated: false,
-                isLoading: false,
-                isInitialized: true,
-              );
-              return;
-            }
-          }
-        } catch (_) {}
-
         try {
           final profile = await _repository.getProfile();
 
@@ -206,7 +186,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
 final authStateProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   return AuthNotifier(
     ref.read(authRepositoryProvider),
-    ref.read(biometricServiceProvider),
     ref,
   );
 });

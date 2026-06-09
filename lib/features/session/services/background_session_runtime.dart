@@ -176,9 +176,9 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
 
     if (defaultTargetPlatform != TargetPlatform.android) return;
     try {
-      // Request notification permission for Android 13+
-      // Temporarily disabled as requested.
-      // await _requestNotificationPermission();
+      // Request notification permission for Android 13+ so the foreground
+      // service notification is visible (required for background sessions).
+      await _requestNotificationPermission();
 
       await _methods.invokeMethod<void>('startService', {
         'startedAtEpochMs': snapshot.startedAtEpochMs,

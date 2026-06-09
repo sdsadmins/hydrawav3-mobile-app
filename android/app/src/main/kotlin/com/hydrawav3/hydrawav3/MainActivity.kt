@@ -27,15 +27,14 @@ class MainActivity : FlutterActivity() {
                         android.util.Log.d("MAIN_ACTIVITY", "requestNotificationPermission called")
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             android.util.Log.d("MAIN_ACTIVITY", "Android 13+ detected, checking permission")
-                            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
+                            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                                 != PackageManager.PERMISSION_GRANTED) {
-                                // Disabled as requested: do not show permission prompt.
-                                // android.util.Log.d("MAIN_ACTIVITY", "Permission NOT granted, requesting...")
-                                // ActivityCompat.requestPermissions(
-                                //     this,
-                                //     arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                                //     1001
-                                // )
+                                android.util.Log.d("MAIN_ACTIVITY", "Permission NOT granted, requesting...")
+                                ActivityCompat.requestPermissions(
+                                    this,
+                                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                                    1001
+                                )
                                 result.success(false)
                             } else {
                                 android.util.Log.d("MAIN_ACTIVITY", "Permission already granted")

@@ -37,9 +37,13 @@ class AppConstants {
   static const String termsUrl = 'https://hydrawav3.app/terms';
 
   // Version and Release Notes
-  static const String appVersion = '1.0.1';
-  static const String buildNumber = '2';
+  static const String appVersion = '1.0.2';
+  static const String buildNumber = '3';
   static const String releaseNotes = '''
+Version 1.0.2
+- Session notifications now show while running in the background
+- Improved background session reliability
+- Bug fixes and stability improvements
 Version 1.0.1
 - Bug fixes and performance improvements
 - Enhanced user interface
