@@ -6,6 +6,10 @@ class ApiEndpoints {
   static const String changePassword = "/profile/me/password";
   static const String forgotPassword = "/profile/me/forget-password";
 
+  // Account management (admin user account resource).
+  // PUT with `deleted: true` soft-deletes the account.
+  static String userAccountById(String id) => '/admin/user/accounts/$id';
+
 // /changed
 // static const String login = '/auth/login';
   static const String login = '/auth/login';

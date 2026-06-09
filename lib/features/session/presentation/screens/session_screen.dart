@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/constants/api_endpoints.dart';
 import '../../../../core/constants/theme_constants.dart';
@@ -90,7 +91,8 @@ class SessionScreen extends ConsumerStatefulWidget {
   ConsumerState<SessionScreen> createState() => _SessionScreenState();
 }
 
-class _SessionScreenState extends ConsumerState<SessionScreen> {
+class _SessionScreenState extends ConsumerState<SessionScreen>
+    with WidgetsBindingObserver {
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
   ProviderSubscription<SessionEngineState>? _engineSub;
@@ -132,6 +134,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   @override
   void initState() {
     super.initState();
+    // Observe app lifecycle so we can reconcile the timer + restart its ticker
+    // when the app returns to the foreground (screen was off / app backgrounded).
+    WidgetsBinding.instance.addObserver(this);
     _activeSessionId = _findMatchingActiveSessionId();
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
 
@@ -150,6 +155,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             nextS == SessionStatus.running || nextS == SessionStatus.paused;
         final wasActive =
             prevS == SessionStatus.running || prevS == SessionStatus.paused;
+        if (statusChanged) _applyWakelockForStatus(nextS);
         if (nowActive && !wasActive) {
           _startBackendPadPolling();
           unawaited(_ensureAndSyncFromEngineState(next));
@@ -193,6 +199,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     unawaited(_ensureAndSyncFromEngineState(
       ref.read(sessionEngineFamilyProvider(_engineKey)),
     ));
+
+    // Keep the screen awake if this screen opens onto an already-live session
+    // (e.g. re-entering from setup with skipEngineBootstrap=true).
+    _applyWakelockForStatus(
+      ref.read(sessionEngineFamilyProvider(_engineKey)).status,
+    );
 
     Future<void> bootstrap() async {
       if (!mounted) return;
@@ -482,7 +494,50 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState appState) {
+    super.didChangeAppLifecycleState(appState);
+    if (appState != AppLifecycleState.resumed) return;
+    // The periodic UI ticker is frozen while the app is backgrounded / the
+    // screen is off, and the monotonic clock skips deep-sleep time — so the
+    // displayed timer can be stale or behind the device. Ask the engine to
+    // reconcile from the wall clock and restart its ticker, then re-assert the
+    // keep-screen-on flag (some OEMs drop it across a background transition).
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    engine.onAppResumed();
+    _applyWakelockForStatus(
+      ref.read(sessionEngineFamilyProvider(_engineKey)).status,
+    );
+  }
+
+  /// Keep the screen awake while a session is live so the device-synced timer
+  /// stays visible and ticking; release it once nothing is live anymore.
+  void _applyWakelockForStatus(SessionStatus status) {
+    final live =
+        status == SessionStatus.running || status == SessionStatus.paused;
+    unawaited(_setWakelock(live));
+  }
+
+  Future<void> _setWakelock(bool enable) async {
+    try {
+      if (enable) {
+        await WakelockPlus.enable();
+      } else {
+        // Don't drop the wakelock if another tracked session is still live
+        // (concurrent sessions share the single app-wide screen-on flag).
+        final anyLive = ref
+            .read(activeSessionsProvider)
+            .any((s) => _isLiveSession(s.status));
+        if (!anyLive) await WakelockPlus.disable();
+      }
+    } catch (e) {
+      appLogger.w('Session: wakelock toggle failed (enable=$enable): $e');
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_setWakelock(false));
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
@@ -1388,6 +1443,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
 
+    // While a BLE device's link is down during a live run, its pause/stop/resume
+    // commands can't reach it — keep the buttons visible but DISABLED (greyed).
+    // Reconnect happens silently in the background; no extra UI/label. WiFi is
+    // unaffected (commands go over MQTT, no live BLE link needed).
+    final isLive =
+        status == SessionStatus.running || status == SessionStatus.paused;
+    final disconnected = widget.transport == 'ble' &&
+        isLive &&
+        ref.watch(bleDeviceStatusProvider(deviceId)) !=
+            BleConnectionStatus.connected;
+
     // Protocol Plus runs on a server-scheduled timeline; pausing/resuming would
     // desync the scheduled protocol switches, so only Stop is offered. Normal
     // protocol devices (incl. those in a mixed session) keep pause/resume.
@@ -1397,7 +1463,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         height: 44,
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: () => ctrl.stopDevice(deviceId),
+          onPressed: disconnected ? null : () => ctrl.stopDevice(deviceId),
           style: ElevatedButton.styleFrom(
             backgroundColor: ThemeConstants.error,
             foregroundColor: ThemeConstants.textPrimary,
@@ -1414,7 +1480,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: OutlinedButton(
-                onPressed: () => ctrl.pauseDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.pauseDevice(deviceId),
                 style: OutlinedButton.styleFrom(
                   backgroundColor: softSurface,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1429,7 +1496,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.stopDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1448,7 +1516,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.resumeDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.resumeDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.accent,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -1462,7 +1531,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: () => ctrl.stopDevice(deviceId),
+                onPressed:
+                    disconnected ? null : () => ctrl.stopDevice(deviceId),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,

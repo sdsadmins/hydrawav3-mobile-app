@@ -16,6 +16,7 @@ import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
+import '../../../ble/presentation/providers/auto_connect_provider.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../ble/presentation/providers/ble_scan_provider.dart';
 import '../../../ble/services/ble_scanner.dart';
@@ -32,12 +33,10 @@ final pairedDevicesProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
 });
 
-final _bleConnectingIdsProvider = StateProvider<Set<String>>((ref) {
-  return <String>{};
-});
-
+// autoConnectEnabledProvider + bleConnectingIdsProvider now live in
+// ble/presentation/providers/auto_connect_provider.dart (shared app-wide with
+// the AutoConnectManager).
 final _hydrawaveOnlyProvider = StateProvider<bool>((ref) => true);
-final _autoConnectEnabledProvider = StateProvider<bool>((ref) => false);
 
 class DeviceListScreen extends ConsumerStatefulWidget {
   const DeviceListScreen({super.key});
@@ -105,56 +104,17 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
 
     final transport = ref.read(sessionTargetProvider).transport;
     final hasActiveConnectionAttempt =
-        ref.read(_bleConnectingIdsProvider).isNotEmpty;
+        ref.read(bleConnectingIdsProvider).isNotEmpty;
     if (transport == SessionTransport.ble &&
         !scanner.isScanning &&
         !hasActiveConnectionAttempt) {
       Future.microtask(() => ref.read(startScanProvider)());
     }
 
-    scanner.onDeviceFound = (result) async {
-      if (!mounted || !ref.read(_autoConnectEnabledProvider)) return;
-
-      final id = result.device.remoteId.str;
-      final alreadyConnecting =
-          ref.read(_bleConnectingIdsProvider).contains(id);
-      if (alreadyConnecting) return;
-
-      final state = ref.read(bleDeviceStatusProvider(id));
-      if (state == BleConnectionStatus.connected) return;
-
-      final expectedUuid = BleConstants.preferredServiceUuid;
-      if (expectedUuid == null) return;
-
-      final targetUuid = BleConstants.normalizeUuid(expectedUuid);
-      final matches = result.advertisementData.serviceUuids.any(
-        (uuid) => BleConstants.normalizeUuid(uuid.str) == targetUuid,
-      );
-      if (!matches) return;
-
-      ref.read(_bleConnectingIdsProvider.notifier).state = {
-        ...ref.read(_bleConnectingIdsProvider),
-        id,
-      };
-
-      try {
-        final ok =
-            await ref.read(bleRepositoryProvider).connectDevice(result.device);
-        if (ok) {
-          ref.read(sessionTargetProvider.notifier).ensureSelected(id);
-          if (!mounted) return;
-          setState(() {
-            _runDeviceIds.add(id);
-            _excludedDeviceIds.remove(id);
-          });
-        }
-      } finally {
-        final current = ref.read(_bleConnectingIdsProvider);
-        ref.read(_bleConnectingIdsProvider.notifier).state = {
-          ...current,
-        }..remove(id);
-      }
-    };
+    // Auto-connect is now handled app-wide by AutoConnectManager (so it also
+    // works while on the Session screen and reconnects ALL matching devices
+    // concurrently). This screen only toggles `autoConnectEnabledProvider` and
+    // offers the manual "Connect all" button.
   }
 
   int _nearestLevel(int pwm, Map<int, int> map, int fallback) {
@@ -317,8 +277,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
           ? result.device.platformName
           : id;
 
-      ref.read(_bleConnectingIdsProvider.notifier).state = {
-        ...ref.read(_bleConnectingIdsProvider),
+      ref.read(bleConnectingIdsProvider.notifier).state = {
+        ...ref.read(bleConnectingIdsProvider),
         id,
       };
 
@@ -338,8 +298,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
           failed.add(name);
         }
       } finally {
-        final current = ref.read(_bleConnectingIdsProvider);
-        ref.read(_bleConnectingIdsProvider.notifier).state = {
+        final current = ref.read(bleConnectingIdsProvider);
+        ref.read(bleConnectingIdsProvider.notifier).state = {
           ...current,
         }..remove(id);
       }
@@ -957,9 +917,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final target = ref.watch(sessionTargetProvider);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
     final bleScanResultsAsync = ref.watch(bleScanResultsProvider);
-    final connectingIds = ref.watch(_bleConnectingIdsProvider);
+    final connectingIds = ref.watch(bleConnectingIdsProvider);
     final hydrawaveOnly = ref.watch(_hydrawaveOnlyProvider);
-    final autoConnectEnabled = ref.watch(_autoConnectEnabledProvider);
+    final autoConnectEnabled = ref.watch(autoConnectEnabledProvider);
     final provisioningIds = ref.watch(bleProvisioningIdsProvider);
     final isIos = defaultTargetPlatform == TargetPlatform.iOS;
 
@@ -1181,7 +1141,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                     if (hydrawaveOnly)
                       GestureDetector(
                         onTap: () async {
-                          ref.read(_autoConnectEnabledProvider.notifier).state =
+                          ref.read(autoConnectEnabledProvider.notifier).state =
                               !autoConnectEnabled;
                           if (!autoConnectEnabled) {
                             await _connectAllHydrawaveDevices(
@@ -1604,7 +1564,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       }
 
                                       ref
-                                          .read(_bleConnectingIdsProvider
+                                          .read(bleConnectingIdsProvider
                                               .notifier)
                                           .state = {...connectingIds, id};
                                       final messenger =
@@ -1643,9 +1603,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         );
                                       } finally {
                                         final current =
-                                            ref.read(_bleConnectingIdsProvider);
+                                            ref.read(bleConnectingIdsProvider);
                                         ref
-                                            .read(_bleConnectingIdsProvider
+                                            .read(bleConnectingIdsProvider
                                                 .notifier)
                                             .state = {...current}..remove(id);
                                       }

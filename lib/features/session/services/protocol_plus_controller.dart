@@ -14,6 +14,7 @@ import '../../../core/router/route_names.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/utils/logger.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../ble/domain/ble_device_model.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../protocols/domain/protocol_model.dart';
@@ -157,6 +158,19 @@ class ProtocolPlusController {
 
   /// Guards the one-time end-of-run teardown ([_finishRun]).
   bool _terminalHandled = false;
+
+  /// The engine for the current run (set in [connectAll]) — used to replay a
+  /// held protocol switch once a device reconnects.
+  SessionEngine? _engine;
+
+  /// Protocol switches that arrived while a (BLE) device was disconnected,
+  /// keyed by localMac. Only the LATEST is kept; applied on reconnect.
+  final Map<String, ({Protocol protocol, int index})> _pendingSwitches = {};
+
+  /// Watches per-device BLE connection so a held switch can be applied the
+  /// moment the device reconnects.
+  StreamSubscription<Map<String, BleConnectionStatus>>? _connStatesSub;
+  Map<String, BleConnectionStatus> _lastConnStates = {};
 
   ProtocolPlusController(this._ref);
 
@@ -561,6 +575,17 @@ class ProtocolPlusController {
       ..addAll(incoming);
     _localSessionId = localSessionId;
     _terminalHandled = false;
+    _engine = engine;
+    _pendingSwitches.clear();
+
+    // Apply any protocol switch that was held while a device was disconnected,
+    // the moment that device reconnects (BLE). Survives screen changes.
+    _connStatesSub?.cancel();
+    _lastConnStates = {};
+    _connStatesSub = _ref
+        .read(bleConnectorProvider)
+        .connectionStates
+        .listen(_applyPendingSwitchesOn);
 
     final storage = _ref.read(secureStorageProvider);
     final token = await storage.getAccessToken();
@@ -694,6 +719,21 @@ class ProtocolPlusController {
           'cycles=${protocol.cycles.length})',
         );
 
+        // If this is a BLE run and the device's link is currently down, the
+        // config+PLAY write can't reach it — HOLD the latest switch and apply it
+        // the moment the device reconnects (see _applyPendingSwitchesOn).
+        final isBle = engine.transport == SessionTransport.ble;
+        if (isBle &&
+            !_ref.read(bleConnectorProvider).isConnected(binding.localMac)) {
+          _pendingSwitches[binding.localMac] =
+              (protocol: protocol, index: index);
+          appLogger.w(
+            'ProtocolPlus: ${binding.localMac} not connected — holding switch '
+            'index=$index until reconnect',
+          );
+          return;
+        }
+
         // Write to the device using our LOCAL id (BLE remoteId / Wi-Fi mac).
         // The event's `bluetoothId` is the firmware id, which is NOT what the
         // BLE connector uses to address the device — so we must not write to it.
@@ -825,9 +865,45 @@ class ProtocolPlusController {
     dispose();
   }
 
+  /// On each BLE connection-state change, replay a held protocol switch for any
+  /// bound device that JUST transitioned to `connected`.
+  void _applyPendingSwitchesOn(Map<String, BleConnectionStatus> states) {
+    final engine = _engine;
+    if (engine == null) {
+      _lastConnStates = Map.of(states);
+      return;
+    }
+    for (final b in _bindings) {
+      final prev = _lastConnStates[b.localMac];
+      final now = states[b.localMac];
+      final justConnected = now == BleConnectionStatus.connected &&
+          prev != BleConnectionStatus.connected;
+      if (!justConnected) continue;
+      final pending = _pendingSwitches.remove(b.localMac);
+      if (pending == null) continue;
+      appLogger.i(
+        'ProtocolPlus: ${b.localMac} reconnected — applying held switch '
+        'index=${pending.index}',
+      );
+      unawaited(
+        engine.applyProtocolPlusSwitch(
+          b.localMac,
+          pending.protocol,
+          pending.index,
+        ),
+      );
+    }
+    _lastConnStates = Map.of(states);
+  }
+
   void dispose() {
     _removeEngineListener?.call();
     _removeEngineListener = null;
+    _connStatesSub?.cancel();
+    _connStatesSub = null;
+    _pendingSwitches.clear();
+    _lastConnStates = {};
+    _engine = null;
     try {
       _socket?.dispose();
     } catch (_) {}

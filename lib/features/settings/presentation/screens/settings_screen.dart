@@ -1,13 +1,16 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/constants/api_endpoints.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/legal_content.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
+import '../../../../core/utils/logger.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../../core/network/dio_client.dart'; // ✅ ADD
@@ -74,6 +77,125 @@ class SettingsScreen extends ConsumerWidget {
           content: Text('Unable to open the link right now.'),
         ),
       );
+    }
+  }
+
+  /// Normalize an account/profile response into a single mutable map.
+  Map<String, dynamic> _accountMap(dynamic data) {
+    if (data is List && data.isNotEmpty) {
+      return Map<String, dynamic>.from(data.first as Map);
+    }
+    if (data is Map) {
+      final inner = data['data'];
+      return Map<String, dynamic>.from(inner is Map ? inner : data);
+    }
+    throw Exception('Unexpected account response shape: ${data.runtimeType}');
+  }
+
+  /// Soft-delete the signed-in user's account. Pulls the full profile from
+  /// `/profile/me` (which carries firstName/lastName/dateOfBirth/country/state/
+  /// city/address/address2/zip/phone/mail/companyId/userName/…), resends it
+  /// unchanged except for `deleted: true`, then the caller logs the user out.
+  Future<void> _deleteAccount(WidgetRef ref, String userId) async {
+    final dio = ref.read(djangoDioProvider);
+    final endpoint = ApiEndpoints.userAccountById(userId);
+
+    appLogger.i('DeleteAccount: ▶ start (userId=$userId)');
+
+    // /profile/me only returns a thin subset (and uses `email`, not `mail`).
+    // The account endpoint returns the FULL object (mail/userName/address/zip/
+    // organisations/…), so we fetch it and resend it complete with deleted=true.
+    final res = await dio.get(endpoint);
+    appLogger.i('DeleteAccount: ⇐ GET $endpoint → ${res.statusCode}\n'
+        '${res.data}');
+    final account = _accountMap(res.data);
+
+    account['deleted'] = true;
+    appLogger.i('DeleteAccount: ⇒ PUT $endpoint\n'
+        'keys=${account.keys.toList()}\n'
+        'payload=$account');
+
+    try {
+      final putRes = await dio.put(endpoint, data: account);
+      appLogger.i('DeleteAccount: ⇐ PUT $endpoint → ${putRes.statusCode}\n'
+          '${putRes.data}');
+      appLogger.i('DeleteAccount: ✅ account deleted (userId=$userId)');
+    } on DioException catch (e) {
+      appLogger.e('DeleteAccount: ❌ PUT $endpoint '
+          'status=${e.response?.statusCode}\n'
+          'SERVER BODY: ${e.response?.data}\n'
+          'SENT PAYLOAD: $account');
+      rethrow;
+    }
+  }
+
+  /// Confirm, delete the account, then log the user out.
+  Future<void> _confirmAndDeleteAccount(
+      BuildContext context, WidgetRef ref) async {
+    final userId = ref.read(authStateProvider).user?.id;
+    if (userId == null || userId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not determine your account.')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ThemeConstants.surface,
+        title: Text(
+          'Delete Account',
+          style: TextStyle(color: ThemeConstants.textPrimary),
+        ),
+        content: Text(
+          'This permanently deletes your account and logs you out. '
+          'This action cannot be undone.',
+          style: TextStyle(color: ThemeConstants.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await _deleteAccount(ref, userId);
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // close loader
+      }
+      // Log out — the router's auth guard returns the user to the login screen.
+      appLogger.i('DeleteAccount: logging out after deletion');
+      await ref.read(authStateProvider.notifier).logout();
+      ref.invalidate(organizationProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Your account has been deleted.')),
+        );
+      }
+    } catch (e, st) {
+      appLogger.e('DeleteAccount: ❌ failed for userId=$userId: $e\n$st');
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // close loader
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete account: $e')),
+        );
+      }
     }
   }
 
@@ -634,6 +756,51 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
+                // Delete Account (destructive) — placed after Organization.
+                AnimatedEntrance(
+                  index: 6,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: Colors.red.withValues(alpha: 0.2),
+                        width: 1,
+                      ),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => _confirmAndDeleteAccount(context, ref),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.delete_forever_rounded,
+                                color: Colors.red,
+                                size: 20,
+                              ),
+                              SizedBox(width: 10),
+                              Text(
+                                'Delete Account',
+                                style: TextStyle(
+                                  color: Colors.red,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 // Logout
                 AnimatedEntrance(
                     index: 6,

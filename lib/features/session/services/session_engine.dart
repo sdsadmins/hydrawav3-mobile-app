@@ -138,6 +138,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   DateTime? _firstBlePlayAnchor;
   bool _startInProgress = false;
   final Map<String, Stopwatch> _deviceStopwatches = {};
+
+  /// Wall-clock anchors for suspend-proof timing. The Dart [Stopwatch] uses a
+  /// monotonic clock that does NOT advance while the device is in deep sleep,
+  /// and the periodic UI ticker is frozen while the app is backgrounded / the
+  /// screen is off. We record a wall-clock anchor whenever the run (re)starts so
+  /// [_reconcileClockFromWall] can detect and add back any elapsed wall time the
+  /// monotonic clock missed, keeping the displayed timer aligned with the device.
+  DateTime? _wallClockAnchor;
+  Duration _monotonicAnchor = Duration.zero;
+
+  /// Per-device catch-up added to each device [Stopwatch] to cover sleep time
+  /// the monotonic clock didn't count. Keyed by device id.
+  final Map<String, Duration> _deviceClockOffset = {};
   int _cycleIndex = 0;
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
@@ -164,6 +177,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   SessionEngine(this._ref, {required this.sessionId})
       : super(const SessionEngineState());
 
+  /// Public, read-only view of the session transport (the underlying [state] is
+  /// protected on StateNotifier). Used by [ProtocolPlusController] to decide
+  /// whether a held switch is gated on a BLE link.
+  SessionTransport get transport => state.transport;
+
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
       if (!_isActive) return;
@@ -184,6 +202,53 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   Duration get _effectiveElapsed => _stopwatch.elapsed + _sessionClockOffset;
+
+  /// Record where the wall clock and the monotonic stopwatch are right now, so
+  /// [_reconcileClockFromWall] can measure any divergence later. Called whenever
+  /// the run (re)starts ticking.
+  void _anchorWallClock() {
+    _wallClockAnchor = DateTime.now();
+    _monotonicAnchor = _stopwatch.elapsed;
+  }
+
+  /// Add back any wall-clock time the monotonic [Stopwatch] missed while the
+  /// device was asleep, then re-anchor. Safe to call every tick: while awake
+  /// both clocks advance together so the drift is ~0 and this is a no-op. The
+  /// drift only grows across a suspend (screen off / app backgrounded), where it
+  /// captures exactly the sleep duration and folds it into the session + per-
+  /// device offsets so the displayed timer catches up to the running device.
+  void _reconcileClockFromWall() {
+    if (!_isActive || state.status != SessionStatus.running) return;
+    final anchor = _wallClockAnchor;
+    if (anchor == null) return;
+    final wallElapsed = DateTime.now().difference(anchor);
+    final monotonicElapsed = _stopwatch.elapsed - _monotonicAnchor;
+    final drift = wallElapsed - monotonicElapsed;
+    // Ignore sub-second jitter (and any backwards wall-clock adjustment).
+    if (drift <= const Duration(milliseconds: 500)) return;
+    _sessionClockOffset += drift;
+    for (final id in state.deviceIds) {
+      if (state.deviceStatuses[id] == SessionStatus.running) {
+        _deviceClockOffset[id] =
+            (_deviceClockOffset[id] ?? Duration.zero) + drift;
+      }
+    }
+    _anchorWallClock();
+    appLogger.i('Session: reconciled +$drift of missed sleep time after wake');
+  }
+
+  /// Call when the app returns to the foreground. The periodic UI ticker is
+  /// suspended while the app is backgrounded / the screen is off, and the
+  /// monotonic clock skips deep-sleep time — so the displayed timer can be stale
+  /// or behind the device. Reconcile against the wall clock and restart the
+  /// ticker so the UI jumps straight to the device's true position.
+  void onAppResumed() {
+    if (!_isActive || state.status != SessionStatus.running) return;
+    _reconcileClockFromWall();
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+    _syncDisplayedTimerFromStopwatch();
+  }
 
   Future<bool> _sendLargePayload(
     String mac,
@@ -403,6 +468,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     _sessionClockOffset = Duration.zero;
     _firstBlePlayAnchor = null;
+    _wallClockAnchor = null;
+    _monotonicAnchor = Duration.zero;
+    _deviceClockOffset.clear();
     _startInProgress = false;
     _deviceStopwatches
       ..clear()
@@ -992,6 +1060,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.reset();
       _stopwatch.start();
     }
+    _anchorWallClock();
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
     // Periodic timer does not fire until the first interval; sync once now
@@ -1372,6 +1441,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+    _anchorWallClock();
     _syncDisplayedTimerFromStopwatch();
     appLogger.i('🔄 RESUME: Timer restarted on app side');
     unawaited(_syncBackgroundRuntime('resumed'));
@@ -1423,6 +1493,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 3);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      // Safety net: never write to (or flip the status of) a device whose BLE
+      // link is down — the command can't reach it and would desync app/device.
+      // The UI also disables the control while disconnected.
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: pauseDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_blePauseByte]);
     }
     _deviceStopwatches[deviceId]?.stop();
@@ -1440,6 +1517,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 4);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: resumeDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_bleResumeByte]);
     }
     _deviceStopwatches[deviceId]?.start();
@@ -1459,6 +1540,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 2);
     } else {
       final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(deviceId)) {
+        appLogger.w('Session: stopDevice skipped — $deviceId not connected');
+        return;
+      }
       await connector.writeToDevice(deviceId, [_bleStopByte]);
     }
     _deviceStopwatches[deviceId]?.stop();
@@ -1559,6 +1644,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _stopwatch.reset();
     _sessionClockOffset = Duration.zero;
     _firstBlePlayAnchor = null;
+    _wallClockAnchor = null;
+    _monotonicAnchor = Duration.zero;
+    _deviceClockOffset.clear();
     _startInProgress = false;
     _historyCaptured = false;
     _cycleIndex = -1;
@@ -1581,6 +1669,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       return;
     }
+    _reconcileClockFromWall();
     _syncDisplayedTimerFromStopwatch();
   }
 
@@ -1618,7 +1707,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final timerState = updatedTimers[id];
       if (sw == null || timerState == null) continue;
       if (status == SessionStatus.running) {
-        final devElapsed = sw.elapsed;
+        final devElapsed =
+            sw.elapsed + (_deviceClockOffset[id] ?? Duration.zero);
         if (devElapsed >= timerState.totalDuration) {
           // Protocol Plus: a single protocol finishing is NOT the end of the
           // session. The firmware stops itself and the next protocol arrives
