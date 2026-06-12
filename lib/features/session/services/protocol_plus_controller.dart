@@ -1010,6 +1010,7 @@ Future<void> launchSession(
     // Per-device tracker data so each Plus device gets its own progress card.
     final plusNameByDevice = <String, String>{};
     final plusSequenceByDevice = <String, List<String>>{};
+    final plusDelayByDevice = <String, int>{};
 
     for (final sel in selections) {
       if (sel.protocol.isProtocolPlus) {
@@ -1049,6 +1050,7 @@ Future<void> launchSession(
         plusNameByDevice[sel.deviceId] = detail.templateName;
         plusSequenceByDevice[sel.deviceId] =
             _protocolPlusSequenceNames(populated, orderedIds);
+        plusDelayByDevice[sel.deviceId] = detail.delay;
       } else {
         protocolByDevice[sel.deviceId] = sel.protocol;
         advancedByDevice[sel.deviceId] = sel.advanced;
@@ -1084,6 +1086,7 @@ Future<void> launchSession(
         engine.setProtocolPlusSequencesByDevice(
           plusNameByDevice,
           plusSequenceByDevice,
+          delayByDevice: plusDelayByDevice,
         );
       }
     }

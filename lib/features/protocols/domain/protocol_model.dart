@@ -22,6 +22,12 @@ class Protocol {
   /// Ordered sub-protocol ids when [isProtocolPlus] is true.
   final List<String> protocolPlusIds;
 
+  /// Server-computed total duration (seconds) from the backend `totalDuration`
+  /// field. Protocol Plus entries carry this and have **no** `cycles`, so the
+  /// cycle-based computation would return 0 for them — [totalDurationSeconds]
+  /// uses this value whenever it's present.
+  final int apiTotalDurationSeconds;
+
   const Protocol({
     required this.id,
     required this.templateName,
@@ -40,6 +46,7 @@ class Protocol {
     this.deviceId,
     this.isProtocolPlus = false,
     this.protocolPlusIds = const [],
+    this.apiTotalDurationSeconds = 0,
   });
 
   factory Protocol.fromJson(Map<String, dynamic> json) {
@@ -73,6 +80,7 @@ class Protocol {
       deviceId: _parseDeviceId(data),
       isProtocolPlus: data['protocolPlus'] as bool? ?? false,
       protocolPlusIds: _parseProtocolPlusIds(data),
+      apiTotalDurationSeconds: (data['totalDuration'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -160,30 +168,43 @@ class Protocol {
       sessionPause: sessionPause,
       description: description,
       deviceId: deviceId,
+      isProtocolPlus: isProtocolPlus,
+      protocolPlusIds: protocolPlusIds,
+      apiTotalDurationSeconds: apiTotalDurationSeconds,
     );
   }
 
   /// Total duration in seconds across all cycles and sessions.
+  ///
+  /// Mirrors the backend computation in
+  /// `Hydrawav3-Server` → `protocol.service.ts` `getProtocolsByGoalTagId`
+  /// (the goal-tag list `duration`, which is the source of truth) so the
+  /// home / "All" protocols list matches the goal-filtered list exactly.
+  ///
+  /// Per cycle: `repetitions * (duration_seconds + pause_seconds)`, plus the
+  /// inter-cycle pause `cycle_pause` for every cycle **except the last**.
+  /// Then scaled by sessions (+ session pauses) and the start/end edge cycles
+  /// (`edgecycleduration + 30` each).
   int get totalDurationSeconds {
-    int cycleDuration = 0;
-    for (final cycle in cycles) {
-      cycleDuration += (cycle.durationSeconds * cycle.repetitions).toInt();
-      cycleDuration += (cycle.cyclePause * (cycle.repetitions - 1)).toInt();
+    // Protocol Plus entries (and the goal-tag list) carry a server-computed
+    // total and have no cycles — use it directly so they don't read 00:00.
+    if (apiTotalDurationSeconds > 0) return apiTotalDurationSeconds;
+
+    double base = 0;
+    for (var i = 0; i < cycles.length; i++) {
+      final cycle = cycles[i];
+      base += cycle.repetitions * (cycle.durationSeconds + cycle.pauseSeconds);
+      if (i < cycles.length - 1) {
+        base += cycle.cyclePause;
+      }
     }
 
-    var total =
-        (cycleDuration * sessions + sessionPause * (sessions - 1)).toInt();
-    final edgeCycleDurationSeconds =
-        (cycle1 || cycle5) ? 9 : edgecycleduration.toInt();
+    base = base * sessions + sessionPause * (sessions - 1);
 
-    if (cycle1) {
-      total += edgeCycleDurationSeconds + 30;
-    }
-    if (cycle5) {
-      total += edgeCycleDurationSeconds + 30;
-    }
+    if (cycle1) base += edgecycleduration + 30;
+    if (cycle5) base += edgecycleduration + 30;
 
-    return total;
+    return base.round();
   }
 
   Duration get totalDuration => Duration(seconds: totalDurationSeconds);
