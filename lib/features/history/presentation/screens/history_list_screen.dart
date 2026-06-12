@@ -553,17 +553,24 @@ class _HistoryTabButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
+          // Match the Devices list segmented control: dark slate selected
+          // segment with cream text/icons (web-parity), not an accent tint.
           color: selected
-              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              ? ThemeConstants.segmentActiveBg
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected
-                ? ThemeConstants.accent
-                : ThemeConstants.border.withValues(alpha: 0),
-          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: ThemeConstants.segmentActiveBg
+                        .withValues(alpha: 0.22),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -571,9 +578,8 @@ class _HistoryTabButton extends StatelessWidget {
             Icon(
               icon,
               size: 17,
-              color: selected
-                  ? ThemeConstants.accent
-                  : ThemeConstants.textSecondary,
+              color:
+                  selected ? ThemeConstants.onNav : ThemeConstants.textSecondary,
             ),
             const SizedBox(width: 8),
             Text(
@@ -583,7 +589,7 @@ class _HistoryTabButton extends StatelessWidget {
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
                 color: selected
-                    ? ThemeConstants.accent
+                    ? ThemeConstants.onNav
                     : ThemeConstants.textSecondary,
               ),
             ),

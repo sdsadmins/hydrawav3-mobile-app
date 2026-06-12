@@ -1779,12 +1779,15 @@ class _SegmentBtn extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: active ? ThemeConstants.accent : Colors.transparent,
+          // Web-parity: selected toggle segment is the dark slate, not the
+          // tan accent (which is reserved for primary actions).
+          color: active ? ThemeConstants.segmentActiveBg : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           boxShadow: active
               ? [
                   BoxShadow(
-                    color: ThemeConstants.accent.withValues(alpha: 0.22),
+                    color: ThemeConstants.segmentActiveBg
+                        .withValues(alpha: 0.22),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -1798,7 +1801,7 @@ class _SegmentBtn extends StatelessWidget {
               icon,
               size: 18,
               color: active
-                  ? ThemeConstants.textPrimary
+                  ? ThemeConstants.onNav
                   : ThemeConstants.textSecondary,
             ),
             const SizedBox(width: 8),
@@ -1808,7 +1811,7 @@ class _SegmentBtn extends StatelessWidget {
                 fontSize: 13,
                 fontWeight: FontWeight.w800,
                 color: active
-                    ? ThemeConstants.textPrimary
+                    ? ThemeConstants.onNav
                     : ThemeConstants.textSecondary,
               ),
             ),

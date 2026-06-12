@@ -2363,14 +2363,12 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                       vertical: 12, horizontal: 16),
                                   decoration: BoxDecoration(
                                     color: _isAutoScan
-                                        ? ThemeConstants.accent
-                                            .withValues(alpha: 0.18)
-                                        : ThemeConstants.surfaceVariant
-                                            .withValues(alpha: 0.28),
+                                        ? ThemeConstants.segmentActiveBg
+                                        : ThemeConstants.segmentInactiveBg,
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: _isAutoScan
-                                          ? ThemeConstants.accent
+                                          ? ThemeConstants.segmentActiveBg
                                           : ThemeConstants.border,
                                     ),
                                   ),
@@ -2379,7 +2377,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
                                           color: _isAutoScan
-                                              ? ThemeConstants.accent
+                                              ? ThemeConstants.onNav
                                               : ThemeConstants.textSecondary),
                                       textAlign: TextAlign.center),
                                 ),
@@ -2397,14 +2395,12 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                       vertical: 12, horizontal: 16),
                                   decoration: BoxDecoration(
                                     color: !_isAutoScan
-                                        ? ThemeConstants.accent
-                                            .withValues(alpha: 0.18)
-                                        : ThemeConstants.surfaceVariant
-                                            .withValues(alpha: 0.28),
+                                        ? ThemeConstants.segmentActiveBg
+                                        : ThemeConstants.segmentInactiveBg,
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: !_isAutoScan
-                                          ? ThemeConstants.accent
+                                          ? ThemeConstants.segmentActiveBg
                                           : ThemeConstants.border,
                                     ),
                                   ),
@@ -2413,7 +2409,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
                                           color: !_isAutoScan
-                                              ? ThemeConstants.accent
+                                              ? ThemeConstants.onNav
                                               : ThemeConstants.textSecondary),
                                       textAlign: TextAlign.center),
                                 ),

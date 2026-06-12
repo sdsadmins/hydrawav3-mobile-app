@@ -318,18 +318,17 @@ class _AppShell extends ConsumerWidget {
       body: child,
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: isDark ? ThemeConstants.background : ThemeConstants.surface,
+          // Web-parity: dark slate nav chrome (both modes).
+          color: ThemeConstants.navBackground,
           border: Border(
             top: BorderSide(
-              color: isDark
-                  ? ThemeConstants.border.withValues(alpha: 0.55)
-                  : ThemeConstants.border,
+              color: ThemeConstants.onNav.withValues(alpha: 0.10),
               width: 1,
             ),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.06),
+              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.12),
               blurRadius: 20,
               offset: const Offset(0, -4),
             ),
@@ -392,9 +391,9 @@ class _NavTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final inactiveColor =
-        isDark ? ThemeConstants.textSecondary : ThemeConstants.textTertiary;
+    // Nav chrome is the dark slate background in both modes, so inactive
+    // items are cream (onNav) dimmed; active items use the tan accent.
+    final inactiveColor = ThemeConstants.onNav.withValues(alpha: 0.60);
 
     return Expanded(
       child: GestureDetector(
@@ -425,7 +424,7 @@ class _NavTab extends StatelessWidget {
                             color: ThemeConstants.accent,
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: Theme.of(context).scaffoldBackgroundColor,
+                              color: ThemeConstants.navBackground,
                               width: 1.5,
                             ),
                           ),

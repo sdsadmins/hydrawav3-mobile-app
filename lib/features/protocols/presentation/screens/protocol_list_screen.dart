@@ -465,19 +465,23 @@ class _GoalFilterChip extends StatelessWidget {
         curve: Curves.easeOut,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
+          // Match the Devices list segmented control: dark-slate selected in
+          // light mode, tan in dark mode (segmentActiveBg handles both).
           color: selected
-              ? ThemeConstants.accent
+              ? ThemeConstants.segmentActiveBg
               : ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+            color: selected
+                ? ThemeConstants.segmentActiveBg
+                : ThemeConstants.border,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             color: selected
-                ? ThemeConstants.textPrimary
+                ? ThemeConstants.onNav
                 : ThemeConstants.textSecondary,
             fontSize: 12,
             fontWeight: FontWeight.w700,
@@ -554,22 +558,6 @@ class _ActiveDevicesCard extends StatelessWidget {
       gradientColors: [cardColor, cardColor],
       child: Stack(
         children: [
-          Positioned(
-            top: -34,
-            right: -34,
-            child: Container(
-              width: 140,
-              height: 140,
-              decoration: BoxDecoration(
-                color: ThemeConstants.accent.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                child: const SizedBox(),
-              ),
-            ),
-          ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -960,7 +948,8 @@ class _ProtocolCard extends StatelessWidget {
     return GradientCard(
       onTap: () => context
           .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
-      showGlow: true,
+      // Flat web-style card: solid fill + thin border, no drop shadow.
+      showShadow: false,
       gradientColors: [cardColor, cardColor],
       padding: const EdgeInsets.all(16),
       child: Column(

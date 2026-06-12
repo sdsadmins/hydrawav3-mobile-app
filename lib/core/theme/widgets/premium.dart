@@ -38,13 +38,17 @@ class GradientCard extends StatelessWidget {
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadius),
         border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
+        // Clean, neutral card elevation. Previously `showGlow` painted a tan
+        // accent halo that read as a gradient/glow around white cards on the
+        // cream canvas; use a subtle neutral drop shadow instead so cards look
+        // flat and proper (web-parity).
         boxShadow: !showShadow
             ? null
             : showGlow
                 ? [
                     BoxShadow(
-                      color: ThemeConstants.accent.withValues(alpha: 0.08),
-                      blurRadius: 20,
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 16,
                       offset: const Offset(0, 4),
                     ),
                   ]
@@ -103,19 +107,17 @@ class GlowIconBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = color ?? ThemeConstants.accent;
+    // Flat web-style icon square (no glow). Default to the warm icon-surface
+    // tone; if a caller passes an explicit color (e.g. a status color), tint
+    // the square with it instead.
+    final bg =
+        color == null ? ThemeConstants.iconSurface : c.withValues(alpha: 0.12);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.12),
+        color: bg,
         borderRadius: BorderRadius.circular(size * 0.28),
-        boxShadow: [
-          BoxShadow(
-            color: c.withValues(alpha: 0.15),
-            blurRadius: 12,
-            spreadRadius: 0,
-          ),
-        ],
       ),
       child: Icon(icon, color: c, size: iconSize),
     );

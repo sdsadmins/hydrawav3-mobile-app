@@ -1,7 +1,7 @@
 # Hydrawav3 Mobile App — Bug & Feature Tracker
 
 > Source: SharePoint app-update notes (5/21 → 6/8 2026), filtered to **mobile app only** (iPhone / Android / tablet / APK). Status verified against the current Flutter codebase.
-> Last updated: **2026-06-10**
+> Last updated: **2026-06-12**
 
 **Legend:** ✅ Fixed · 🔧 Fixed today · ❌ Not fixed · ⚠️ Unclear / needs device testing
 
@@ -12,9 +12,10 @@
 | Status | Count |
 |--------|-------|
 | ✅ Already fixed (in code) | 14 |
-| 🔧 Fixed today (2026-06-10) | 10 |
-| ❌ Not fixed | 5 |
-| ⚠️ Unclear / needs device testing | 6 |
+| 🔧 Fixed 2026-06-10 | 10 |
+| 🔧 Fixed 2026-06-12 | 4 |
+| ❌ Not fixed | 4 |
+| ⚠️ Unclear / needs device testing | 3 |
 
 ---
 
@@ -54,12 +55,20 @@
 | B-28 | **Home "Protocols" header text too small** | Replaced the small grey `SectionHeader` with a larger icon + 16px bold header matching "Active Devices" (shared `SectionHeader` left untouched). | `protocols/presentation/screens/protocol_list_screen.dart` |
 | B-29 | **Foreground (background-session) notification basic & out of sync** | Rebuilt as a **Spotify-style media notification** (framework `Notification.MediaStyle`, no new deps): single card with **protocol name** title, **colored dot indicators** per device (🟢 running / 🟡 paused / 🔴 stopped / ⚪ idle), a **"X of Y devices running"** summary, live count-up **timer**, app icon, **tap-to-open**, and a **Pause/Resume + Stop** control row. Added an `ACTION_UPDATE` sync path so it tracks **all in-app cases** — Protocol Plus switches, per-device completion, pause/resume, overall status. Kotlin compiles (`compileDebugKotlin` ✓). | `android/.../BleForegroundService.kt`, `android/.../MainActivity.kt`, `session/services/background_session_runtime.dart`, `session/services/session_engine.dart` |
 
+### 🔧 Fixed — 2026-06-12
+
+| ID | Bug | What changed | File(s) |
+|----|-----|--------------|---------|
+| B-30 | **Register New Hardware scan inconsistent / "keeps scanning" / flickers** | Empty state was bound to the raw `FlutterBluePlus.isScanning` stream, which toggles every scan→pause→rescan cycle, flipping the panel between a spinner and "NO DEVICES". Now renders only from the stable merged `bleScanResultsProvider` (like the Devices list screen) with a single steady "Searching for Hydrawav3 Devices" state; de-flickered the rescan button; after a failed tap-to-connect, discovery auto-resumes instead of freezing. | `devices/.../device_register_screen.dart`, `core/constants/ble_constants.dart` (corrected misleading "FAKE UUID" comment) |
+| U-06 / F-08 | **Colors exactly match web app** | Re-skinned the whole app to the Hydra web brand palette (values sourced from `Hydrawav3-ai/app/globals.css`): cream canvas, **white cards**, tan accent, dark-slate bottom nav, dark/tan segmented toggles, fixed `onAccent` text. Rebranded **both** light & dark palettes from the centralized `ThemePalette` (re-skins ~950 usages). Unified toggle styling across Devices list, History tab, Register tabs, and the protocol **goal** chips (dark-slate selected in light, tan in dark). Removed card glow/gradient halos + the decorative blob on the Active Devices card; flattened protocol cards and `GlowIconBox`. | `core/constants/theme_constants.dart`, `core/theme/app_theme.dart`, `core/router/app_router.dart`, `core/theme/widgets/premium.dart`, `protocols/.../protocol_list_screen.dart`, `devices/.../device_list_screen.dart`, `history/.../history_list_screen.dart`, `devices/.../device_register_screen.dart` |
+| B-23 | **"Select Protocol" time ≠ live session time** | Picker duration now reconciled with the live session time (`startDelay` accounted for). Confirmed fixed 2026-06-12. | — |
+| (note) | **iPhone 17 — BLE devices not appearing (shows up to iPhone 16)** | Investigated; **no app-side defect found** — scan is unfiltered and permissions/Info.plist are correct. Likely the new Apple **N1** chip + iOS 26 + `flutter_blue_plus` lag (project is on **1.36.8**; latest is **2.3.8**, a paid-license major). **Next step (free, no device needed): have an iPhone 17 user run nRF Connect** — if it finds the Hydra, the plugin is the cause; if not, it's firmware/iOS. Permissive alternatives if needed: `flutter_reactive_ble` / `universal_ble` (BSD, but heavy migration). Related to U-04. | n/a (diagnosis) |
+
 ### ❌ Not fixed
 
 | ID | Bug | Why / Notes |
 |----|-----|-------------|
 | B-22 | **Two-way communication** (BT & WiFi) not working | App only sends commands; no live device→app state/pad telemetry. Largest remaining piece. |
-| B-23 | **"Select Protocol" time ≠ live session time** | Picker shows base duration; session adds `startDelay`, never reconciled. |
 | B-24 | **90-second break between stacked protocols** + highlight next | Switch is immediate (STOP→800ms→PLAY); no break UI/countdown. Likely also resolves the "ghost 00:00 session on stack start" report. |
 | B-25 | **Session history tied to account, not device** | **Backend confirmed:** `GET /intake/all` runs `intakeModel.find()` with **no scoping** — returns every account's intakes. Mobile sessions are **guest** (`clientId` is null), so scoping must use **`createdBy` (the logged-in user id)**, which the intake schema always stores. Fix = filter `getAllIntakes()` by `req.user.id`. Deferred per decision (sort-only for now). |
 | B-26 | **Education / pad-placement link** that opens a webpage | Doesn't exist yet (only AI-chat hint text). Backend endpoint `aiPadPlacement` exists but no UI link. |
@@ -69,11 +78,11 @@
 | ID | Bug | Note |
 |----|-----|------|
 | U-01 | Device restart → BT disconnect → ghost 00:00 session on stack start | Tied to missing break logic (B-24); not directly handled. |
-| U-02 | General timing not correct for any session | Code does wall-clock reconcile, but device↔app sync over WiFi latency / mid-sleep switches unverified without hardware. |
+| ~~U-02~~ | ~~General timing not correct for any session~~ | ✅ Confirmed working (2026-06-12) — wall-clock reconcile verified; session timing now correct. |
 | U-03 | iPhone can't connect WiFi on its own hotspot | No hotspot detection in code — likely an iOS OS limitation, not a code bug. |
 | U-04 | iPhone 17 BT issue (connects before pushing) | No iOS-specific play-command ordering found. |
-| U-05 | Device not detected during WiFi registration scan | No code defect found — likely permissions / environment / firmware. |
-| U-06 | Colors exactly match web app | Palette exists in `theme_constants.dart`; can't verify pixel match without comparing to web theme. |
+| ~~U-05~~ | ~~Device not detected during WiFi registration scan~~ | ✅ Confirmed working (2026-06-12) — device-tested; devices now detected during WiFi registration scan. |
+| ~~U-06~~ | ~~Colors exactly match web app~~ | ✅ Done 2026-06-12 — re-skinned to web brand palette (see Fixed section). |
 
 ---
 
@@ -88,7 +97,7 @@
 | F-05 | Continuous scan for Hydrawav3 devices every few seconds | ✅ Done (B-10) |
 | F-06 | Session goals/tagging for stacked protocols | ❌ Pending |
 | F-07 | 2-way communication enabled | ❌ Pending (B-22) |
-| F-08 | Colors exactly the same as web app | ⚠️ Needs comparison (U-06) |
+| F-08 | Colors exactly the same as web app | ✅ Done (2026-06-12) — web brand palette applied to light & dark |
 | F-09 | Session history on account not device | ❌ Pending — backend-dependent (B-25) |
 | F-10 | Education link for pad placements (opens webpage) | ❌ Pending (B-26) |
 | F-11 | Show 90-second break between protocols + highlight next | ❌ Pending (B-24) |
@@ -121,7 +130,8 @@
 ---
 
 ## 5. Next recommended work
-1. **B-22 / F-07 — Two-way communication** (largest gap; unblocks live telemetry, diagnostics, app↔web sync).
-2. **B-24 / F-11 — 90-second break between stacked protocols** (also likely clears the ghost-session report U-01).
-3. **B-23 — Reconcile "Select Protocol" duration with live session duration**.
-4. **B-25 / F-09 — Account-scoped history** — pending backend confirmation.
+1. **B-24 / F-11 — 90-second break between stacked protocols** (also likely clears the ghost-session report U-01).
+2. **B-22 / F-07 — Two-way communication** (largest gap; unblocks live telemetry, diagnostics, app↔web sync).
+3. **B-25 / F-09 — Account-scoped history** — pending backend confirmation.
+4. **B-26 / F-10 — Education / pad-placement link**.
+5. **U-04 — iPhone 17 BLE** — gated on the nRF Connect diagnostic.

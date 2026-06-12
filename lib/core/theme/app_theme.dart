@@ -20,13 +20,15 @@ class AppTheme {
       colorScheme: ColorScheme(
         brightness: brightness,
         primary: colors.accent,
-        onPrimary: Colors.black,
+        // Fixed dark text on the tan accent (same in light & dark — see onAccent).
+        onPrimary: ThemeConstants.onAccent,
         secondary: colors.accentLight,
         onSecondary: colors.textPrimary,
         error: ThemeConstants.error,
         onError: Colors.white,
         surface: colors.surface,
         onSurface: colors.textPrimary,
+        surfaceContainerHighest: colors.surfaceVariant,
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: colors.background,
@@ -54,7 +56,7 @@ class AppTheme {
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: colors.accent,
-          foregroundColor: Colors.black,
+          foregroundColor: ThemeConstants.onAccent,
           minimumSize: const Size(double.infinity, 52),
           elevation: 0,
           shape: RoundedRectangleBorder(
