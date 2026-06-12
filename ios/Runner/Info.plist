@@ -27,11 +27,19 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Hydrawav3 needs Bluetooth to connect to your therapy devices</string>
+	<string>Hydrawav3 needs Bluetooth to discover and connect to your therapy devices for treatment sessions.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Hydrawav3 needs Bluetooth to communicate with your therapy devices</string>
+	<string>Hydrawav3 needs Bluetooth to communicate with your therapy devices during treatment sessions.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Hydrawav3 may use the camera to scan payment cards during checkout.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Hydrawav3 uses Face ID to securely protect your account credentials and saved payment information.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Hydrawav3 needs access to your photo library to share therapy session reports and images.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Hydrawav3 uses location to support Bluetooth scanning on iOS</string>
+	<string>Hydrawav3 needs location access so iOS can discover nearby Bluetooth therapy devices to pair with your phone.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIApplicationSceneManifest</key>
 	
 	<dict>
@@ -60,8 +68,6 @@
 	<array>
 		<string>bluetooth-central</string>
 		<string>remote-notification</string>
-		<string>location</string>
-		<string>nearby-interaction</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
