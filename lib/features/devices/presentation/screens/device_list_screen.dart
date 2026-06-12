@@ -46,7 +46,8 @@ class DeviceListScreen extends ConsumerStatefulWidget {
 }
 
 class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
-  static const String _defaultProtocolTemplateName = 'PolarWave 36';
+  static const String _defaultProtocolTemplateName =
+      'Deep-Tension Recovery Stack';
 
   final Map<String, String> _protocolIdByDeviceId = {};
   final Map<String, Protocol> _selectedProtocolByDeviceId = {};
@@ -475,6 +476,72 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
+                      // Recently used protocols — quick access to the protocols
+                      // you ran most recently (hidden while searching/filtering).
+                      if (query.isEmpty && selectedGoalTagId == null)
+                        Builder(
+                          builder: (_) {
+                            final recentIds =
+                                ref.watch(recentProtocolIdsProvider);
+                            if (recentIds.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            final allOptions = ref
+                                    .watch(
+                                        protocolSelectionOptionsProvider(null))
+                                    .asData
+                                    ?.value ??
+                                const <ProtocolSelectionOption>[];
+                            final recentOptions = <ProtocolSelectionOption>[];
+                            for (final id in recentIds) {
+                              final match = allOptions.where((p) => p.id == id);
+                              if (match.isNotEmpty) {
+                                recentOptions.add(match.first);
+                              }
+                            }
+                            if (recentOptions.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Recently used',
+                                  style: TextStyle(
+                                    color: ThemeConstants.textSecondary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  height: 38,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: recentOptions.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(width: 8),
+                                    itemBuilder: (_, i) {
+                                      final protocol = recentOptions[i];
+                                      return _GoalFilterChip(
+                                        label: protocol.templateName,
+                                        selected: protocol.id == currentId,
+                                        onTap: () {
+                                          ref
+                                              .read(recentProtocolIdsProvider
+                                                  .notifier)
+                                              .recordUsed(protocol.id);
+                                          Navigator.of(ctx).pop(protocol.id);
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                              ],
+                            );
+                          },
+                        ),
                       Flexible(
                         child: filteredProtocolsAsync.when(
                           loading: () => const Center(
@@ -547,8 +614,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
 
                                 return InkWell(
                                   borderRadius: BorderRadius.circular(14),
-                                  onTap: () =>
-                                      Navigator.of(ctx).pop(protocol.id),
+                                  onTap: () {
+                                    ref
+                                        .read(
+                                            recentProtocolIdsProvider.notifier)
+                                        .recordUsed(protocol.id);
+                                    Navigator.of(ctx).pop(protocol.id);
+                                  },
                                   child: Container(
                                     padding: const EdgeInsets.all(14),
                                     decoration: BoxDecoration(
@@ -663,7 +735,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     for (final protocol in protocols) {
       final normalizedTemplate =
           _normalizeProtocolTemplateName(protocol.templateName);
-      if (normalizedTemplate.startsWith(normalizedDefault)) {
+      // Use `contains` so a leading numbering prefix (e.g. "1. ") in the
+      // backend template name doesn't prevent the default match.
+      if (normalizedTemplate.contains(normalizedDefault)) {
         return protocol;
       }
     }
@@ -933,10 +1007,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       return state == BleConnectionStatus.connected;
     }).toList();
 
-    final wifiDeviceList = wifiAsync.maybeWhen(
-      data: (devices) => devices,
-      orElse: () => const <DeviceInfo>[],
-    );
+    // Prefer the last-known value so a reload (e.g. after removing the last
+    // device) keeps rendering the real list/empty-state instead of dropping
+    // back to an infinite spinner. Only treat it as "loading" on first fetch.
+    final wifiDeviceList = wifiAsync.valueOrNull ?? const <DeviceInfo>[];
+    final wifiFirstLoading = wifiAsync.isLoading && !wifiAsync.hasValue;
     final selectedWifiDevices = wifiDeviceList
         .where((device) => target.deviceIds.contains(device.macAddress))
         .toList();
@@ -1141,8 +1216,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                     if (hydrawaveOnly)
                       GestureDetector(
                         onTap: () async {
-                          ref.read(autoConnectEnabledProvider.notifier).state =
-                              !autoConnectEnabled;
+                          await ref
+                              .read(autoConnectEnabledProvider.notifier)
+                              .setEnabled(!autoConnectEnabled);
                           if (!autoConnectEnabled) {
                             await _connectAllHydrawaveDevices(
                               bleScanResultsAsync: bleScanResultsAsync,
@@ -1213,98 +1289,101 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-              sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Center(
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                  ),
-                ),
-                error: (e, _) => SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      'Failed to load WiFi devices: $e',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: ThemeConstants.textSecondary,
-                      ),
-                    ),
-                  ),
-                ),
-                data: (list) {
-                  if (list.isEmpty) {
-                    return SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 8, bottom: 8),
-                        child: Text(
-                          'No WiFi devices found for your organization.',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: ThemeConstants.textSecondary,
-                          ),
+              sliver: (() {
+                if (wifiFirstLoading) {
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       ),
-                    );
-                  }
-
-                  if (selectedWifiDevices.isEmpty) {
-                    return const SliverToBoxAdapter(
-                      child: _EmptyDashed(
-                        icon: Icons.wifi_rounded,
-                        title: 'No devices selected',
-                        subtitle: 'Select a WiFi device below to configure it.',
-                      ),
-                    );
-                  }
-
-                  return SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (ctx, index) {
-                        final device = selectedWifiDevices[index];
-                        return AnimatedEntrance(
-                          index: index + 1,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _buildSessionSetupCard(
-                              data: _DeviceSessionCardData(
-                                id: device.macAddress,
-                                icon: Icons.wifi_rounded,
-                                transportLabel: 'WiFi',
-                                name: device.name,
-                                subtitle: 'MAC: ${device.macAddress}',
-                                onDisconnect: () async {
-                                  await _handleDeviceDisconnect(
-                                    deviceId: device.macAddress,
-                                    disconnect: () async {
-                                      await ref
-                                          .read(bleRepositoryProvider)
-                                          .disconnectDevice(device.macAddress);
-                                      ref
-                                          .read(sessionTargetProvider.notifier)
-                                          .ensureDeselected(device.macAddress);
-                                    },
-                                  );
-                                },
-                              ),
-                              currentRunIds: runIds,
-                              currentLabelsById: currentLabelsById,
-                              busyDeviceIds: busyDeviceIds,
-                            ),
-                          ),
-                        );
-                      },
-                      childCount: selectedWifiDevices.length,
                     ),
                   );
-                },
-              ),
+                }
+                if (wifiAsync.hasError && !wifiAsync.hasValue) {
+                  return SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'Failed to load WiFi devices: ${wifiAsync.error}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                final list = wifiDeviceList;
+                if (list.isEmpty) {
+                  return SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      child: Text(
+                        'No registered devices.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                if (selectedWifiDevices.isEmpty) {
+                  return const SliverToBoxAdapter(
+                    child: _EmptyDashed(
+                      icon: Icons.wifi_rounded,
+                      title: 'No devices selected',
+                      subtitle: 'Select a WiFi device below to configure it.',
+                    ),
+                  );
+                }
+
+                return SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, index) {
+                      final device = selectedWifiDevices[index];
+                      return AnimatedEntrance(
+                        index: index + 1,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _buildSessionSetupCard(
+                            data: _DeviceSessionCardData(
+                              id: device.macAddress,
+                              icon: Icons.wifi_rounded,
+                              transportLabel: 'WiFi',
+                              name: device.name,
+                              subtitle: 'MAC: ${device.macAddress}',
+                              onDisconnect: () async {
+                                await _handleDeviceDisconnect(
+                                  deviceId: device.macAddress,
+                                  disconnect: () async {
+                                    await ref
+                                        .read(bleRepositoryProvider)
+                                        .disconnectDevice(device.macAddress);
+                                    ref
+                                        .read(sessionTargetProvider.notifier)
+                                        .ensureDeselected(device.macAddress);
+                                  },
+                                );
+                              },
+                            ),
+                            currentRunIds: runIds,
+                            currentLabelsById: currentLabelsById,
+                            busyDeviceIds: busyDeviceIds,
+                          ),
+                        ),
+                      );
+                    },
+                    childCount: selectedWifiDevices.length,
+                  ),
+                );
+              })(),
             ),
             if (selectedWifiDevices.isNotEmpty)
               SliverPadding(
@@ -1325,80 +1404,82 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-              sliver: wifiAsync.when(
-                loading: () => const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Center(
-                      child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+              sliver: (() {
+                if (wifiFirstLoading) {
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
-                error: (e, _) => SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      'Failed to load WiFi devices: $e',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: ThemeConstants.textSecondary,
-                      ),
-                    ),
-                  ),
-                ),
-                data: (list) {
-                  if (list.isEmpty) {
-                    return const SliverToBoxAdapter(
-                      child: _EmptyDashed(
-                        icon: Icons.wifi_rounded,
-                        title: 'No devices found',
-                        subtitle: 'Make sure your device is turned on',
-                      ),
-                    );
-                  }
-
-                  return SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (ctx, index) {
-                        final device = list[index];
-                        final selected = target.filteredDeviceIds
-                            .contains(device.macAddress);
-                        return AnimatedEntrance(
-                          index: index + 1,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _AvailableDeviceRow(
-                              icon: Icons.wifi_rounded,
-                              name: device.name,
-                              idText: device.macAddress,
-                              buttonLabel: selected ? 'Selected' : 'Select',
-                              onTap: () {
-                                ref
-                                    .read(sessionTargetProvider.notifier)
-                                    .toggleDevice(device.macAddress);
-                                setState(() {
-                                  if (selected) {
-                                    _clearDeviceSessionState(device.macAddress);
-                                  } else {
-                                    _runDeviceIds.add(device.macAddress);
-                                    _excludedDeviceIds
-                                        .remove(device.macAddress);
-                                  }
-                                });
-                              },
-                            ),
-                          ),
-                        );
-                      },
-                      childCount: list.length,
                     ),
                   );
-                },
-              ),
+                }
+                if (wifiAsync.hasError && !wifiAsync.hasValue) {
+                  return SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'Failed to load WiFi devices: ${wifiAsync.error}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                final list = wifiDeviceList;
+                if (list.isEmpty) {
+                  return const SliverToBoxAdapter(
+                    child: _EmptyDashed(
+                      icon: Icons.wifi_rounded,
+                      title: 'No registered devices',
+                      subtitle: 'Make sure your device is turned on',
+                    ),
+                  );
+                }
+
+                return SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (ctx, index) {
+                      final device = list[index];
+                      final selected =
+                          target.filteredDeviceIds.contains(device.macAddress);
+                      return AnimatedEntrance(
+                        index: index + 1,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _AvailableDeviceRow(
+                            icon: Icons.wifi_rounded,
+                            name: device.name,
+                            idText: device.macAddress,
+                            buttonLabel: selected ? 'Selected' : 'Select',
+                            onTap: () {
+                              ref
+                                  .read(sessionTargetProvider.notifier)
+                                  .toggleDevice(device.macAddress);
+                              setState(() {
+                                if (selected) {
+                                  _clearDeviceSessionState(device.macAddress);
+                                } else {
+                                  _runDeviceIds.add(device.macAddress);
+                                  _excludedDeviceIds.remove(device.macAddress);
+                                }
+                              });
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                    childCount: list.length,
+                  ),
+                );
+              })(),
             ),
           ],
           if (target.transport == SessionTransport.ble) ...[
@@ -1564,8 +1645,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       }
 
                                       ref
-                                          .read(bleConnectingIdsProvider
-                                              .notifier)
+                                          .read(
+                                              bleConnectingIdsProvider.notifier)
                                           .state = {...connectingIds, id};
                                       final messenger =
                                           ScaffoldMessenger.of(context);
@@ -1953,7 +2034,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                       Expanded(
                         child: Text(
                           protocolTitle,
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13,
@@ -2006,7 +2087,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                           const SizedBox(width: 4),
                           Flexible(
                             child: Text(
-                              inUse ? 'In Use' : 'Paused',
+                              inUse ? 'Use' : 'Use',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

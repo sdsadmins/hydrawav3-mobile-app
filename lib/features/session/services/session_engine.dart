@@ -856,6 +856,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         protocolPlusIndex: protocolIndex,
         protocolPlusIndexByDevice: updatedIndexByDevice,
       );
+      // Reflect the Protocol Plus switch in the foreground notification.
+      _pushNotificationSync();
     } catch (_) {}
 
     final payloadStr =
@@ -1134,6 +1136,53 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else {
       await runtime.cacheSnapshotOnly(snapshot);
     }
+    // Always refresh the notification's per-device rows + current protocol so it
+    // reflects the live in-app state (Protocol Plus switches, per-device status).
+    _pushNotificationSync();
+  }
+
+  String _bgStatusString(SessionStatus? status) {
+    switch (status) {
+      case SessionStatus.running:
+        return 'running';
+      case SessionStatus.paused:
+        return 'paused';
+      case SessionStatus.completed:
+      case SessionStatus.stopped:
+        return 'stopped';
+      default:
+        return 'idle';
+    }
+  }
+
+  /// Sync the Android foreground-service notification with the current session:
+  /// overall status, the protocol each device is running (Protocol Plus aware),
+  /// and per-device status. Safe to call often — it no-ops off Android and when
+  /// no session is live.
+  void _pushNotificationSync() {
+    if (!_isActive || state.protocol == null || state.deviceIds.isEmpty) return;
+    final ids = List<String>.from(state.deviceIds);
+    final names = ids
+        .map((id) =>
+            state.protocolByDevice[id]?.templateName ??
+            state.protocol?.templateName ??
+            'Protocol')
+        .toList();
+    final statuses =
+        ids.map((id) => _bgStatusString(state.deviceStatuses[id])).toList();
+    final title = state.protocolByDevice[ids.first]?.templateName ??
+        state.protocol?.templateName ??
+        'Hydrawav Session';
+    unawaited(
+      _ref.read(backgroundSessionRuntimeProvider.notifier).updateSession(
+            sessionId: sessionId,
+            status: _bgStatusString(_deriveOverallStatus(state.deviceStatuses)),
+            protocolName: title,
+            deviceIds: ids,
+            deviceNames: names,
+            deviceStatuses: statuses,
+          ),
+    );
   }
 
   /// Advanced settings derived from a protocol's own fields. Keeps the
@@ -1785,6 +1834,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       _stopwatch.stop();
       unawaited(_syncBackgroundRuntime('stopped'));
+    } else if (completedDevices.isNotEmpty) {
+      // A device finished but the session is still live — refresh the
+      // notification so that device shows as completed/stopped.
+      _pushNotificationSync();
     }
   }
 

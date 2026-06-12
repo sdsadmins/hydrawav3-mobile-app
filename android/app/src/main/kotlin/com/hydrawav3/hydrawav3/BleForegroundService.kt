@@ -7,18 +7,19 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import androidx.core.app.NotificationCompat
 
 class BleForegroundService : Service() {
     private val timerHandler = Handler(Looper.getMainLooper())
     private var startedAtEpochMs: Long = 0L
     private var status: String = STATUS_IDLE
-    private var deviceStates: MutableMap<String, String> = mutableMapOf()
-    private var deviceNames: MutableMap<String, String> = mutableMapOf()
+    private var protocolName: String = "Hydrawav Session"
+    private var deviceStates: MutableMap<String, String> = LinkedHashMap()
+    private var deviceNames: MutableMap<String, String> = LinkedHashMap()
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -51,99 +52,88 @@ class BleForegroundService : Service() {
         // A session that completes instantly (e.g. a 1s protocol) can race a STOP
         // ahead of START, so we satisfy the contract first thing for every action.
         try {
-            startForeground(NOTIFICATION_ID, buildNotification("Session running"))
+            startForeground(NOTIFICATION_ID, buildNotification())
         } catch (e: Exception) {
             android.util.Log.e("BLE_SERVICE", "startForeground failed: $e")
         }
 
         when (action) {
             ACTION_START -> {
-                android.util.Log.d("BLE_SERVICE", "startForeground called for ACTION_START")
                 startedAtEpochMs = intent?.getLongExtra(EXTRA_STARTED_AT_EPOCH_MS, System.currentTimeMillis())
                     ?: System.currentTimeMillis()
                 status = STATUS_RUNNING
-
-                // Add device info from intent
-                val deviceIds = intent?.getStringArrayListExtra("deviceIds")
-                val deviceNamesList = intent?.getStringArrayListExtra("deviceNames")
-                val protocolName = intent?.getStringExtra("protocolName") ?: "Unknown Protocol"
-
-                if (deviceIds != null && deviceNamesList != null) {
-                    android.util.Log.d("BLE_SERVICE", "Adding ${deviceIds.size} devices to notification")
-                    for (i in deviceIds.indices) {
-                        val deviceId = deviceIds[i]
-                        val deviceName = if (i < deviceNamesList.size) deviceNamesList[i] else "Device $i"
-                        deviceStates[deviceId] = STATUS_RUNNING
-                        deviceNames[deviceId] = deviceName
-                        android.util.Log.d("BLE_SERVICE", "Added device: $deviceId as $deviceName")
-                    }
-                } else {
-                    android.util.Log.d("BLE_SERVICE", "No device IDs or names received")
-                }
-
-                // Refresh the notification now that device info is populated.
-                updateNotification("Session running")
+                protocolName = intent?.getStringExtra("protocolName")?.takeIf { it.isNotEmpty() } ?: protocolName
+                applyDeviceExtras(intent)
+                updateNotification()
                 emitState("started")
                 startTicking()
             }
+            ACTION_UPDATE -> {
+                // Live sync from the Flutter session engine: protocol switch
+                // (Protocol Plus), per-device status changes, overall status, and
+                // the timer anchor. Keeps the notification consistent with the app.
+                intent?.getStringExtra("protocolName")?.takeIf { it.isNotEmpty() }?.let { protocolName = it }
+                intent?.getStringExtra("status")?.takeIf { it.isNotEmpty() }?.let { status = it }
+                val startedAt = intent?.getLongExtra(EXTRA_STARTED_AT_EPOCH_MS, -1L) ?: -1L
+                if (startedAt > 0L) startedAtEpochMs = startedAt
+                applyDeviceExtras(intent)
+                if (status == STATUS_RUNNING) startTicking() else stopTicking()
+                updateNotification()
+                emitState("updated")
+            }
             ACTION_PAUSE -> {
                 status = STATUS_PAUSED
+                deviceStates.keys.forEach { if (deviceStates[it] == STATUS_RUNNING) deviceStates[it] = STATUS_PAUSED }
+                stopTicking()
                 emitState("paused")
-                updateNotification("Session paused")
+                updateNotification()
             }
             ACTION_RESUME -> {
                 status = STATUS_RUNNING
+                deviceStates.keys.forEach { if (deviceStates[it] == STATUS_PAUSED) deviceStates[it] = STATUS_RUNNING }
+                startTicking()
                 emitState("resumed")
-                updateNotification("Session running")
+                updateNotification()
             }
             ACTION_PAUSE_DEVICE -> {
-                val deviceId = intent?.getStringExtra("deviceId")
-                if (deviceId != null) {
-                    deviceStates[deviceId] = STATUS_PAUSED
-                    updateNotification("Device $deviceId paused")
-                }
+                intent?.getStringExtra("deviceId")?.let { deviceStates[it] = STATUS_PAUSED }
                 emitState("device_paused")
+                updateNotification()
             }
             ACTION_RESUME_DEVICE -> {
-                val deviceId = intent?.getStringExtra("deviceId")
-                if (deviceId != null) {
-                    deviceStates[deviceId] = STATUS_RUNNING
-                    updateNotification("Device $deviceId resumed")
-                }
+                intent?.getStringExtra("deviceId")?.let { deviceStates[it] = STATUS_RUNNING }
                 emitState("device_resumed")
+                updateNotification()
             }
             ACTION_STOP_DEVICE -> {
-                val deviceId = intent?.getStringExtra("deviceId")
-                if (deviceId != null) {
-                    deviceStates[deviceId] = STATUS_STOPPED
-                    updateNotification("Device $deviceId stopped")
-                }
+                intent?.getStringExtra("deviceId")?.let { deviceStates[it] = STATUS_STOPPED }
                 emitState("device_stopped")
+                updateNotification()
             }
             ACTION_PAUSE_ALL_DEVICES -> {
-                // Send actual BLE pause command to all running devices
-                android.util.Log.d("BLE_SERVICE", "Sending BLE pause command to all running devices")
+                // Pause control tapped from the notification.
                 deviceStates.keys.forEach { deviceId ->
                     if (deviceStates[deviceId] == STATUS_RUNNING) {
-                        // Send BLE pause byte (0x02)
                         sendBleCommandToDevice(deviceId, 0x02)
                         deviceStates[deviceId] = STATUS_PAUSED
                     }
                 }
-                updateNotification("All devices paused")
+                status = STATUS_PAUSED
+                stopTicking()
+                updateNotification()
                 emitState("all_paused")
             }
             ACTION_RESUME_ALL_DEVICES -> {
-                // Send actual BLE resume command to all paused devices
-                android.util.Log.d("BLE_SERVICE", "Sending BLE resume command to all paused devices")
+                // Resume control tapped from the notification.
                 deviceStates.keys.forEach { deviceId ->
                     if (deviceStates[deviceId] == STATUS_PAUSED) {
-                        // Send BLE resume byte (0x04)
                         sendBleCommandToDevice(deviceId, 0x04)
                         deviceStates[deviceId] = STATUS_RUNNING
                     }
                 }
-                updateNotification("All devices resumed")
+                status = STATUS_RUNNING
+                startTicking()
+                updateNotification()
                 emitState("all_resumed")
             }
             ACTION_STOP -> {
@@ -163,6 +153,25 @@ class BleForegroundService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** Replace the device id/name/status maps from intent extras (parallel lists). */
+    private fun applyDeviceExtras(intent: Intent?) {
+        if (intent == null) return
+        val deviceIds = intent.getStringArrayListExtra("deviceIds") ?: return
+        if (deviceIds.isEmpty()) return
+        val names = intent.getStringArrayListExtra("deviceNames")
+        val statuses = intent.getStringArrayListExtra("deviceStatuses")
+
+        val newStates = LinkedHashMap<String, String>()
+        val newNames = LinkedHashMap<String, String>()
+        for (i in deviceIds.indices) {
+            val id = deviceIds[i]
+            newNames[id] = names?.getOrNull(i)?.takeIf { it.isNotEmpty() } ?: deviceNames[id] ?: shortId(id)
+            newStates[id] = statuses?.getOrNull(i)?.takeIf { it.isNotEmpty() } ?: deviceStates[id] ?: status
+        }
+        deviceStates = newStates
+        deviceNames = newNames
+    }
 
     private fun startTicking() {
         timerHandler.removeCallbacks(tickRunnable)
@@ -185,123 +194,84 @@ class BleForegroundService : Service() {
         )
     }
 
-    private fun updateNotification(message: String) {
+    private fun updateNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(message))
+        nm.notify(NOTIFICATION_ID, buildNotification())
     }
 
-    private fun buildNotification(message: String): Notification {
-        android.util.Log.d("BLE_SERVICE", "Building notification: $message")
-        
-        // Create Spotify-style multi-device notification
+    private fun buildNotification(): Notification {
         val deviceCount = deviceStates.size
         val runningDevices = deviceStates.filterValues { it == STATUS_RUNNING }.size
         val pausedDevices = deviceStates.filterValues { it == STATUS_PAUSED }.size
-        
-        val contentText = if (deviceCount > 1) {
-            "$runningDevices devices running • $deviceCount total"
-        } else if (deviceCount == 1) {
-            val deviceStatus = deviceStates.values.first()
-            val deviceName = getDeviceName(deviceStates.keys.first())
-            "$deviceName: $deviceStatus"
-        } else {
-            "No devices connected"
+
+        val contentText = when {
+            status == STATUS_PAUSED -> "Paused"
+            deviceCount == 0 -> "Connecting…"
+            deviceCount == 1 -> "1 device running"
+            pausedDevices > 0 -> "$runningDevices running • $pausedDevices paused"
+            else -> "$runningDevices of $deviceCount devices running"
         }
-        
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Hydrawav Session")
+
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(protocolName)
             .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setLargeIcon(appLargeIcon())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(false)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setStyle(createSpotifyStyleNotification())
-            .addAction(createDynamicControlActions())
-            .build()
-    }
-    
-    private fun createSpotifyStyleNotification(): NotificationCompat.Style {
-        val builder = NotificationCompat.BigTextStyle()
-        
-        if (deviceStates.isEmpty()) {
-            builder.bigText("No devices connected")
+            .setCategory(Notification.CATEGORY_TRANSPORT)
+            .setColorized(true)
+            .setColor(0xFF1E1B17.toInt())
+            .setContentIntent(buildContentIntent())
+
+        // Live elapsed timer (counts up) while running; frozen label when paused.
+        if (status == STATUS_RUNNING) {
+            builder.setUsesChronometer(true)
+            builder.setWhen(startedAtEpochMs)
+            builder.setShowWhen(true)
         } else {
-            val deviceInfo = deviceStates.entries.joinToString("\n\n") { (deviceId, status) ->
-                val deviceName = getDeviceName(deviceId)
-                val statusIcon = when (status) {
-                    STATUS_RUNNING -> "▶️"
-                    STATUS_PAUSED -> "⏸️"
-                    STATUS_STOPPED -> "⏹️"
-                    else -> "⚪"
-                }
-                "$statusIcon $deviceName\nStatus: $status"
-            }
-            builder.bigText(deviceInfo)
+            builder.setUsesChronometer(false)
+            builder.setShowWhen(false)
         }
-        
-        return builder
+
+        // Pause/Resume/Stop notification actions intentionally removed — session
+        // control is done in-app only. The notification is now status-only.
+
+        return builder.build()
     }
-    
-    private fun createDynamicControlActions(): NotificationCompat.Action {
-        // Check if any devices are running to determine button state
-        val runningDevices = deviceStates.filterValues { it == STATUS_RUNNING }.size
-        val pausedDevices = deviceStates.filterValues { it == STATUS_PAUSED }.size
-        
-        return if (runningDevices > 0) {
-            // Show Pause button when devices are running
-            val pauseIntent = Intent(this, BleForegroundService::class.java).apply {
-                action = ACTION_PAUSE_ALL_DEVICES
-            }
-            val pausePendingIntent = PendingIntent.getService(this, 1, pauseIntent, PendingIntent.FLAG_IMMUTABLE)
-            
-            NotificationCompat.Action.Builder(
-                android.R.drawable.ic_media_pause,
-                "Pause",
-                pausePendingIntent
-            ).build()
-        } else if (pausedDevices > 0) {
-            // Show Resume button when devices are paused
-            val resumeIntent = Intent(this, BleForegroundService::class.java).apply {
-                action = ACTION_RESUME_ALL_DEVICES
-            }
-            val resumePendingIntent = PendingIntent.getService(this, 2, resumeIntent, PendingIntent.FLAG_IMMUTABLE)
-            
-            NotificationCompat.Action.Builder(
-                android.R.drawable.ic_media_play,
-                "Resume",
-                resumePendingIntent
-            ).build()
-        } else {
-            // Show Stop button when no devices are active
-            val stopIntent = Intent(this, BleForegroundService::class.java).apply {
-                action = ACTION_STOP
-            }
-            val stopPendingIntent = PendingIntent.getService(this, 3, stopIntent, PendingIntent.FLAG_IMMUTABLE)
-            
-            NotificationCompat.Action.Builder(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
-                stopPendingIntent
-            ).build()
+
+    private fun appLargeIcon(): Icon? {
+        return try {
+            Icon.createWithResource(this, R.mipmap.ic_launcher)
+        } catch (e: Exception) {
+            null
         }
     }
-    
-    private fun getDeviceName(deviceId: String): String {
-        // Use stored device name or fallback to last 4 chars
-        return deviceNames[deviceId] ?: deviceId.substring(deviceId.length - 4)
+
+    private fun buildContentIntent(): PendingIntent {
+        val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        } ?: Intent()
+        return PendingIntent.getActivity(
+            this, REQ_OPEN, launch,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
-    
+
+    private fun shortId(deviceId: String): String {
+        return if (deviceId.length >= 4) deviceId.substring(deviceId.length - 4) else deviceId
+    }
+
     private fun sendBleCommandToDevice(deviceId: String, commandByte: Int) {
         try {
-            // Send BLE command to Flutter side for actual device control
-            BackgroundSessionChannels.emit(mapOf(
-                "type" to "ble_command",
-                "deviceId" to deviceId,
-                "command" to commandByte
-            ))
+            BackgroundSessionChannels.emit(
+                mapOf(
+                    "type" to "ble_command",
+                    "deviceId" to deviceId,
+                    "command" to commandByte
+                )
+            )
             android.util.Log.d("BLE_SERVICE", "Sent BLE command 0x${commandByte.toString(16)} to device $deviceId")
         } catch (e: Exception) {
             android.util.Log.e("BLE_SERVICE", "Failed to send BLE command to device $deviceId: $e")
@@ -309,34 +279,26 @@ class BleForegroundService : Service() {
     }
 
     private fun ensureNotificationChannel() {
-        android.util.Log.d("BLE_SERVICE", "ensureNotificationChannel called")
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            android.util.Log.d("BLE_SERVICE", "Android < 8, skipping channel creation")
-            return
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val existing = nm.getNotificationChannel(CHANNEL_ID)
-        if (existing != null) {
-            android.util.Log.d("BLE_SERVICE", "Channel already exists")
-            return
-        }
-        
+        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
+
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Hydrawav BLE Session",
-            NotificationManager.IMPORTANCE_HIGH
+            "Hydrawav Session",
+            // LOW so repeated live updates never buzz/heads-up; it stays an
+            // ongoing status notification while a session runs.
+            NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Keeps session active while app is in background"
-            enableLights(true)
-            enableVibration(true)
+            description = "Keeps your session running and shows live status while the app is in the background"
             setShowBadge(true)
         }
         nm.createNotificationChannel(channel)
-        android.util.Log.d("BLE_SERVICE", "Notification channel created successfully")
     }
 
     companion object {
         const val ACTION_START = "com.hydrawav3.hydrawav3.BG_SESSION_START"
+        const val ACTION_UPDATE = "com.hydrawav3.hydrawav3.BG_SESSION_UPDATE"
         const val ACTION_PAUSE = "com.hydrawav3.hydrawav3.BG_SESSION_PAUSE"
         const val ACTION_RESUME = "com.hydrawav3.hydrawav3.BG_SESSION_RESUME"
         const val ACTION_STOP = "com.hydrawav3.hydrawav3.BG_SESSION_STOP"
@@ -355,5 +317,7 @@ class BleForegroundService : Service() {
 
         private const val CHANNEL_ID = "hydrawav_ble_session_channel"
         private const val NOTIFICATION_ID = 31001
+
+        private const val REQ_OPEN = 100
     }
 }

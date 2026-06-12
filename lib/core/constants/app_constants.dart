@@ -33,8 +33,8 @@ class AppConstants {
   // App info
   static const String appName = 'Hydrawav3';
   static const String supportEmail = 'support@hydrawav3.com';
-  static const String privacyPolicyUrl = 'https://hydrawav3.app/privacy';
-  static const String termsUrl = 'https://hydrawav3.app/terms';
+  static const String privacyPolicyUrl = 'https://www.hydrawav3.com/privacy';
+  static const String termsUrl = 'https://www.hydrawav3.com/terms';
 
   // Version and Release Notes
   static const String appVersion = '1.0.2';

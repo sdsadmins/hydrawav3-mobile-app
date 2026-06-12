@@ -248,6 +248,36 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
     }
   }
 
+  /// Push a live update to the foreground notification so it stays in sync with
+  /// the in-app session: Protocol Plus switches (protocolName), per-device status
+  /// changes, overall status, and the timer anchor. No-op off Android / when the
+  /// update belongs to a different session than the active snapshot.
+  Future<void> updateSession({
+    required String sessionId,
+    String? status,
+    String? protocolName,
+    int? startedAtEpochMs,
+    List<String>? deviceIds,
+    List<String>? deviceNames,
+    List<String>? deviceStatuses,
+  }) async {
+    if (!_ownsCurrentSnapshot(sessionId)) return;
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (!state.isLive) return;
+    try {
+      await _methods.invokeMethod<void>('updateSession', {
+        if (status != null) 'status': status,
+        if (protocolName != null) 'protocolName': protocolName,
+        if (startedAtEpochMs != null) 'startedAtEpochMs': startedAtEpochMs,
+        if (deviceIds != null) 'deviceIds': deviceIds,
+        if (deviceNames != null) 'deviceNames': deviceNames,
+        if (deviceStatuses != null) 'deviceStatuses': deviceStatuses,
+      });
+    } catch (e, st) {
+      appLogger.w('Failed to update bg session notification: $e\n$st');
+    }
+  }
+
   Future<void> cacheSnapshotOnly(LiveSessionSnapshot snapshot) async {
     state = state.copyWith(
       snapshot: snapshot,

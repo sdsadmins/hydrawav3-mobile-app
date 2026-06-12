@@ -133,6 +133,10 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     _selectedDeviceMac = null;
     _isDeviceConnected = false;
     _connectedDeviceMac = null;
+    // Clear the entered MAC ID / name so a new device entry starts blank
+    // instead of inheriting the previous registration's values.
+    _serialCtrl.clear();
+    _nameCtrl.clear();
   }
 
   int? _currentOrganizationId() {

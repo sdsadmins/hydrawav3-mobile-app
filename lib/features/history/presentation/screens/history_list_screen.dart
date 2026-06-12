@@ -7,7 +7,6 @@ import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
-import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 
@@ -200,7 +199,17 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
             data: (sessions) {
               final filtered = _historyFilter == _HistoryFilter.guest
                   ? sessions.where((s) => s.isGuest).toList()
-                  : sessions;
+                  : [...sessions];
+
+              // Most recent first (the backend returns these unsorted).
+              filtered.sort((a, b) {
+                final aDate = a.createdAt;
+                final bDate = b.createdAt;
+                if (aDate == null && bDate == null) return 0;
+                if (aDate == null) return 1; // unknown dates sink to the bottom
+                if (bDate == null) return -1;
+                return bDate.compareTo(aDate);
+              });
 
               if (filtered.isEmpty) {
                 return RefreshIndicator(
@@ -282,9 +291,11 @@ class _ActiveSessionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = session.status == session_model.SessionStatus.paused
-        ? 'Paused'
-        : 'Running';
+    // session.status is the ActiveSession SessionStatus enum — compare against
+    // that, not session_model's (the cross-enum compare was always false, so the
+    // card always read 'Running').
+    final status =
+        session.status == SessionStatus.paused ? 'Paused' : 'Running';
     final perDeviceStatuses = session.deviceIds
         .map((id) => session.deviceStatuses[id] ?? session.status)
         .toList();
@@ -298,10 +309,11 @@ class _ActiveSessionCard extends StatelessWidget {
             'sessionId': session.id,
             'protocolId': session.protocolId,
             'deviceIds': session.deviceIds,
-            'transport':
-                session.transport == session_model.SessionTransport.wifi
-                    ? 'wifi'
-                    : 'ble',
+            // session.transport is already the String 'wifi' or 'ble'. (The old
+            // `== SessionTransport.wifi` enum compare was always false, so every
+            // re-opened session was mislabelled 'ble' — which disabled the live
+            // controls and routed Stop to the no-op BLE path for WiFi sessions.)
+            'transport': session.transport == 'wifi' ? 'wifi' : 'ble',
             'advancedSettings': {},
             'advancedSettingsByDevice': {},
             'delayedDeviceId': null,
@@ -372,7 +384,7 @@ class _ActiveSessionCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: (session.status == session_model.SessionStatus.paused
+                  color: (session.status == SessionStatus.paused
                           ? ThemeConstants.warning
                           : ThemeConstants.success)
                       .withValues(alpha: 0.14),

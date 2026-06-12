@@ -231,6 +231,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 currentEngineState.deviceIds, widget.deviceIds) &&
             currentEngineState.protocol?.id == targetProtocolId;
 
+        // If the engine for this session is already live (e.g. re-opening a
+        // running WiFi / Protocol-Plus session from the active-sessions card),
+        // never try to reload it — for a Plus run the loaded sub-protocol id
+        // never equals the stack protocolId, so engineMatchesTarget is always
+        // false and the reload path below would otherwise tear down the live
+        // controls. Fall through to the re-sync so the controls re-attach.
+        final engineAlreadyLive =
+            currentEngineState.status == SessionStatus.running ||
+                currentEngineState.status == SessionStatus.paused;
+
         if (hasConflictingSession) {
           appLogger.w(
             'Skipping engine bootstrap for session=$_engineKey due to device overlap',
@@ -238,8 +248,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           return;
         }
 
-        if (!engineMatchesTarget ||
-            currentEngineState.status == SessionStatus.idle) {
+        if (!engineAlreadyLive &&
+            (!engineMatchesTarget ||
+                currentEngineState.status == SessionStatus.idle)) {
           appLogger.i(
               'Loading new session into engine - devices: ${widget.deviceIds}');
           ctrl.prepareSession(
@@ -253,8 +264,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
           // Resolve the selected protocol per device (no fallback: every device must have one).
           if (widget.protocolByDeviceId.isEmpty) {
-            throw StateError(
-                'Missing protocolByDeviceId: per-device protocol is required.');
+            // Re-attach path (e.g. re-opening from the active-sessions card)
+            // carries no per-device protocol map. Don't crash the setup — abort
+            // the reload and leave the existing engine/session running.
+            appLogger.w(
+                'Skipping engine reload — no protocolByDeviceId (re-attach).');
+            return;
           }
 
           final Protocol commonProtocol = widget.protocol ??
@@ -912,9 +927,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final currentSession = _findTrackedSession(activeSessions);
 
     final timer = engine.timer;
-    final status = currentSession == null
+    // Prefer the live engine status when the engine for this session is
+    // actually running/paused, so a stale tracked status can't strand the
+    // Stop/Pause/Resume controls after re-entering a live (WiFi) session.
+    final engineLive = engine.status == SessionStatus.running ||
+        engine.status == SessionStatus.paused;
+    final status = engineLive
         ? engine.status
-        : _toSessionStatus(currentSession.status);
+        : (currentSession == null
+            ? engine.status
+            : _toSessionStatus(currentSession.status));
     final ctrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
     final protocol = engine.protocol;
     // During timed pause gaps the engine sets currentCycleIndex to -1, but

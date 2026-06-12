@@ -194,10 +194,27 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
           ),
 
           /// ✅ PROTOCOLS HEADER
-          const SliverPadding(
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
             sliver: SliverToBoxAdapter(
-              child: SectionHeader(title: 'Protocols'),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.science_rounded,
+                        color: ThemeConstants.accent, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Protocols',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: ThemeConstants.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
 

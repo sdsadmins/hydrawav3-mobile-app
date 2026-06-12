@@ -66,6 +66,21 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(true)
                     }
+                    "updateSession" -> {
+                        val intent = Intent(this, BleForegroundService::class.java).apply {
+                            action = BleForegroundService.ACTION_UPDATE
+                            call.argument<Number>("startedAtEpochMs")?.let {
+                                putExtra(BleForegroundService.EXTRA_STARTED_AT_EPOCH_MS, it.toLong())
+                            }
+                            call.argument<String>("status")?.let { putExtra("status", it) }
+                            call.argument<String>("protocolName")?.let { putExtra("protocolName", it) }
+                            call.argument<List<String>>("deviceIds")?.let { putExtra("deviceIds", ArrayList(it)) }
+                            call.argument<List<String>>("deviceNames")?.let { putExtra("deviceNames", ArrayList(it)) }
+                            call.argument<List<String>>("deviceStatuses")?.let { putExtra("deviceStatuses", ArrayList(it)) }
+                        }
+                        startService(intent)
+                        result.success(true)
+                    }
                     "pauseService" -> {
                         val intent = Intent(this, BleForegroundService::class.java).apply {
                             action = BleForegroundService.ACTION_PAUSE

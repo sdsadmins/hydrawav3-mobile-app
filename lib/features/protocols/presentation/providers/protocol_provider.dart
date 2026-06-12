@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/api_endpoints.dart';
 import '../../../../core/network/dio_client.dart';
+import '../../../../core/storage/preferences.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../data/protocol_repository.dart';
 import '../../domain/protocol_model.dart';
@@ -163,3 +164,32 @@ final goalTagListProvider = FutureProvider<List<GoalTagOption>>((ref) async {
   final repository = ref.read(protocolRepositoryProvider);
   return repository.getGoalTags();
 });
+
+/// Recently used protocol ids (most-recent first), persisted across launches.
+final recentProtocolIdsProvider =
+    StateNotifierProvider<RecentProtocolIdsController, List<String>>((ref) {
+  return RecentProtocolIdsController(ref.read(preferencesProvider));
+});
+
+class RecentProtocolIdsController extends StateNotifier<List<String>> {
+  static const int _maxRecents = 8;
+  final PreferencesService _preferences;
+
+  RecentProtocolIdsController(this._preferences)
+      : super(_preferences.recentProtocolIds);
+
+  /// Record [protocolId] as the most recently used, de-duplicating and
+  /// capping the list at [_maxRecents].
+  Future<void> recordUsed(String protocolId) async {
+    if (protocolId.trim().isEmpty) return;
+    final reordered = <String>[
+      protocolId,
+      ...state.where((id) => id != protocolId),
+    ];
+    final trimmed = reordered.length > _maxRecents
+        ? reordered.sublist(0, _maxRecents)
+        : reordered;
+    state = trimmed;
+    await _preferences.setRecentProtocolIds(trimmed);
+  }
+}
