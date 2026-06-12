@@ -50,9 +50,5 @@ Version 1.0.1
 - Improved device connectivity
 Version 1.0.0
 - Initial release
-- Complete Hydrawav3 platform integration
-- Real-time protocol management
-- Device connectivity features
-- User authentication and authorization
   ''';
 }
