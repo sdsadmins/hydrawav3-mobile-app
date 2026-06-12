@@ -1011,9 +1011,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               SizedBox(
                 // Plus devices render an extra progress card inside the device
                 // card, so give the page more height when any device is Plus.
-                height: engine.protocolPlusSequenceByDevice.isNotEmpty
-                    ? 560
-                    : 420,
+                height:
+                    engine.protocolPlusSequenceByDevice.isNotEmpty ? 560 : 420,
                 child: PageView.builder(
                   itemCount: orderedDeviceIds.length,
                   onPageChanged: (idx) =>
@@ -1045,6 +1044,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       plusSequence: deviceSequence,
                       plusName: engine.protocolPlusNameByDevice[id] ?? '',
                       plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
+                      plusDelaySeconds:
+                          engine.protocolPlusDelayByDevice[id] ?? 0,
                     );
                   },
                 ),
@@ -1123,6 +1124,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     List<String> names, {
     required String name,
     required int index,
+    int delaySeconds = 0,
   }) {
     var currentIndex = index;
     if (currentIndex < 0) currentIndex = 0;
@@ -1186,7 +1188,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     isPast: i < currentIndex,
                   ),
                 ),
-                if (i < names.length - 1) _routeTrack(done: i < currentIndex),
+                if (i < names.length - 1)
+                  _routeTrack(
+                    done: i < currentIndex,
+                    delaySeconds: delaySeconds,
+                  ),
               ],
             ],
           ),
@@ -1288,21 +1294,44 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 
   /// The connecting track segment between two stations. Sits at dot height.
-  Widget _routeTrack({required bool done}) {
-    return Padding(
-      // Vertically center against the ~26-30px dot (not the text below it).
-      padding: const EdgeInsets.only(top: 13),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        width: 22,
-        height: 3,
-        decoration: BoxDecoration(
-          color: done
-              ? ThemeConstants.accent.withValues(alpha: 0.55)
-              : ThemeConstants.border,
-          borderRadius: BorderRadius.circular(3),
-        ),
+  /// When [delaySeconds] > 0 (a Protocol Plus break), shows the break time in
+  /// seconds above the line, e.g. "90s".
+  Widget _routeTrack({required bool done, int delaySeconds = 0}) {
+    final line = AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      width: 26,
+      height: 3,
+      decoration: BoxDecoration(
+        color: done
+            ? ThemeConstants.accent.withValues(alpha: 0.55)
+            : ThemeConstants.border,
+        borderRadius: BorderRadius.circular(3),
       ),
+    );
+
+    // No break time → keep the bare line vertically centered on the ~26-30px dot.
+    if (delaySeconds <= 0) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 13),
+        child: line,
+      );
+    }
+
+    // Break time label sits on the connector, aligned to the dot's center.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${delaySeconds}s',
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            color: ThemeConstants.textTertiary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        line,
+      ],
     );
   }
 
@@ -1321,6 +1350,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     List<String> plusSequence = const [],
     String plusName = '',
     int plusIndex = 0,
+    int plusDelaySeconds = 0,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
@@ -1350,103 +1380,104 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ),
             // Per-device Protocol Plus progress card (only for Plus devices).
             if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            _buildProtocolPlusSequence(
-              plusSequence,
-              name: plusName,
-              index: plusIndex,
-            ),
-          ],
-          if (protocolName.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              protocolName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: ThemeConstants.textSecondary,
-                fontWeight: FontWeight.w500,
-                fontSize: 11,
+              const SizedBox(height: 10),
+              _buildProtocolPlusSequence(
+                plusSequence,
+                name: plusName,
+                index: plusIndex,
+                delaySeconds: plusDelaySeconds,
               ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Container(
-            decoration: status == SessionStatus.running
-                ? BoxDecoration(
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: ThemeConstants.accent.withValues(alpha: 0.10),
-                        blurRadius: 26,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  )
-                : null,
-            child: SizedBox(
-              width: 200,
-              height: 200,
-              child: CustomPaint(
-                painter: _TimerRing(
-                    progress: timer.progress,
-                    active: status == SessionStatus.running),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        timer.remaining.formatted,
-                        style: TextStyle(
-                          fontSize: 38,
-                          fontWeight: FontWeight.w700,
-                          color: ThemeConstants.textPrimary,
-                          letterSpacing: -1.5,
+            ],
+            if (protocolName.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                protocolName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: ThemeConstants.textSecondary,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Container(
+              decoration: status == SessionStatus.running
+                  ? BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: ThemeConstants.accent.withValues(alpha: 0.10),
+                          blurRadius: 26,
+                          spreadRadius: 2,
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.dark_mode_rounded,
-                              size: 20, color: moonColor),
-                          const SizedBox(width: 12),
-                          Icon(Icons.wb_sunny_rounded,
-                              size: 22, color: sunColor),
-                        ],
-                      ),
-                    ],
+                      ],
+                    )
+                  : null,
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: CustomPaint(
+                  painter: _TimerRing(
+                      progress: timer.progress,
+                      active: status == SessionStatus.running),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          timer.remaining.formatted,
+                          style: TextStyle(
+                            fontSize: 38,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.textPrimary,
+                            letterSpacing: -1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.dark_mode_rounded,
+                                size: 20, color: moonColor),
+                            const SizedBox(width: 12),
+                            Icon(Icons.wb_sunny_rounded,
+                                size: 22, color: sunColor),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _statusColor(status).withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              _statusLabel(status),
-              style: TextStyle(
-                color: _statusColor(status),
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _statusColor(status).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                _statusLabel(status),
+                style: TextStyle(
+                  color: _statusColor(status),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
               ),
             ),
-          ),
-          if (totalCycles > 0 && padCycleIdx >= 0) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Cycle ${padCycleIdx + 1}/$totalCycles',
-              style: TextStyle(
-                color: ThemeConstants.textTertiary,
-                fontSize: 12,
+            if (totalCycles > 0 && padCycleIdx >= 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Cycle ${padCycleIdx + 1}/$totalCycles',
+                style: TextStyle(
+                  color: ThemeConstants.textTertiary,
+                  fontSize: 12,
+                ),
               ),
-            ),
-          ],
+            ],
             const SizedBox(height: 16),
             _buildPerDeviceControls(id, status, ctrl,
                 isProtocolPlusDevice: isProtocolPlusDevice),

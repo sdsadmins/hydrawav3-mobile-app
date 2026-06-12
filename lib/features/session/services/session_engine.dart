@@ -55,6 +55,11 @@ class SessionEngineState {
   final Map<String, List<String>> protocolPlusSequenceByDevice;
   final Map<String, int> protocolPlusIndexByDevice;
 
+  /// Per-device delay (seconds) inserted between stacked protocols on a
+  /// Protocol Plus run (the `delay` field on the protocol-plus document).
+  /// Shown in the live session tracker for Plus devices.
+  final Map<String, int> protocolPlusDelayByDevice;
+
   final String? error;
 
   const SessionEngineState({
@@ -76,6 +81,7 @@ class SessionEngineState {
     this.protocolPlusNameByDevice = const {},
     this.protocolPlusSequenceByDevice = const {},
     this.protocolPlusIndexByDevice = const {},
+    this.protocolPlusDelayByDevice = const {},
     this.error,
   });
 
@@ -98,6 +104,7 @@ class SessionEngineState {
     Map<String, String>? protocolPlusNameByDevice,
     Map<String, List<String>>? protocolPlusSequenceByDevice,
     Map<String, int>? protocolPlusIndexByDevice,
+    Map<String, int>? protocolPlusDelayByDevice,
     String? error,
   }) {
     return SessionEngineState(
@@ -124,6 +131,8 @@ class SessionEngineState {
           protocolPlusSequenceByDevice ?? this.protocolPlusSequenceByDevice,
       protocolPlusIndexByDevice:
           protocolPlusIndexByDevice ?? this.protocolPlusIndexByDevice,
+      protocolPlusDelayByDevice:
+          protocolPlusDelayByDevice ?? this.protocolPlusDelayByDevice,
       error: error,
     );
   }
@@ -969,8 +978,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// maps and render normal controls instead of a progress card.
   void setProtocolPlusSequencesByDevice(
     Map<String, String> nameByDevice,
-    Map<String, List<String>> sequenceByDevice,
-  ) {
+    Map<String, List<String>> sequenceByDevice, {
+    Map<String, int> delayByDevice = const {},
+  }) {
     if (!_isActive || sequenceByDevice.isEmpty) return;
     _isProtocolPlus = true;
     state = state.copyWith(
@@ -982,6 +992,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocolPlusIndexByDevice: {
         for (final id in sequenceByDevice.keys) id: 0,
       },
+      protocolPlusDelayByDevice: Map<String, int>.from(delayByDevice),
     );
     appLogger.i(
       'ProtocolPlus: per-device sequences set for ${sequenceByDevice.keys.join(", ")}',
