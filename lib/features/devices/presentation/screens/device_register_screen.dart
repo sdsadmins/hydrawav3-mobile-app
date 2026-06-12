@@ -35,7 +35,6 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   bool _submitting = false;
   bool _isAutoScan = true;
   bool _isHydrawav3Only = false;
-  bool _isScanning = false;
   List<ScanResult> _discoveredDevices = [];
   String? _selectedDeviceMac;
   bool _isDeviceConnected = false;
@@ -344,14 +343,16 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
   }
 
   List<ScanResult> _getFilteredDevices() {
+    // Mirror the Devices list screen's filter exactly: when the Hydrawav3
+    // toggle is on, keep only devices advertising the configured service UUID.
     if (!_isHydrawav3Only) return _discoveredDevices;
 
     final expected = BleConstants.preferredServiceUuid;
     if (expected == null || expected.isEmpty) return const <ScanResult>[];
 
     final targetUuid = BleConstants.normalizeUuid(expected);
-    return _discoveredDevices.where((device) {
-      return device.advertisementData.serviceUuids.any(
+    return _discoveredDevices.where((result) {
+      return result.advertisementData.serviceUuids.any(
         (uuid) => BleConstants.normalizeUuid(uuid.str) == targetUuid,
       );
     }).toList();
@@ -894,6 +895,13 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               _isDeviceConnected = connected;
               _connectedDeviceMac = connected ? macAddress : null;
             });
+          }
+          if (!connected) {
+            // _connectToSelectedDevice() stopped the shared scanner before
+            // connecting (and suppressed its auto-restart). On a failed attempt
+            // nothing would resume discovery, leaving the list frozen on stale
+            // results. Re-kick continuous scanning so it keeps refreshing.
+            unawaited(_startBleScan());
           }
         } finally {
           if (mounted) {
@@ -2284,16 +2292,14 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
             _sheetContext = context;
             return Consumer(
               builder: (context, ref, _) {
-                // Mirror the shared scanner's live results/state into local
-                // fields so the existing helpers keep working, and so the sheet
-                // rebuilds as devices are discovered.
+                // Mirror the shared scanner's live results into a local field so
+                // the existing helpers keep working, and so the sheet rebuilds
+                // as devices are discovered. We intentionally do NOT watch the
+                // platform scan flag here: it toggles every scan→pause→rescan
+                // cycle and only caused the discovery UI to flicker.
                 _discoveredDevices = ref.watch(bleScanResultsProvider).maybeWhen(
                       data: (list) => list,
                       orElse: () => _discoveredDevices,
-                    );
-                _isScanning = ref.watch(bleIsScanningProvider).maybeWhen(
-                      data: (scanning) => scanning,
-                      orElse: () => _isScanning,
                     );
                 return Padding(
                   padding: EdgeInsets.only(
@@ -2487,49 +2493,40 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                 ),
                               ),
                             )
-                          else if (_isScanning)
+                          else
+                            // Discovery runs continuously (scan → brief pause →
+                            // rescan), so the platform scan flag toggles every
+                            // cycle. Bind the empty state to a single steady
+                            // "searching" view instead of that flag so it no
+                            // longer flickers between a spinner and a "no
+                            // devices" message while we keep looking.
                             SizedBox(
                               height: 200,
                               child: Center(
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                          ThemeConstants.accent),
-                                    ),
-                                    SizedBox(height: 16),
                                     Text(
-                                      'Scanning for devices...',
+                                      'Searching for Hydrawav3 Devices',
                                       style: TextStyle(
                                         color: ThemeConstants.textSecondary,
                                         fontSize: 14,
+                                        fontWeight: FontWeight.w600,
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            )
-                          else
-                            Center(
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 40),
-                                child: Column(
-                                  children: [
-                                    Icon(Icons.bluetooth,
-                                        size: 60,
-                                        color: ThemeConstants.textTertiary
-                                            .withValues(alpha: 0.55)),
-                                    const SizedBox(height: 24),
-                                    Text(
-                                      'NO DEVICES DETECTED IN IMMEDIATE RANGE.',
-                                      style: TextStyle(
-                                          fontSize: 14,
-                                          color: ThemeConstants.textSecondary,
-                                          fontWeight: FontWeight.w500),
                                       textAlign: TextAlign.center,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 24),
+                                      child: Text(
+                                        'Make sure your Hydra device is powered on and in range.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: ThemeConstants.textTertiary,
+                                          fontSize: 12,
+                                        ),
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -2539,11 +2536,13 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                           SizedBox(
                             width: double.infinity,
                             height: 48,
+                            // Discovery is always running, so don't gate this on
+                            // the momentary scan flag (it toggles every cycle and
+                            // made the button flicker between enabled/disabled).
+                            // Tapping just re-kicks the shared scanner.
                             child: _getFilteredDevices().isNotEmpty
                                 ? OutlinedButton(
-                                    onPressed: _isScanning
-                                        ? null
-                                        : () => _startBleScan(),
+                                    onPressed: () => _startBleScan(),
                                     style: OutlinedButton.styleFrom(
                                       side: BorderSide(
                                           color: ThemeConstants.border),
@@ -2551,10 +2550,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                         borderRadius: BorderRadius.circular(16),
                                       ),
                                     ),
-                                    child: Text(
-                                        _isScanning
-                                            ? 'SCANNING...'
-                                            : 'RESCAN AREA',
+                                    child: Text('RESCAN AREA',
                                         style: TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w700,
@@ -2562,9 +2558,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                                 ThemeConstants.textSecondary)),
                                   )
                                 : ElevatedButton(
-                                    onPressed: _isScanning
-                                        ? null
-                                        : () => _startBleScan(),
+                                    onPressed: () => _startBleScan(),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: ThemeConstants.accent,
                                       disabledBackgroundColor:
@@ -2573,16 +2567,11 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                           borderRadius:
                                               BorderRadius.circular(16)),
                                     ),
-                                    child: Text(
-                                        _isScanning
-                                            ? 'SCANNING...'
-                                            : 'INITIALIZE DISCOVERY',
+                                    child: Text('RESCAN AREA',
                                         style: TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w700,
-                                            color: _isScanning
-                                                ? ThemeConstants.textTertiary
-                                                : _onAccent(context))),
+                                            color: _onAccent(context))),
                                   ),
                           ),
                         ] else ...[

@@ -45,8 +45,18 @@ class BleConstants {
   // static const String? preferredNotifyCharacteristicUuid =
   //     '6e400003-b5a3-f393-e0a9-e50e24dcca9e';     // NUS TX (device → phone)
   //
-  // ── Paste your real UUIDs here after reading the [GATT DUMP] log ─────────
-  // ℹ️ If your device uses Nordic NUS (most common for UART bridges):
+  // ── Live Hydra GATT profile ──────────────────────────────────────────────
+  // These are the REAL UUIDs the firmware uses — kept in sync with the web
+  // reference app (Hydrawav3-ai/hooks/useBleSession.ts). Do NOT treat them as
+  // placeholders despite the "12345678…" shape; they match production hardware.
+  //   web SERVICE_UUID      -> preferredServiceUuid
+  //   web CONTROL_CHAR_UUID -> preferredWriteCharacteristicUuid
+  //   web JSON_CHAR_UUID    -> preferredJsonCharacteristicUuid
+  //   web EVENT_NOTIFY_UUID -> preferredNotifyCharacteristicUuid
+  // NOTE: the service UUID is generally NOT broadcast in the scan/advertisement
+  // packet — it's only visible after connecting (GATT discovery). So scan-time
+  // filtering must also fall back to the "Hydra-" name prefix; do not rely on
+  // advertised serviceUuids alone.
   static const String? preferredServiceUuid =
       '12345678-1234-5678-1234-56789abcdef0';
 
@@ -57,14 +67,11 @@ class BleConstants {
   static const String? preferredJsonCharacteristicUuid =
       '12345607-1234-5678-1234-56789abcdef9';
 
-// ⚠️ YOU MUST FIND THIS FROM LOGS
   static const String? preferredNotifyCharacteristicUuid =
-      'abcdef03-1234-5678-1234-56789abcdef9'; // guess → verify
+      'abcdef03-1234-5678-1234-56789abcdef9';
 
-  // ❌ OLD FAKE UUIDs (DO NOT USE):
-  // '12345678-1234-5678-1234-56789abcdef0'
-  // 'abcdef01-1234-5678-1234-56789abcdef1'
-  // 'abcdef02-1234-5678-1234-56789abcdef9'
+  // web STATUS_NOTIFY_UUID — not yet wired in the mobile app (relevant to the
+  // device→app telemetry work, bug B-22): 'abcdef02-1234-5678-1234-56789abcdef9'
 
   /// When true, we ONLY accept the exact UUIDs above.
   /// - Scan results are filtered to devices advertising [preferredServiceUuid]
