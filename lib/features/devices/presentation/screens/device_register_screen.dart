@@ -2828,7 +2828,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                   onTap: () => _openLocateModal(device),
                 ),
                 _cardActionTile(
-                  icon: Icons.health_and_safety_rounded,
+                  icon: Icons.fact_check_rounded,
                   label: 'Report',
                   onTap: () => _openDiagnosticModal(device),
                 ),
