@@ -337,6 +337,23 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       _connectedDeviceMac = null;
     });
 
+    // iOS does not allow apps to turn Bluetooth on — if it's off, guide the
+    // user to enable it instead of silently finding nothing.
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Bluetooth is off. Turn it on in Control Center to find your Hydra device.'),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     final scanner = ref.read(bleScannerProvider);
     scanner.initializeAutoScan();
     await ref.read(startScanProvider)();

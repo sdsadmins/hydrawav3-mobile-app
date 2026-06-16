@@ -1786,8 +1786,8 @@ class _SegmentBtn extends StatelessWidget {
           boxShadow: active
               ? [
                   BoxShadow(
-                    color: ThemeConstants.segmentActiveBg
-                        .withValues(alpha: 0.22),
+                    color:
+                        ThemeConstants.segmentActiveBg.withValues(alpha: 0.22),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -1800,9 +1800,8 @@ class _SegmentBtn extends StatelessWidget {
             Icon(
               icon,
               size: 18,
-              color: active
-                  ? ThemeConstants.onNav
-                  : ThemeConstants.textSecondary,
+              color:
+                  active ? ThemeConstants.onNav : ThemeConstants.textSecondary,
             ),
             const SizedBox(width: 8),
             Text(
@@ -2454,13 +2453,13 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
         const SizedBox(height: 8),
         if (settings.vibrationMode == 'Sweep') ...[
           smallNumberSlider(
-            label: 'Vibration Min (Hz)',
+            label: 'Vibration Min',
             value: settings.vibMin,
             min: vibMinHz,
             max: vibMaxHz - 1,
             divisions: (vibMaxHz - 1).toInt(),
             color: ThemeConstants.accent,
-            unit: 'Hz',
+            unit: 'Level',
             onChanged: (value) {
               var newMin = value;
               var newMax = settings.vibMax;
@@ -2479,13 +2478,13 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           smallNumberSlider(
-            label: 'Vibration Max (Hz)',
+            label: 'Vibration Max',
             value: settings.vibMax,
             min: vibMinHz + 1,
             max: vibMaxHz,
             divisions: (vibMaxHz - 1).toInt(),
             color: ThemeConstants.accent,
-            unit: 'Hz',
+            unit: 'Level',
             onChanged: (value) {
               var newMax = value;
               var newMin = settings.vibMin;
@@ -2506,7 +2505,7 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
         if (settings.vibrationMode == 'Single') ...[
           const SizedBox(height: 10),
           Text(
-            'FREQUENCY (HZ)',
+            'FREQUENCY',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
@@ -2537,7 +2536,7 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
               fillColor: ThemeConstants.surfaceVariant,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              suffixText: 'Hz',
+              suffixText: 'Level',
               suffixStyle: TextStyle(
                 color: ThemeConstants.textSecondary,
                 fontWeight: FontWeight.w700,

@@ -225,6 +225,18 @@ class BleScanner {
           appLogger
               .w('BLE: Location permission not granted (scan may be empty)');
         }
+      } else if (Platform.isIOS) {
+        // iOS shows the CoreBluetooth permission prompt the first time the app
+        // uses Bluetooth. Request it explicitly here so the prompt appears in
+        // context when the user starts a scan (and is deterministic for App
+        // Review), instead of whenever CoreBluetooth happens to initialize.
+        final bt = await Permission.bluetooth.request();
+        if (!bt.isGranted) {
+          appLogger.w('BLE: iOS Bluetooth permission not granted');
+          _isScanning = false;
+          _globalScanActive = false;
+          return;
+        }
       }
 
       // Check if Bluetooth is on

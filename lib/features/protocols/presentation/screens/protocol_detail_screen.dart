@@ -1814,7 +1814,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         const SizedBox(height: 10),
         if (settings.vibrationMode == 'Sweep') ...[
           smallNumberSlider(
-            label: 'Vibration Min (Hz)',
+            label: 'Vibration Min ',
             value: settings.vibMin,
             min: vibMinHz,
             max: vibMaxHz - 1,
@@ -1837,13 +1837,13 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
             },
           ),
           smallNumberSlider(
-            label: 'Vibration Max (Hz)',
+            label: 'Vibration Max',
             value: settings.vibMax,
             min: vibMinHz + 1,
             max: vibMaxHz,
             divisions: vibMaxHz.toInt(),
             color: ThemeConstants.accent,
-            unit: 'Hz',
+            unit: 'Level',
             onChanged: (v) {
               var newMax = v;
               var newMin = settings.vibMin;
@@ -1862,7 +1862,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           const SizedBox(height: 6),
         ] else if (settings.vibrationMode == 'Single') ...[
           smallNumberSlider(
-            label: 'Vibration Single (Hz)',
+            label: 'Vibration Single',
             value: settings.vibrationSingleHz,
             min: 10,
             max: vibMaxHz,
