@@ -54,7 +54,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final u = List<ChatMessageModel>.from(msgs.state);
       u[u.length - 1] = ChatMessageModel(
         content:
-            'I can help with protocol selection and pad placement. Connect to the backend for AI-powered responses.\n\nTry asking about:\n• Recommended protocols for specific pain areas\n• Pad placement guidance\n• Session type suggestions',
+            'I can help with protocol selection and pad placement. Connect to the backend for AI-powered responses.\n\nTry asking about:\n• Recommended protocols for specific muscle groups\n• Pad placement guidance\n• Session type suggestions',
         isUser: false,
       );
       msgs.state = u;
@@ -187,7 +187,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     color: Colors.black)),
             const SizedBox(height: 10),
             Text(
-              'Get protocol recommendations, pad placement guidance, and session suggestions based on your discomfort areas.',
+              'Get protocol recommendations, pad placement guidance, and session suggestions based on your target muscle areas.',
               style: TextStyle(
                   fontSize: 14,
                   color: ThemeConstants.textSecondary,
@@ -202,7 +202,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               children: [
                 _SuggestionChip('Recommend a protocol'),
                 _SuggestionChip('Where to place pads?'),
-                _SuggestionChip('Lower back pain help'),
+                _SuggestionChip('Lower back recovery'),
               ],
             ),
           ]),

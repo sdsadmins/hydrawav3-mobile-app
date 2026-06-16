@@ -36,8 +36,8 @@ class LegalContent {
       bullets: [
         'Account and profile information such as your name, username, email address, phone number, organization, country, state, date of birth, and other profile details you choose to provide.',
         'Device and connection information such as device identifiers, device names, Bluetooth connection information, MAC addresses, pairing details, and device status information.',
-        'Session and treatment information such as selected protocols, device assignments, session duration, session history, discomfort ratings, notes, presets, intake-related records, and similar usage data needed to provide app functionality.',
-        'Permissions-related information for Bluetooth and nearby devices to discover, connect to, and communicate with compatible therapy devices. Location permission may be requested on certain devices or operating systems solely to support Bluetooth scanning and device connectivity. We do not use location for advertising or location tracking.',
+        'Session and usage information such as selected protocols, device assignments, session duration, session history, comfort ratings, notes, presets, intake-related records, and similar usage data needed to provide app functionality.',
+        'Permissions-related information for Bluetooth and nearby devices to discover, connect to, and communicate with compatible Hydra devices. Location permission may be requested on certain devices or operating systems solely to support Bluetooth scanning and device connectivity. We do not use location for advertising or location tracking.',
       ],
     ),
     InfoSheetSection(
@@ -127,7 +127,7 @@ class LegalContent {
     InfoSheetSection(
       heading: '3. Use of the App',
       bullets: [
-        'Use the App only with compatible equipment and as permitted by applicable laws, clinical guidance, and device instructions.',
+        'Use the App only with compatible equipment and as permitted by applicable laws, manufacturer guidance, and device instructions.',
         'Do not misuse the App, interfere with service operations, attempt unauthorized access, or use the App to harm other users or connected systems.',
         'The App may require Bluetooth, internet access, and supported device permissions for certain features to function properly.',
       ],
@@ -135,8 +135,8 @@ class LegalContent {
     InfoSheetSection(
       heading: '4. Health and Safety',
       paragraphs: [
-        'The App supports therapy-related workflows and device connectivity, but it is not an emergency service.',
-        'You should follow clinician guidance, device labeling, and applicable safety instructions when using any connected therapy device.',
+        'The App supports wellness-related workflows and device connectivity, but it is not an emergency service.',
+        'You should follow manufacturer guidance, device labeling, and applicable safety instructions when using any connected Hydra device.',
       ],
     ),
     InfoSheetSection(
@@ -183,7 +183,7 @@ class LegalContent {
     InfoSheetSection(
       heading: 'Permissions',
       bullets: [
-        'Bluetooth and nearby-device access are used to discover and communicate with compatible therapy devices.',
+        'Bluetooth and nearby-device access are used to discover and communicate with compatible Hydra devices.',
         'Some Android devices may request location permission only because the operating system requires it for Bluetooth scanning.',
         'You can review and revoke permissions in your device settings at any time.',
       ],

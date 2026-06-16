@@ -140,6 +140,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> logout() async {
     await _repository.logout();
     await _repository.clearSelectedOrganization();
+    // No need to invalidate wifiDevicesByOrgProvider here: it watches
+    // authStateProvider, so resetting the auth state below makes it re-run and
+    // return an empty list (no org). Invalidating it from inside the auth
+    // notifier would create a CircularDependencyError and abort logout.
     // Reset the splash warm-up flag so the next login re-loads core data.
     _ref.read(appWarmedUpProvider.notifier).state = false;
     // Keep isInitialized true so the router goes straight to login, not splash.

@@ -82,10 +82,16 @@ class UserProfile {
                 ? [json['roles'].toString()]
                 : null,
         profilePicture: json['profilePicture'] as String?,
-        // organizationId: json['organization']?['id']?.toString(),
+        // Be tolerant of the various shapes the backend may return:
+        //   organization: { id: ... } | organization: "123"
+        //   organizationId: "123" | organization_id: "123"
         organizationId: json['organization'] is Map
-            ? json['organization']['id']?.toString()
-            : json['organization']?.toString(),
+            ? (json['organization']['id'] ?? json['organization']['_id'])
+                ?.toString()
+            : (json['organization'] ??
+                    json['organizationId'] ??
+                    json['organization_id'])
+                ?.toString(),
         country: json['country'] as String?,
         state: json['state'] as String?,
         dob: json['dateOfBirth'] as String?,
