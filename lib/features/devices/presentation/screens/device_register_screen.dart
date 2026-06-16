@@ -1209,7 +1209,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
         Timer? timer;
         const checks = <(String, int)>[
           ('Oscillation Module Integrity', 1),
-          ('Photobiomodulation Array', 2),
+          ('Light Array', 2),
           ('Thermal Conductance Sync', 3),
           ('Communication Latency', 4),
         ];
@@ -1227,9 +1227,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               setModalState(() => step++);
             });
             return _modalShell(
-              icon: Icons.health_and_safety_rounded,
+              icon: Icons.fact_check_rounded,
               iconColor: ThemeConstants.accent,
-              title: 'Diagnostic Report',
+              title: 'Device Report',
               onClose: () {
                 timer?.cancel();
                 Navigator.of(dialogContext).pop();
@@ -2588,7 +2588,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'MANUAL ENTRY IS RESTRICTED TO VERIFIED CLINICAL MAC IDENTIFIERS ONLY.',
+                                  'MANUAL ENTRY IS RESTRICTED TO VERIFIED DEVICE MAC IDENTIFIERS ONLY.',
                                   style: TextStyle(
                                       fontSize: 12,
                                       color: ThemeConstants.accent,
@@ -2614,7 +2614,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                                 style: TextStyle(
                                     color: ThemeConstants.textPrimary),
                                 decoration: InputDecoration(
-                                  hintText: 'e.g. Clinical_Sun_A',
+                                  hintText: 'e.g. Recovery_Sun_A',
                                   hintStyle: TextStyle(
                                       color: ThemeConstants.textTertiary,
                                       fontSize: 14),
@@ -2893,6 +2893,29 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     );
   }
 
+  /// A vertically-scrollable centered message so RefreshIndicator's pull
+  /// gesture still works when the list is empty / errored / has no devices.
+  Widget _pullableMessage(String message) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                message,
+                style: TextStyle(color: ThemeConstants.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final devicesAsync = ref.watch(wifiDevicesByOrgProvider);
@@ -2943,7 +2966,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          'Manage your registered clinical hardware',
+                          'Manage your registered Hydra devices',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -3007,52 +3030,62 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
               ),
               const SizedBox(height: 24),
               Expanded(
-                child: devicesAsync.when(
-                  data: (devices) {
-                    final filteredDevices = _searchText.isEmpty
-                        ? devices
-                        : devices.where((device) {
-                            final normalized =
-                                '${device.name} ${device.macAddress}'
-                                    .toLowerCase();
-                            return normalized
-                                .contains(_searchText.toLowerCase());
-                          }).toList();
+                child: RefreshIndicator(
+                  color: ThemeConstants.accent,
+                  onRefresh: () =>
+                      ref.refresh(wifiDevicesByOrgProvider.future),
+                  child: Builder(
+                    builder: (context) {
+                      // Mirror the device-list screen: only show the spinner on
+                      // the very first fetch (no value yet). After that, keep
+                      // rendering the last-known list/empty-state so a refresh
+                      // (e.g. after add/rename/delete) never drops back to an
+                      // infinite spinner.
+                      final firstLoading =
+                          devicesAsync.isLoading && !devicesAsync.hasValue;
+                      if (firstLoading) {
+                        return Center(
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: ThemeConstants.accent),
+                        );
+                      }
 
-                    if (filteredDevices.isEmpty) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            _searchText.isEmpty
-                                ? 'No registered devices found.'
-                                : 'No devices match your search.',
-                            style:
-                                TextStyle(color: ThemeConstants.textSecondary),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
+                      if (devicesAsync.hasError && !devicesAsync.hasValue) {
+                        return _pullableMessage(
+                          'Unable to load devices: ${devicesAsync.error}',
+                        );
+                      }
+
+                      final devices =
+                          devicesAsync.valueOrNull ?? const <DeviceInfo>[];
+                      final filteredDevices = _searchText.isEmpty
+                          ? devices
+                          : devices.where((device) {
+                              final normalized =
+                                  '${device.name} ${device.macAddress}'
+                                      .toLowerCase();
+                              return normalized
+                                  .contains(_searchText.toLowerCase());
+                            }).toList();
+
+                      if (filteredDevices.isEmpty) {
+                        return _pullableMessage(
+                          _searchText.isEmpty
+                              ? 'No registered devices found.'
+                              : 'No devices match your search.',
+                        );
+                      }
+
+                      return ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        itemCount: filteredDevices.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 12),
+                        itemBuilder: (context, index) =>
+                            _buildDeviceCard(filteredDevices[index]),
                       );
-                    }
-
-                    return ListView.separated(
-                      padding: EdgeInsets.zero,
-                      itemCount: filteredDevices.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) =>
-                          _buildDeviceCard(filteredDevices[index]),
-                    );
-                  },
-                  loading: () => Center(
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: ThemeConstants.accent)),
-                  error: (error, stack) => Center(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Text('Unable to load devices: ${error.toString()}',
-                          style: TextStyle(color: ThemeConstants.textSecondary),
-                          textAlign: TextAlign.center),
-                    ),
+                    },
                   ),
                 ),
               ),

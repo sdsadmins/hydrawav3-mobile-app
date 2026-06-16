@@ -102,9 +102,17 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      body: CustomScrollView(
-        physics: const ClampingScrollPhysics(),
-        slivers: [
+      body: RefreshIndicator(
+        color: ThemeConstants.accent,
+        onRefresh: () async {
+          ref.invalidate(protocolListProvider);
+          ref.invalidate(goalTagListProvider);
+          await ref.read(protocolListProvider.future);
+        },
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(
+              parent: ClampingScrollPhysics()),
+          slivers: [
           /// 🔥 HEADER
           SliverToBoxAdapter(
             child: Container(
@@ -345,7 +353,8 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
               return _ProtocolList(protocols: sortedProtocols);
             },
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

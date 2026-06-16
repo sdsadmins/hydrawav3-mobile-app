@@ -1,7 +1,7 @@
 # Hydrawav3 Mobile App — Bug & Feature Tracker
 
 > Source: SharePoint app-update notes (5/21 → 6/8 2026), filtered to **mobile app only** (iPhone / Android / tablet / APK). Status verified against the current Flutter codebase.
-> Last updated: **2026-06-12**
+> Last updated: **2026-06-15**
 
 **Legend:** ✅ Fixed · 🔧 Fixed today · ❌ Not fixed · ⚠️ Unclear / needs device testing
 
@@ -13,7 +13,8 @@
 |--------|-------|
 | ✅ Already fixed (in code) | 14 |
 | 🔧 Fixed 2026-06-10 | 10 |
-| 🔧 Fixed 2026-06-12 | 4 |
+| 🔧 Fixed 2026-06-12 | 6 |
+| 🔧 Fixed 2026-06-15 | 5 |
 | ❌ Not fixed | 4 |
 | ⚠️ Unclear / needs device testing | 3 |
 
@@ -62,15 +63,27 @@
 | B-30 | **Register New Hardware scan inconsistent / "keeps scanning" / flickers** | Empty state was bound to the raw `FlutterBluePlus.isScanning` stream, which toggles every scan→pause→rescan cycle, flipping the panel between a spinner and "NO DEVICES". Now renders only from the stable merged `bleScanResultsProvider` (like the Devices list screen) with a single steady "Searching for Hydrawav3 Devices" state; de-flickered the rescan button; after a failed tap-to-connect, discovery auto-resumes instead of freezing. | `devices/.../device_register_screen.dart`, `core/constants/ble_constants.dart` (corrected misleading "FAKE UUID" comment) |
 | U-06 / F-08 | **Colors exactly match web app** | Re-skinned the whole app to the Hydra web brand palette (values sourced from `Hydrawav3-ai/app/globals.css`): cream canvas, **white cards**, tan accent, dark-slate bottom nav, dark/tan segmented toggles, fixed `onAccent` text. Rebranded **both** light & dark palettes from the centralized `ThemePalette` (re-skins ~950 usages). Unified toggle styling across Devices list, History tab, Register tabs, and the protocol **goal** chips (dark-slate selected in light, tan in dark). Removed card glow/gradient halos + the decorative blob on the Active Devices card; flattened protocol cards and `GlowIconBox`. | `core/constants/theme_constants.dart`, `core/theme/app_theme.dart`, `core/router/app_router.dart`, `core/theme/widgets/premium.dart`, `protocols/.../protocol_list_screen.dart`, `devices/.../device_list_screen.dart`, `history/.../history_list_screen.dart`, `devices/.../device_register_screen.dart` |
 | B-23 | **"Select Protocol" time ≠ live session time** | Picker duration now reconciled with the live session time (`startDelay` accounted for). Confirmed fixed 2026-06-12. | — |
+| B-31 | **Protocol durations wrong in "All" list; Protocol Plus shows 00:00** | Two bugs, verified against the live API: (1) `totalDurationSeconds` ignored `pause_seconds`, misused `cycle_pause`, and hardcoded the edge cycle as `9` — rewrote it to mirror the backend `getProtocolsByGoalTagId` formula exactly (so "All" now matches the goal-tag list). (2) Protocol Plus entries carry a server `totalDuration` (e.g. 1730s) but **no `cycles`**, so the cycle math returned 0 — now parses `totalDuration` into `apiTotalDurationSeconds` and uses it when present. | `protocols/domain/protocol_model.dart` |
+| B-32 / B-24 (partial) | **Show the delay/break time between stacked protocols** | Threaded the protocol-plus `delay` (e.g. 88s) from the API → engine (`protocolPlusDelayByDevice`) → session UI. The Protocol Plus tracker now shows the break time (`88s`) **on the connector line between protocols**. Renders only during a Protocol Plus run. *(The full break **countdown/UI** of B-24 is still pending — this only displays the value.)* | `session/services/session_engine.dart`, `session/services/protocol_plus_controller.dart`, `session/presentation/screens/session_screen.dart` |
 | (note) | **iPhone 17 — BLE devices not appearing (shows up to iPhone 16)** | Investigated; **no app-side defect found** — scan is unfiltered and permissions/Info.plist are correct. Likely the new Apple **N1** chip + iOS 26 + `flutter_blue_plus` lag (project is on **1.36.8**; latest is **2.3.8**, a paid-license major). **Next step (free, no device needed): have an iPhone 17 user run nRF Connect** — if it finds the Hydra, the plugin is the cause; if not, it's firmware/iOS. Permissive alternatives if needed: `flutter_reactive_ble` / `universal_ble` (BSD, but heavy migration). Related to U-04. | n/a (diagnosis) |
+
+### 🔧 Fixed — 2026-06-15
+
+| ID | Bug | What changed | File(s) |
+|----|-----|--------------|---------|
+| B-33 | **Device Fleet / WiFi list spins forever for some accounts** (e.g. admin `596`; practitioner `525` was fine) | Root cause was an **infinite token-refresh loop** in the auth interceptor: a 401 (role with no access to `/admin/sensors/organisation/{id}`) triggered a refresh, then retried via `djangoDio.fetch()` which **re-runs the whole interceptor chain** → 401 → refresh → retry → … forever, so the caller's `Future` never completed. Added a **one-retry guard** (`requestOptions.extra['__authRetried__']`) so a second 401 propagates instead of looping. | `core/network/auth_interceptor.dart` |
+| B-34 | **Logout not working** (silently did nothing; `CircularDependencyError`) | `logout()` called `ref.invalidate(wifiDevicesByOrgProvider)`, but that provider **watches** `authStateProvider` → invalidating it from inside the auth notifier threw `CircularDependencyError` and aborted logout before the state reset. Removed the invalidate — the provider already re-runs (and returns `[]`) when auth state resets. | `auth/.../auth_provider.dart` |
+| B-35 | **Devices page showed the previous logged-in user's devices** | Provider fell back to "**first org** in `/admin/organizations`" whenever the profile lacked an org id, and the org id wasn't being parsed from the login/profile JSON. Now resolves `selectedOrgId → user.organizationId` (no first-org guess; returns `[]` if neither), and org parsing tolerates `organization{.id/_id}` / `organizationId` / `organization_id`. | `devices/.../wifi_devices_provider.dart`, `auth/domain/auth_models.dart` |
+| B-36 | **Device fetch threw a red error on 401/403/404/204** instead of showing empty | `getDevicesByOrg`/`getDevices` now return `[]` for 401/403/404/204 (no access / no devices), matching the web's `getSensorsByorgId`. Fleet page also renders empty/last-known value instead of an infinite spinner (extends B-20 to the registration screen). | `devices/data/device_remote_source.dart`, `devices/.../device_register_screen.dart` |
+| B-37 | **No pull-to-refresh** on Device Registration & Protocol List (Home) pages | Added `RefreshIndicator` to both — fleet re-fetches `wifiDevicesByOrgProvider` (pull works even on empty/error states); Home re-fetches `protocolListProvider` + `goalTagListProvider`. | `devices/.../device_register_screen.dart`, `protocols/.../protocol_list_screen.dart` |
 
 ### ❌ Not fixed
 
 | ID | Bug | Why / Notes |
 |----|-----|-------------|
 | B-22 | **Two-way communication** (BT & WiFi) not working | App only sends commands; no live device→app state/pad telemetry. Largest remaining piece. |
-| B-24 | **90-second break between stacked protocols** + highlight next | Switch is immediate (STOP→800ms→PLAY); no break UI/countdown. Likely also resolves the "ghost 00:00 session on stack start" report. |
-| B-25 | **Session history tied to account, not device** | **Backend confirmed:** `GET /intake/all` runs `intakeModel.find()` with **no scoping** — returns every account's intakes. Mobile sessions are **guest** (`clientId` is null), so scoping must use **`createdBy` (the logged-in user id)**, which the intake schema always stores. Fix = filter `getAllIntakes()` by `req.user.id`. Deferred per decision (sort-only for now). |
+| B-24 | **90-second break between stacked protocols** + highlight next | **Partial:** the break time is now displayed between protocols on the session tracker (B-32). Still missing: the actual break **countdown/idle UI** between protocols (switch is immediate STOP→800ms→PLAY). Likely also resolves the "ghost 00:00 session on stack start" report. |
+| B-25 | **Session history tied to account, not device** | **Backend confirmed:** `GET /intake/all` runs `intakeModel.find()` with **no scoping** — returns every account's intakes. Mobile sessions are **guest** (`clientId` is null), so scoping must use **`createdBy` (the logged-in user id)**, which the intake schema always stores. Fix = filter `getAllIntakes()` by `req.user.id`. **Mobile side (2026-06-15):** `SessionHistoryItem.fromJson` does **not** currently parse `createdBy`/`organizationId`, so a client-side per-login filter isn't possible until that field is captured (confirm exact key from a raw `/intake/all` record first). Deferred per decision (sort-only for now). |
 | B-26 | **Education / pad-placement link** that opens a webpage | Doesn't exist yet (only AI-chat hint text). Backend endpoint `aiPadPlacement` exists but no UI link. |
 
 ### ⚠️ Unclear / needs device testing

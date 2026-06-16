@@ -61,7 +61,15 @@ class AuthInterceptor extends Interceptor {
     print('🔴 RESPONSE: ${err.response?.data}');
     print('🔴 MESSAGE: ${err.message}');
 
-    if (err.response?.statusCode != 401) {
+    // Only attempt a refresh+retry once per request. Retrying via
+    // `djangoDio.fetch()` re-runs the whole interceptor chain, so a request
+    // that keeps returning 401 (e.g. a role with no access to the endpoint)
+    // would otherwise loop forever — 401 → refresh → retry → 401 → … — and
+    // the caller's Future would never complete (infinite spinner). Once we've
+    // retried, propagate the 401 so the caller can handle it (e.g. show an
+    // empty device list).
+    if (err.response?.statusCode != 401 ||
+        err.requestOptions.extra['__authRetried__'] == true) {
       handler.next(err);
       return;
     }
@@ -84,6 +92,8 @@ class AuthInterceptor extends Interceptor {
     }
 
     err.requestOptions.headers['Authorization'] = 'Bearer $cleanToken';
+    // Mark so a second 401 on the retry won't trigger another refresh loop.
+    err.requestOptions.extra['__authRetried__'] = true;
 
     try {
       // Reuse the original configured Dio instance with all interceptors and settings

@@ -16,7 +16,7 @@ class SocialShareService {
     if (record.discomfortBefore != null && record.discomfortAfter != null) {
       final improvement = record.discomfortBefore! - record.discomfortAfter!;
       if (improvement > 0) {
-        text += ' Discomfort reduced by $improvement points.';
+        text += ' Comfort improved by $improvement points.';
       }
     }
 

@@ -40,6 +40,12 @@ class DeviceRemoteSource {
     return error.message ?? fallbackMessage;
   }
 
+  /// Status codes the web app (parity reference) treats as "no devices to
+  /// show" rather than a hard error: 401 (not authorized for this admin
+  /// endpoint), 403 (role restriction), 404 (org has no sensors), 204.
+  /// See Hydrawav3-ai/actions/action.ts `getSensorsByorgId`.
+  static const _emptyResultStatuses = {401, 403, 404, 204};
+
   Future<List<DeviceInfo>> getDevices() async {
     try {
       final response = await _dio.get(ApiEndpoints.sensors);
@@ -49,6 +55,9 @@ class DeviceRemoteSource {
           .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
+      if (_emptyResultStatuses.contains(e.response?.statusCode)) {
+        return const <DeviceInfo>[];
+      }
       throw ServerException(
         _extractErrorMessage(e, 'Failed to fetch devices'),
         statusCode: e.response?.statusCode,
@@ -65,6 +74,9 @@ class DeviceRemoteSource {
           .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
           .toList();
     } on DioException catch (e) {
+      if (_emptyResultStatuses.contains(e.response?.statusCode)) {
+        return const <DeviceInfo>[];
+      }
       throw ServerException(
         _extractErrorMessage(e, 'Failed to fetch devices'),
         statusCode: e.response?.statusCode,
