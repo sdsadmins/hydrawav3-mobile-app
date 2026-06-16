@@ -1,7 +1,7 @@
 name: hydrawav3
 description: Hydrawav3 - Physical therapy device control app
 publish_to: "none"
-version: 1.0.2+5
+version: 1.0.2+6
 
 environment:
   sdk: ^3.6.0
