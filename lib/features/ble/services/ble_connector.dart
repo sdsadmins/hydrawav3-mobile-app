@@ -59,8 +59,23 @@ class BleConnector {
 
   StreamSubscription<BluetoothAdapterState>? _adapterSub;
   BluetoothAdapterState? _lastAdapterState;
+  bool _adapterWatchStarted = false;
 
-  BleConnector() {
+  BleConnector();
+
+  /// Lazily start watching the Bluetooth adapter state.
+  ///
+  /// This is deliberately NOT done in the constructor: touching
+  /// `FlutterBluePlus.adapterState` initializes CoreBluetooth on iOS, which
+  /// fires the system "Allow Bluetooth" prompt. Doing it in the constructor
+  /// (the connector is built at app launch by AutoConnectManager) made the
+  /// prompt appear on the splash/login screen — out of context, easy to miss,
+  /// and since iOS only asks once, it then never reappeared. We now start the
+  /// watch only when Bluetooth is actually used (first connect), so the prompt
+  /// is requested in context by the scanner's permission request first.
+  void _ensureAdapterWatch() {
+    if (_adapterWatchStarted) return;
+    _adapterWatchStarted = true;
     // React to the Bluetooth adapter being toggled OFF→ON. While BT is off,
     // the per-device reconnect loop ([_attemptReconnect]) exhausts its attempts;
     // reset those counters so future drops can retry, and let the scan-driven
@@ -154,6 +169,9 @@ class BleConnector {
   /// Connect to a device by its BluetoothDevice reference.
   Future<bool> connect(BluetoothDevice device,
       {bool autoReconnect = true}) async {
+    // Start the adapter-state watch on first real Bluetooth use (see
+    // [_ensureAdapterWatch] — deferred so iOS doesn't prompt at app launch).
+    _ensureAdapterWatch();
     final deviceId = device.remoteId.str;
     final current = _deviceStates[deviceId];
     if (current == BleConnectionStatus.connected) return true;

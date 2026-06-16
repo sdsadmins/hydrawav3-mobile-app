@@ -1391,13 +1391,13 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         const SizedBox(height: 8),
         if (settings.vibrationMode == 'Sweep') ...[
           smallNumberSlider(
-            label: 'Vibration Min (Hz)',
+            label: 'Vibration Min ',
             value: settings.vibMin,
             min: vibMinHz,
             max: vibMaxHz - 1,
             divisions: (vibMaxHz - 1).toInt(),
             color: ThemeConstants.accent,
-            unit: 'Hz',
+            unit: ' Level',
             onChanged: (v) {
               var newMin = v;
               var newMax = settings.vibMax;
@@ -1414,13 +1414,13 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           ),
           const SizedBox(height: 10),
           smallNumberSlider(
-            label: 'Vibration Max (Hz)',
+            label: 'Vibration Max',
             value: settings.vibMax,
             min: vibMinHz + 1,
             max: vibMaxHz,
             divisions: (vibMaxHz - 1).toInt(),
             color: ThemeConstants.accent,
-            unit: 'Hz',
+            unit: ' Level',
             onChanged: (v) {
               var newMax = v;
               var newMin = settings.vibMin;
@@ -1440,7 +1440,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         const SizedBox(height: 10),
         if (settings.vibrationMode == 'Single') ...[
           Text(
-            'FREQUENCY (HZ)',
+            'FREQUENCY',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
@@ -1471,7 +1471,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               fillColor: ThemeConstants.surfaceVariant,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              suffixText: 'Hz',
+              suffixText: ' Level',
               suffixStyle: TextStyle(
                 color: ThemeConstants.textSecondary,
                 fontWeight: FontWeight.w700,
