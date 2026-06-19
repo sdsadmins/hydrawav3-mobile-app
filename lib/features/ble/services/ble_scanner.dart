@@ -226,21 +226,39 @@ class BleScanner {
               .w('BLE: Location permission not granted (scan may be empty)');
         }
       } else if (Platform.isIOS) {
-        // iOS shows the CoreBluetooth permission prompt the first time the app
-        // uses Bluetooth. Request it explicitly here so the prompt appears in
-        // context when the user starts a scan (and is deterministic for App
-        // Review), instead of whenever CoreBluetooth happens to initialize.
-        final bt = await Permission.bluetooth.request();
-        if (!bt.isGranted) {
-          appLogger.w('BLE: iOS Bluetooth permission not granted');
+        // On iOS, CoreBluetooth itself presents the permission prompt the first
+        // time a scan starts (when flutter_blue_plus initializes its
+        // CBCentralManager just below). permission_handler's Permission.bluetooth
+        // is unreliable here: while authorization is still `notDetermined` it
+        // often reports `denied` WITHOUT showing a prompt. Hard-gating on it
+        // therefore deadlocks — we abort before CoreBluetooth ever starts, so
+        // the prompt never appears and the permission is never granted.
+        //
+        // So we don't hard-gate. We only bail when the user has explicitly
+        // turned Bluetooth OFF for the app in iOS Settings (permanentlyDenied);
+        // otherwise we let CoreBluetooth drive the prompt.
+        final status = await Permission.bluetooth.status;
+        if (status.isPermanentlyDenied) {
+          appLogger.w(
+              'BLE: iOS Bluetooth permission disabled in Settings — enable it under Settings > Hydrawav3 > Bluetooth.');
           _isScanning = false;
           _globalScanActive = false;
           return;
         }
       }
 
-      // Check if Bluetooth is on
-      var adapterState = await FlutterBluePlus.adapterState.first;
+      // Check if Bluetooth is on. On iOS the adapter state is `unknown` until
+      // CoreBluetooth finishes initializing (this first access is also what
+      // surfaces the one-time permission prompt), so wait for the first
+      // definitive state instead of reading a possibly-`unknown` first value.
+      // The timeout covers the case where the user is still deciding on the
+      // prompt — the next scan attempt will then proceed normally.
+      var adapterState = await FlutterBluePlus.adapterState
+          .firstWhere((s) => s != BluetoothAdapterState.unknown)
+          .timeout(
+            const Duration(seconds: 12),
+            onTimeout: () => BluetoothAdapterState.unknown,
+          );
       if (adapterState != BluetoothAdapterState.on) {
         appLogger.w('BLE: Bluetooth is not enabled');
 

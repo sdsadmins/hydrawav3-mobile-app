@@ -38,7 +38,7 @@ class AppConstants {
 
   // Version and Release Notes
   static const String appVersion = '1.0.2';
-  static const String buildNumber = '6';
+  static const String buildNumber = '8';
   static const String releaseNotes = '''
 Version 1.0.2
 - Session notifications now show while running in the background
