@@ -26,6 +26,13 @@ class ApiEndpoints {
 
   static const String refreshToken = '/auth/refreshToken';
   static const String baseUrl = "http://54.241.236.53:8080";
+
+  // Practitioner onboarding (native "Create account" flow, parity with web).
+  // The submit needs an admin token from this public proxy (the user isn't
+  // logged in yet), then a multipart POST to the onboarding endpoint.
+  static const String proxyCreateUserUrl =
+      'https://hydrawav3.app/proxy_create_user.php';
+  static const String practitionerOnboarding = '/practitioners/onboarding';
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';
@@ -46,6 +53,9 @@ class ApiEndpoints {
   static String clientDetails(String orgId) => '/clients/details/$orgId';
   static String clientById(String clientId) =>
       '/clients/clientDetails/$clientId';
+
+  // Session music ("Atmosphere") tracks
+  static const String musics = '/musics';
 
   // Protocols
   static const String protocols = '/protocols';

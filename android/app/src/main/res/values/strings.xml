@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- \n forces the launcher label onto two lines: "Hydrawav3" / "Pro".
+         A literal newline in AndroidManifest's android:label is collapsed to a
+         space by the XML parser, so the break has to live in a string resource. -->
+    <string name="app_name">Hydrawav3\nPro</string>
+</resources>

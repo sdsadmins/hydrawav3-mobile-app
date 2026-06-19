@@ -60,6 +60,16 @@ class SessionEngineState {
   /// Shown in the live session tracker for Plus devices.
   final Map<String, int> protocolPlusDelayByDevice;
 
+  /// True while a Plus device is in the BREAK between two stacked protocols —
+  /// its current protocol has finished on the firmware and the next protocol's
+  /// START_PROTOCOL switch hasn't landed yet. Drives the live break banner.
+  final Map<String, bool> protocolPlusOnBreakByDevice;
+
+  /// Seconds remaining in the current break for a Plus device (0 once the break
+  /// elapses and we're just waiting for the server switch to land). Only
+  /// meaningful while [protocolPlusOnBreakByDevice] is true for that device.
+  final Map<String, int> protocolPlusBreakRemainingByDevice;
+
   final String? error;
 
   const SessionEngineState({
@@ -82,6 +92,8 @@ class SessionEngineState {
     this.protocolPlusSequenceByDevice = const {},
     this.protocolPlusIndexByDevice = const {},
     this.protocolPlusDelayByDevice = const {},
+    this.protocolPlusOnBreakByDevice = const {},
+    this.protocolPlusBreakRemainingByDevice = const {},
     this.error,
   });
 
@@ -105,6 +117,8 @@ class SessionEngineState {
     Map<String, List<String>>? protocolPlusSequenceByDevice,
     Map<String, int>? protocolPlusIndexByDevice,
     Map<String, int>? protocolPlusDelayByDevice,
+    Map<String, bool>? protocolPlusOnBreakByDevice,
+    Map<String, int>? protocolPlusBreakRemainingByDevice,
     String? error,
   }) {
     return SessionEngineState(
@@ -133,6 +147,10 @@ class SessionEngineState {
           protocolPlusIndexByDevice ?? this.protocolPlusIndexByDevice,
       protocolPlusDelayByDevice:
           protocolPlusDelayByDevice ?? this.protocolPlusDelayByDevice,
+      protocolPlusOnBreakByDevice:
+          protocolPlusOnBreakByDevice ?? this.protocolPlusOnBreakByDevice,
+      protocolPlusBreakRemainingByDevice: protocolPlusBreakRemainingByDevice ??
+          this.protocolPlusBreakRemainingByDevice,
       error: error,
     );
   }
@@ -176,6 +194,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// session (some Plus, some normal) only these devices skip the auto-STOP /
   /// "completed" transition when a single protocol's duration elapses.
   final Set<String> _protocolPlusDeviceIds = <String>{};
+
+  /// Device-elapsed at which the CURRENTLY running protocol of a Plus device
+  /// finishes on the firmware. Set for protocol[0] when the run starts and
+  /// recomputed on every START_PROTOCOL switch. Once the device's elapsed
+  /// passes this, the device is in the break window until the next switch
+  /// lands — this is what drives the break countdown in the tick loop.
+  final Map<String, Duration> _plusSegmentEndByDevice = {};
 
   Future<void> _stateUpdateQueue = Future.value();
   static const int _blePauseByte = 0x02;
@@ -480,6 +505,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _wallClockAnchor = null;
     _monotonicAnchor = Duration.zero;
     _deviceClockOffset.clear();
+    _plusSegmentEndByDevice.clear();
     _startInProgress = false;
     _deviceStopwatches
       ..clear()
@@ -858,12 +884,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final updatedIndexByDevice =
         Map<String, int>.from(state.protocolPlusIndexByDevice)
           ..[mac] = protocolIndex;
+
+    // The switch landing IS the end of the break: this protocol now runs, so
+    // re-base the segment end to "now + this protocol's runtime" and clear any
+    // break flag for the device. The next break begins when this elapses.
+    _plusSegmentEndByDevice[mac] = _deviceElapsed(mac) +
+        Duration(seconds: _plusProtocolDurationSeconds(newProtocol));
+    final clearedOnBreak = Map<String, bool>.from(state.protocolPlusOnBreakByDevice)
+      ..[mac] = false;
+    final clearedBreakRemaining =
+        Map<String, int>.from(state.protocolPlusBreakRemainingByDevice)
+          ..[mac] = 0;
     try {
       state = state.copyWith(
         protocolByDevice: updatedByDevice,
         advancedSettingsByDevice: updatedSettingsByDevice,
         protocolPlusIndex: protocolIndex,
         protocolPlusIndexByDevice: updatedIndexByDevice,
+        protocolPlusOnBreakByDevice: clearedOnBreak,
+        protocolPlusBreakRemainingByDevice: clearedBreakRemaining,
       );
       // Reflect the Protocol Plus switch in the foreground notification.
       _pushNotificationSync();
@@ -1009,6 +1048,36 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (deviceIds.isNotEmpty) _isProtocolPlus = true;
   }
 
+  /// Device-elapsed (monotonic + slept-time catch-up) for [id].
+  Duration _deviceElapsed(String id) =>
+      (_deviceStopwatches[id]?.elapsed ?? Duration.zero) +
+      (_deviceClockOffset[id] ?? Duration.zero);
+
+  /// Firmware runtime of a single sub-protocol, in seconds — used to predict
+  /// when one protocol in the stack ends and the break to the next begins.
+  /// Mirrors the duration the server uses to schedule START_PROTOCOL switches.
+  int _plusProtocolDurationSeconds(Protocol p) =>
+      _computeFirmwareTotalDurationSeconds(p, _advancedSettingsForProtocol(p));
+
+  /// Seed each Plus device's first-protocol segment end (protocol[0]). Called
+  /// once the run starts ticking; the break tracker reads these in [_onTick].
+  void _initPlusSegmentEnds() {
+    final ids = _plusDeviceIds();
+    if (ids.isEmpty) return;
+    for (final id in ids) {
+      final first = state.protocolByDevice[id];
+      if (first == null) continue;
+      _plusSegmentEndByDevice[id] =
+          Duration(seconds: _plusProtocolDurationSeconds(first));
+    }
+  }
+
+  /// Devices running a Protocol Plus sequence — the explicit set, falling back
+  /// to the per-device sequence map (single-Plus sessions populate one or both).
+  Iterable<String> _plusDeviceIds() => _protocolPlusDeviceIds.isNotEmpty
+      ? _protocolPlusDeviceIds
+      : state.protocolPlusSequenceByDevice.keys;
+
   /// Override per-device total durations (each Protocol Plus has its own total
   /// length). The overall session timer tracks the longest device. Call after
   /// loadSession(), before start().
@@ -1073,6 +1142,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.reset();
       _stopwatch.start();
     }
+    _initPlusSegmentEnds();
     _anchorWallClock();
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
@@ -1600,11 +1670,25 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await _publishWifiPlayCmdToMac(deviceId, 2);
     } else {
       final connector = _ref.read(bleConnectorProvider);
-      if (!connector.isConnected(deviceId)) {
+      if (connector.isConnected(deviceId)) {
+        await connector.writeToDevice(deviceId, [_bleStopByte]);
+      } else if (_protocolPlusDeviceIds.contains(deviceId)) {
+        // Protocol Plus between protocols: the firmware has finished the current
+        // protocol and is IDLE (BLE link expected to be down during the break),
+        // so there's nothing running to desync. Skip the unreachable STOP write
+        // but STILL end the run locally — the controller, on the engine's
+        // terminal state, cancels the server-scheduled remaining protocols so no
+        // further START_PROTOCOL switch fires.
+        appLogger.i(
+          'Session: stopDevice — $deviceId (Plus) idle/disconnected during '
+          'break; ending run + cancelling server schedule',
+        );
+      } else {
+        // Normal run: a disconnected device keeps running autonomously, so
+        // flipping it to stopped would desync app vs device. Leave it alone.
         appLogger.w('Session: stopDevice skipped — $deviceId not connected');
         return;
       }
-      await connector.writeToDevice(deviceId, [_bleStopByte]);
     }
     _deviceStopwatches[deviceId]?.stop();
     final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
@@ -1713,6 +1797,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     _isProtocolPlus = false;
     _protocolPlusDeviceIds.clear();
+    _plusSegmentEndByDevice.clear();
     try {
       state = const SessionEngineState();
       unawaited(_ref
@@ -1822,6 +1907,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     final overallStatus = _deriveOverallStatus(updatedStatuses);
 
+    final (onBreakByDevice, breakRemainingByDevice) =
+        _computeBreakState(updatedStatuses);
+
     try {
       state = state.copyWith(
         timer: state.timer.copyWith(
@@ -1834,6 +1922,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         deviceTimers: updatedTimers,
         deviceStatuses: updatedStatuses,
         status: overallStatus,
+        protocolPlusOnBreakByDevice: onBreakByDevice,
+        protocolPlusBreakRemainingByDevice: breakRemainingByDevice,
       );
     } catch (e) {
       appLogger.d('Session: tick state update ignored (notifier disposed)');
@@ -1850,6 +1940,43 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       // notification so that device shows as completed/stopped.
       _pushNotificationSync();
     }
+  }
+
+  /// Derive the live break state for every Plus device: a device is "on break"
+  /// once its current protocol's runtime has elapsed but the next protocol's
+  /// START_PROTOCOL switch hasn't landed yet. The remaining seconds count down
+  /// the [protocolPlusDelayByDevice] gap; they sit at 0 if the server switch is
+  /// running late. Returns empty maps when no Plus device is mid-break, so the
+  /// state stays referentially stable (no needless rebuilds).
+  (Map<String, bool>, Map<String, int>) _computeBreakState(
+    Map<String, SessionStatus> statuses,
+  ) {
+    final onBreak = <String, bool>{};
+    final remaining = <String, int>{};
+    for (final id in _plusDeviceIds()) {
+      if (statuses[id] != SessionStatus.running) continue;
+      final sequence = state.protocolPlusSequenceByDevice[id];
+      if (sequence == null || sequence.isEmpty) continue;
+      final index = state.protocolPlusIndexByDevice[id] ?? 0;
+      // No break after the final protocol — nothing comes next.
+      if (index >= sequence.length - 1) continue;
+      final segEnd = _plusSegmentEndByDevice[id];
+      if (segEnd == null) continue;
+      final devElapsed = _deviceElapsed(id);
+      if (devElapsed < segEnd) continue;
+      final delay = state.protocolPlusDelayByDevice[id] ?? 0;
+      final left = (segEnd.inSeconds + delay) - devElapsed.inSeconds;
+      onBreak[id] = true;
+      remaining[id] = left > 0 ? left : 0;
+    }
+    // Preserve identity when nothing is on break to avoid churn.
+    if (onBreak.isEmpty && state.protocolPlusOnBreakByDevice.isEmpty) {
+      return (
+        state.protocolPlusOnBreakByDevice,
+        state.protocolPlusBreakRemainingByDevice,
+      );
+    }
+    return (onBreak, remaining);
   }
 
   void _calculateCurrentPosition(Duration elapsed) {

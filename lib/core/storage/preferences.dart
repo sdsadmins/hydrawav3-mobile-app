@@ -33,8 +33,9 @@ class PreferencesService {
   Future<void> setLastDeviceId(String id) =>
       _prefs.setString(_lastDeviceIdKey, id);
 
-  // Theme mode: 'light', 'dark', 'system'
-  String get themeMode => _prefs.getString(_themeModeKey) ?? 'system';
+  // Theme mode: 'light', 'dark', 'system'. Defaults to light so a first-time
+  // user always opens in light mode regardless of the device theme.
+  String get themeMode => _prefs.getString(_themeModeKey) ?? 'light';
   Future<void> setThemeMode(String mode) =>
       _prefs.setString(_themeModeKey, mode);
 

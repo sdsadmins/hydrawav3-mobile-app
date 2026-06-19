@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'dart:ui';
 
@@ -120,59 +121,55 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
               child: SafeArea(
                 bottom: false,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                   child: AnimatedEntrance(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        /// 🔥 LEFT SIDE
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        /// 🔥 TOP BAR — "Home" (left) + logo (center) + org name (right)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Text(
-                              'Home',
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w700,
-                                color: ThemeConstants.textPrimary,
-                                letterSpacing: -0.5,
+                            Expanded(
+                              child: Text(
+                                'Home',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: ThemeConstants.textPrimary,
+                                ),
                               ),
                             ),
-
-                            const SizedBox(height: 6),
-
-                            /// ✅ SHOW ORG NAME ONLY
-                            Text(
-                              auth.selectedOrgName ?? 'No Organization',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: ThemeConstants.accent,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-
-                            const SizedBox(height: 6),
-
-                            Text(
-                              'Select a protocol to begin',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: ThemeConstants.textSecondary,
+                            const SizedBox(width: 8),
+                            const _HomeLogo(),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                auth.selectedOrgName ?? 'No Organization',
+                                textAlign: TextAlign.right,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: ThemeConstants.accent,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ],
                         ),
 
-                        /// 🔥 RIGHT SIDE ICONS
-                        // Commented out AI assistance button per request.
-                        // Row(
-                        //   children: [
-                        //     _HeaderButton(
-                        //       icon: Icons.smart_toy_outlined,
-                        //       onTap: () => context.push(RoutePaths.chat),
-                        //     ),
-                        //   ],
-                        // ),
+                        const SizedBox(height: 2),
+
+                        Text(
+                          'Select a protocol to begin',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: ThemeConstants.textSecondary,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -918,27 +915,23 @@ class _PulseDotState extends State<_PulseDot>
   }
 }
 
-class _HeaderButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _HeaderButton({required this.icon, required this.onTap});
+/// Hydrawav3 wordmark in the home header. Theme-aware so it stays visible on
+/// both backgrounds: the black logo on light, the white logo on dark.
+class _HomeLogo extends StatelessWidget {
+  const _HomeLogo();
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: ThemeConstants.accent.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: ThemeConstants.accent.withValues(alpha: 0.15),
-          ),
-        ),
-        child: Icon(icon, color: ThemeConstants.accent, size: 20),
-      ),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Both logos are SVGs sharing the SAME viewBox, so one width renders an
+    // identical size in either theme. Dark uses the white variant (which keeps
+    // the tan accent); light uses the black variant.
+    return SvgPicture.asset(
+      isDark
+          ? 'assets/images/Hydrawav3_White_Logo.svg'
+          : 'assets/images/Hydrawav3_Black_Logo.svg',
+      width: 200,
+      fit: BoxFit.contain,
     );
   }
 }

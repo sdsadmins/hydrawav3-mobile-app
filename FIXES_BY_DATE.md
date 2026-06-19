@@ -1,0 +1,86 @@
+# Hydrawav3 Mobile App — Fixes Log (by date)
+
+> The dated record of **what was actually fixed**, newest first. Each entry keeps the root cause, the change, and the files touched.
+> The high-level checklist lives in [MOBILE_BUG_TRACKER.md](MOBILE_BUG_TRACKER.md) — there a bug is simply **crossed out** once it lands here.
+> Forward-looking feature work lives in [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md).
+
+---
+
+## 2026-06-17
+
+| ID | Title | What changed | File(s) |
+|----|-------|--------------|---------|
+| B-24 / F-11 | **90-second break between stacked protocols + highlight next** | Completed the partial B-32 work with a **live break countdown / idle UI**. The engine predicts each protocol's runtime locally (mirroring the server's `getProtocolDurationSeconds + delay` switch schedule) and, once a Plus protocol's time elapses but the next `START_PROTOCOL` switch hasn't landed, flags the device **on break** with a counting-down `breakRemaining`. The switch landing (`applyProtocolPlusSwitch`) authoritatively ends the break and re-bases the next segment. UI: the session tracker shows a **"BREAK · Next: \<protocol>"** banner with a live `M:SS` countdown, the finished stop collapses to ✓ (past), the next stop pulses as **"UP NEXT"** (hourglass), and the connector between them shows the live remaining seconds (falls back to **"SWITCHING…"** if the server switch runs late). | `session/services/session_engine.dart` (segment-end tracking + `_computeBreakState`), `session/presentation/screens/session_screen.dart` (break banner, `isNext` route stop, active route track) |
+| B-24 (follow-up) | **Stop button unusable during the stack break** | The firmware physically stops and **drops the BLE link during the break gap**, which tripped the existing "disconnected → disable controls" guard and greyed out Stop. Now the Plus Stop button stays enabled during a break (`blockStop = disconnected && !plusOnBreak`), and `stopDevice` for a Plus device skips the unreachable BLE STOP write but **still ends the run locally** — the controller then cancels the remaining server-scheduled `START_PROTOCOL` switches via `stopServerSession()`. Normal (non-Plus) runs keep the old guard. | `session/presentation/screens/session_screen.dart`, `session/services/session_engine.dart` |
+
+### Feature delivery
+| Release / item | What shipped | Files |
+|----------------|--------------|-------|
+| Release 1 — **Music sync** (foreground-only) | Session "Atmosphere" looping music mirroring the web app. New `musics` feature (model + `/musics` remote source + `musicListProvider`). New crash-proof `SessionMusicController` (single `just_audio` player + `audio_session` `music()` category for iOS silent-switch + call-interruption handling; every audio op try/caught so it can never break a session). Wired into the live session: a Music button in the AppBar opens an Atmosphere bottom sheet (track picker + mute + "None"); playback is gated on `session running && app foreground` and stops on leaving the screen. **Foreground-only by design** — no iOS background-audio mode / Android media foreground service, so the next store build adds no new permissions. `just_audio 0.9.46` + `audio_session 0.1.25` (Android 10+/iOS 13+ — the app's full range). **Android verified playing on-device (2026-06-17); iOS not yet tested (silent-switch + call interruption pending).** | `features/musics/**`, `core/constants/api_endpoints.dart`, `session/presentation/screens/session_screen.dart`, `pubspec.yaml` |
+
+---
+
+## 2026-06-15
+
+| ID | Title | What changed | File(s) |
+|----|-------|--------------|---------|
+| B-33 | **Device Fleet / WiFi list spins forever for some accounts** (e.g. admin `596`; practitioner `525` was fine) | Root cause: an **infinite token-refresh loop** in the auth interceptor — a 401 (role with no access to `/admin/sensors/organisation/{id}`) triggered a refresh, then retried via `djangoDio.fetch()` which **re-runs the whole interceptor chain** → 401 → refresh → retry → … forever, so the caller's `Future` never completed. Added a **one-retry guard** (`requestOptions.extra['__authRetried__']`) so a second 401 propagates instead of looping. | `core/network/auth_interceptor.dart` |
+| B-34 | **Logout not working** (silently did nothing; `CircularDependencyError`) | `logout()` called `ref.invalidate(wifiDevicesByOrgProvider)`, but that provider **watches** `authStateProvider` → invalidating it from inside the auth notifier threw `CircularDependencyError` and aborted logout before the state reset. Removed the invalidate — the provider already re-runs (and returns `[]`) when auth state resets. | `auth/.../auth_provider.dart` |
+| B-35 | **Devices page showed the previous logged-in user's devices** | Provider fell back to "**first org** in `/admin/organizations`" whenever the profile lacked an org id, and the org id wasn't being parsed from the login/profile JSON. Now resolves `selectedOrgId → user.organizationId` (no first-org guess; returns `[]` if neither), and org parsing tolerates `organization{.id/_id}` / `organizationId` / `organization_id`. | `devices/.../wifi_devices_provider.dart`, `auth/domain/auth_models.dart` |
+| B-36 | **Device fetch threw a red error on 401/403/404/204** instead of showing empty | `getDevicesByOrg`/`getDevices` now return `[]` for 401/403/404/204 (no access / no devices), matching the web's `getSensorsByorgId`. Fleet page also renders empty/last-known value instead of an infinite spinner (extends B-20 to the registration screen). | `devices/data/device_remote_source.dart`, `devices/.../device_register_screen.dart` |
+| B-37 | **No pull-to-refresh** on Device Registration & Protocol List (Home) pages | Added `RefreshIndicator` to both — fleet re-fetches `wifiDevicesByOrgProvider` (pull works even on empty/error states); Home re-fetches `protocolListProvider` + `goalTagListProvider`. | `devices/.../device_register_screen.dart`, `protocols/.../protocol_list_screen.dart` |
+
+---
+
+## 2026-06-12
+
+| ID | Title | What changed | File(s) |
+|----|-------|--------------|---------|
+| B-30 | **Register New Hardware scan inconsistent / "keeps scanning" / flickers** | Empty state was bound to the raw `FlutterBluePlus.isScanning` stream, which toggles every scan→pause→rescan cycle, flipping the panel between a spinner and "NO DEVICES". Now renders only from the stable merged `bleScanResultsProvider` (like the Devices list screen) with a single steady "Searching for Hydrawav3 Devices" state; de-flickered the rescan button; after a failed tap-to-connect, discovery auto-resumes instead of freezing. | `devices/.../device_register_screen.dart`, `core/constants/ble_constants.dart` |
+| U-06 / F-08 | **Colors exactly match web app** | Re-skinned the whole app to the Hydra web brand palette (values sourced from `Hydrawav3-ai/app/globals.css`): cream canvas, **white cards**, tan accent, dark-slate bottom nav, dark/tan segmented toggles, fixed `onAccent` text. Rebranded **both** light & dark palettes from the centralized `ThemePalette` (~950 usages). Unified toggle styling across Devices list, History tab, Register tabs, and the protocol **goal** chips. Removed card glow/gradient halos + the decorative blob on the Active Devices card; flattened protocol cards and `GlowIconBox`. | `core/constants/theme_constants.dart`, `core/theme/app_theme.dart`, `core/router/app_router.dart`, `core/theme/widgets/premium.dart`, `protocols/.../protocol_list_screen.dart`, `devices/.../device_list_screen.dart`, `history/.../history_list_screen.dart`, `devices/.../device_register_screen.dart` |
+| B-23 | **"Select Protocol" time ≠ live session time** | Picker duration now reconciled with the live session time (`startDelay` accounted for). | — |
+| B-31 | **Protocol durations wrong in "All" list; Protocol Plus shows 00:00** | Two bugs, verified against the live API: (1) `totalDurationSeconds` ignored `pause_seconds`, misused `cycle_pause`, and hardcoded the edge cycle as `9` — rewrote it to mirror the backend `getProtocolsByGoalTagId` formula exactly. (2) Protocol Plus entries carry a server `totalDuration` (e.g. 1730s) but **no `cycles`**, so the cycle math returned 0 — now parses `totalDuration` into `apiTotalDurationSeconds` and uses it when present. | `protocols/domain/protocol_model.dart` |
+| B-32 | **Show the delay/break time between stacked protocols** (value only) | Threaded the protocol-plus `delay` (e.g. 88s) from the API → engine (`protocolPlusDelayByDevice`) → session UI. The Protocol Plus tracker shows the break time on the connector line between protocols. *(Full live countdown/idle UI finished later under B-24, 2026-06-17.)* | `session/services/session_engine.dart`, `session/services/protocol_plus_controller.dart`, `session/presentation/screens/session_screen.dart` |
+| U-02 | **General timing confirmed correct** | Wall-clock reconcile verified on device; session timing now correct. | — (device-tested) |
+| U-05 | **Device now detected during WiFi registration scan** | Device-tested; devices appear during WiFi registration scan. | — (device-tested) |
+
+### Diagnosis only (no code change)
+- **iPhone 17 — BLE devices not appearing (shows up to iPhone 16)** — Investigated; no app-side defect found (scan is unfiltered, permissions/Info.plist correct). Likely the new Apple **N1** chip + iOS 26 + `flutter_blue_plus` lag (project on **1.36.8**; latest **2.3.8**, a paid-license major). Next step (free): have an iPhone 17 user run **nRF Connect** — if it finds the Hydra, the plugin is the cause; else firmware/iOS. Related to **U-04**.
+
+---
+
+## 2026-06-10
+
+| ID | Title | What changed | File(s) |
+|----|-------|--------------|---------|
+| B-15 / F-02 | **"In Use" → "Use"** toggle label | Label now reads `Use`. | `devices/.../device_list_screen.dart` |
+| B-16 | **Privacy policy URL** wrong domain | `hydrawav3.app/privacy` → `https://www.hydrawav3.com/privacy` (+ terms). | `core/constants/app_constants.dart` |
+| B-17 / F-01 | **Default protocol** should be Deep-Tension Recovery Stack | Corrected default to full name; protocol title wraps to 2 lines so the full name shows. | `devices/.../device_list_screen.dart` |
+| B-18 / F-03 | **Autoconnect should default ON** | Default value now `true`; on unless explicitly turned off (still persisted across restarts). | `core/storage/preferences.dart` |
+| B-19 | **MAC ID + name fields auto-populate** with previous entry on "+ new device" | `_clearScanSelection()` now also clears the MAC + name controllers. | `devices/.../device_register_screen.dart` |
+| B-20 | **Can't remove last active device → infinite spinner** | Lists render from last-known value; show "No registered devices" on reload; spinner only on first load. | `devices/.../device_list_screen.dart` |
+| B-21 / F-04 | **No recently-used protocols list** | New persisted `recentProtocolIdsProvider` + "Recently used" chip strip at top of protocol picker; selecting a protocol records it (max 8, persists). | `protocols/.../protocol_provider.dart`, `devices/.../device_list_screen.dart`, `core/storage/preferences.dart` |
+| B-27 | **Session history not newest-first** | Sort the history list by `createdAt` descending in the app (backend returns it unsorted). | `history/presentation/screens/history_list_screen.dart` |
+| B-28 / F-12 | **Home "Protocols" header text too small** | Replaced the small grey `SectionHeader` with a larger icon + 16px bold header matching "Active Devices". | `protocols/presentation/screens/protocol_list_screen.dart` |
+| B-29 | **Foreground notification basic & out of sync** | Rebuilt as a **Spotify-style media notification** (`Notification.MediaStyle`, no new deps): protocol-name title, per-device colored dots (🟢/🟡/🔴/⚪), "X of Y devices running" summary, live timer, tap-to-open, Pause/Resume + Stop row. Added `ACTION_UPDATE` sync so it tracks Protocol Plus switches, per-device completion, pause/resume, overall status. | `android/.../BleForegroundService.kt`, `android/.../MainActivity.kt`, `session/services/background_session_runtime.dart`, `session/services/session_engine.dart` |
+
+---
+
+## Already fixed in code (verified earlier, pre-2026-06-10)
+
+| ID | Title | Evidence |
+|----|-------|----------|
+| B-01 | Recovery/protocol **stack stuck on first protocol**, doesn't advance (BLE & WiFi) | `session/services/protocol_plus_controller.dart` (START_PROTOCOL listener advances each protocol) |
+| B-02 | **Live session not terminating** after device stops/completes | `session/services/session_engine.dart` (auto-completes + sends STOP at elapsed ≥ total) |
+| B-03 | **Session timings missing / read 00:00** for new protocols | `protocols/domain/protocol_model.dart` (`totalDurationSeconds` computed for every protocol) |
+| B-04 | **Can't stop protocol on WiFi** after leaving/returning to live page | `session/presentation/screens/session_screen.dart` (Stop button always rendered for WiFi) |
+| B-05 | **Tablet sleep stops timer** | `session_screen.dart` WakelockPlus + `session_engine.dart` wall-clock reconcile |
+| B-06 | **Bluetooth not always connecting** | `ble/services/ble_connector.dart` (6s timeout + retry w/ backoff, 5 attempts) |
+| B-07 | **2 devices same name / different MAC** in BT list | `ble/services/ble_scanner.dart` (dedup keyed on MAC, UI shows both) |
+| B-08 | **Intermittent connect/disconnect loop w/ 2nd device** | `ble/services/auto_connect_manager.dart` (concurrent-connect cap + scan-stop-before-connect) |
+| B-09 | **Shaky scrolling (Android)** scan list | `ble/services/ble_scanner.dart` (stable merged list, stale filtering) |
+| B-10 / F-05 | **Scan button should continuously scan** every few sec | `ble/services/ble_scanner.dart` (auto-restart loop) |
+| B-11 | **iPhone BLE registration** (name change + WiFi password) | `devices/.../device_register_screen.dart` (iOS scan-then-connect path) |
+| B-12 | **"hydra-" prefix naming inconsistency** | `device_register_screen.dart` (prefix normalized at register/edit) |
+| B-13 | **Session history shows link string not device name** | `history/presentation/screens/history_list_screen.dart` (resolves `deviceName`) |
+| B-14 | **iPhone disconnects when moved a few feet** | `ble/services/ble_connector.dart` (auto-reconnect; reactive only, no RSSI) |
