@@ -6,6 +6,7 @@ import '../../features/auth/presentation/providers/auth_provider.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
+import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/devices/presentation/screens/device_detail_screen.dart';
 import '../../features/devices/presentation/screens/device_list_screen.dart';
 import '../../features/devices/presentation/screens/device_register_screen.dart';
@@ -46,6 +47,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       final isAuthRoute = state.matchedLocation == RoutePaths.login ||
           state.matchedLocation == RoutePaths.signup ||
+          state.matchedLocation == RoutePaths.onboarding ||
           state.matchedLocation == RoutePaths.forgotPassword;
 
       final isSelectingOrg = state.matchedLocation == '/select-organization';
@@ -88,6 +90,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: RoutePaths.signup,
           name: RouteNames.signup,
           builder: (c, s) => const SignupScreen()),
+      GoRoute(
+          path: RoutePaths.onboarding,
+          name: RouteNames.onboarding,
+          builder: (c, s) => const OnboardingScreen()),
       GoRoute(
         path: '/select-organization',
         name: RouteNames.selectOrganization,

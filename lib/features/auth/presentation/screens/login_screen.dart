@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../domain/auth_models.dart';
 import '../providers/auth_provider.dart';
@@ -44,12 +43,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _openOnboarding() async {
+    // Account creation is handled on the web onboarding page, shown INSIDE the
+    // app (SFSafariViewController on iOS / Custom Tab on Android) rather than
+    // the external browser. App Store Guideline 4 rejects handing sign-up off
+    // to the system browser; an in-app browser view is the sanctioned fix.
     final uri = Uri.parse('https://hydrawav3.app/onboarding.html');
-    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!opened && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open onboarding page.')),
-      );
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
     }
   }
 

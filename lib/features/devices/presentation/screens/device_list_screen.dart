@@ -514,8 +514,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 8),
+                                // Horizontal strip of protocol-style cards (same
+                                // look as the protocol list below), not goal
+                                // capsules.
                                 SizedBox(
-                                  height: 38,
+                                  height: 116,
                                   child: ListView.separated(
                                     scrollDirection: Axis.horizontal,
                                     itemCount: recentOptions.length,
@@ -523,16 +526,19 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         const SizedBox(width: 8),
                                     itemBuilder: (_, i) {
                                       final protocol = recentOptions[i];
-                                      return _GoalFilterChip(
-                                        label: protocol.templateName,
-                                        selected: protocol.id == currentId,
-                                        onTap: () {
-                                          ref
-                                              .read(recentProtocolIdsProvider
-                                                  .notifier)
-                                              .recordUsed(protocol.id);
-                                          Navigator.of(ctx).pop(protocol.id);
-                                        },
+                                      return SizedBox(
+                                        width: 300,
+                                        child: _recentProtocolCard(
+                                          protocol,
+                                          selected: protocol.id == currentId,
+                                          onTap: () {
+                                            ref
+                                                .read(recentProtocolIdsProvider
+                                                    .notifier)
+                                                .recordUsed(protocol.id);
+                                            Navigator.of(ctx).pop(protocol.id);
+                                          },
+                                        ),
                                       );
                                     },
                                   ),
@@ -717,6 +723,93 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
               },
             );
           },
+        ),
+      ),
+    );
+  }
+
+  /// A "Recently used" entry rendered with the SAME card styling as the main
+  /// protocol list (icon, name, description, "goal - duration" meta) instead of
+  /// the old goal-tag capsule.
+  Widget _recentProtocolCard(
+    ProtocolSelectionOption protocol, {
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final meta = [
+      if (protocol.goalTagName?.isNotEmpty ?? false) protocol.goalTagName!,
+      if (protocol.totalDuration != null) protocol.totalDuration!.formatted,
+    ].join(' - ');
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.14)
+              : ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.check_circle_rounded : Icons.science_outlined,
+              size: 18,
+              color: selected
+                  ? ThemeConstants.accent
+                  : ThemeConstants.textTertiary,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    protocol.templateName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: ThemeConstants.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  if (protocol.description.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        protocol.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: ThemeConstants.textSecondary,
+                          fontSize: 12,
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                  if (meta.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        meta,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: ThemeConstants.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2122,61 +2215,82 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     flex: 5,
-                    child: InkWell(
-                      onTap: onToggleAdvanced,
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        height: 34,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: advancedEnabled
-                              ? ThemeConstants.accent.withValues(alpha: 0.12)
-                              : ThemeConstants.surfaceVariant,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
+                    child: Builder(
+                      builder: (context) {
+                        final chip = Container(
+                          height: 34,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
                             color: advancedEnabled
-                                ? ThemeConstants.accent.withValues(alpha: 0.25)
-                                : ThemeConstants.border,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.tune_rounded,
-                              size: 15,
+                                ? ThemeConstants.accent.withValues(alpha: 0.12)
+                                : ThemeConstants.surfaceVariant,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
                               color: advancedEnabled
                                   ? ThemeConstants.accent
-                                  : ThemeConstants.textTertiary,
+                                      .withValues(alpha: 0.25)
+                                  : ThemeConstants.border,
                             ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                advancedEnabled ? 'Advanced' : 'Locked',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: advancedEnabled
-                                      ? ThemeConstants.textPrimary
-                                      : ThemeConstants.textTertiary,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.tune_rounded,
+                                size: 15,
+                                color: advancedEnabled
+                                    ? ThemeConstants.accent
+                                    : ThemeConstants.textTertiary,
+                              ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  'Advanced',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: advancedEnabled
+                                        ? ThemeConstants.textPrimary
+                                        : ThemeConstants.textTertiary,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 2),
-                            Icon(
-                              showAdvanced
-                                  ? Icons.keyboard_arrow_up_rounded
-                                  : Icons.keyboard_arrow_down_rounded,
-                              size: 14,
-                              color: advancedEnabled
-                                  ? ThemeConstants.textSecondary
-                                  : ThemeConstants.textTertiary,
-                            ),
-                          ],
-                        ),
-                      ),
+                              const SizedBox(width: 2),
+                              // Enabled → expand/collapse chevron. Disabled →
+                              // a lock to signal it's a premium/upgrade gate.
+                              Icon(
+                                advancedEnabled
+                                    ? (showAdvanced
+                                        ? Icons.keyboard_arrow_up_rounded
+                                        : Icons.keyboard_arrow_down_rounded)
+                                    : Icons.lock_outline_rounded,
+                                size: 14,
+                                color: advancedEnabled
+                                    ? ThemeConstants.textSecondary
+                                    : ThemeConstants.textTertiary,
+                              ),
+                            ],
+                          ),
+                        );
+
+                        // Enabled: tap toggles the Advanced panel.
+                        if (advancedEnabled) {
+                          return InkWell(
+                            onTap: onToggleAdvanced,
+                            borderRadius: BorderRadius.circular(999),
+                            child: chip,
+                          );
+                        }
+
+                        // Disabled (greyed): tap pops an upgrade info bubble.
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _showAdvancedUpgradeInfo(context),
+                          child: chip,
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -2230,6 +2344,83 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                         padding: const EdgeInsets.only(top: 14),
                         child: advancedChild,
                       ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Info bubble shown when the greyed-out "Advanced" control is tapped: it's a
+  /// premium feature, so prompt the user to upgrade their account.
+  void _showAdvancedUpgradeInfo(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.25),
+      builder: (ctx) => Dialog(
+        backgroundColor: ThemeConstants.surface,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: ThemeConstants.accent.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.lock_outline_rounded,
+                  color: ThemeConstants.accent,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Advanced is a premium feature',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: ThemeConstants.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Upgrade your account to unlock advanced session settings.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  color: ThemeConstants.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: ThemeConstants.accent,
+                    foregroundColor: ThemeConstants.onAccent,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Got it',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
               ),
             ],
           ),

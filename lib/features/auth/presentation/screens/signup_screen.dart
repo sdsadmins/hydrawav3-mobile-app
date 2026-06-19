@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/router/route_names.dart';
 
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
@@ -110,14 +110,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                     SizedBox(
                         height: 48,
                         child: ElevatedButton(
-                            onPressed: () async {
-                              if (!_formKey.currentState!.validate()) return;
-                              final uri =
-                                  Uri.parse('https://hydrawav3.app/signup');
-                              if (await canLaunchUrl(uri))
-                                await launchUrl(uri,
-                                    mode: LaunchMode.externalApplication);
-                            },
+                            onPressed: () =>
+                                context.pushReplacement(RoutePaths.onboarding),
                             child: Text('Create Account'))),
                     const SizedBox(height: 16),
                     Row(mainAxisAlignment: MainAxisAlignment.center, children: [

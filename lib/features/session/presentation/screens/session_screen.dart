@@ -16,6 +16,8 @@ import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
+import '../../../musics/presentation/providers/music_provider.dart';
+import '../../../musics/services/session_music_controller.dart';
 import '../../services/session_engine.dart';
 import '../../services/protocol_plus_controller.dart';
 import '../../domain/session_model.dart';
@@ -114,6 +116,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Captured in initState so it can be disposed without touching `ref` later.
   ProtocolPlusController? _protocolPlusController;
 
+  /// Session "Atmosphere" music — captured in initState so play/pause can be
+  /// driven from lifecycle/status callbacks and stopped on dispose.
+  SessionMusicController? _musicController;
+
+  /// Whether the app is currently in the foreground. Music is foreground-only,
+  /// so this gates playback alongside the session-running state.
+  bool _isForeground = true;
+
   /// Guards the one-time socket connect (bindings can arrive synchronously via
   /// the widget or late via [protocolPlusBindingsProvider] — connect only once).
   bool _plusSocketConnected = false;
@@ -137,6 +147,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // Observe app lifecycle so we can reconcile the timer + restart its ticker
     // when the app returns to the foreground (screen was off / app backgrounded).
     WidgetsBinding.instance.addObserver(this);
+    _musicController = ref.read(sessionMusicControllerProvider.notifier);
     _activeSessionId = _findMatchingActiveSessionId();
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
 
@@ -155,7 +166,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             nextS == SessionStatus.running || nextS == SessionStatus.paused;
         final wasActive =
             prevS == SessionStatus.running || prevS == SessionStatus.paused;
-        if (statusChanged) _applyWakelockForStatus(nextS);
+        if (statusChanged) {
+          _applyWakelockForStatus(nextS);
+          // Music plays only while the session is actively running.
+          _syncMusicToSession(nextS);
+        }
         if (nowActive && !wasActive) {
           _startBackendPadPolling();
           unawaited(_ensureAndSyncFromEngineState(next));
@@ -203,6 +218,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // Keep the screen awake if this screen opens onto an already-live session
     // (e.g. re-entering from setup with skipEngineBootstrap=true).
     _applyWakelockForStatus(
+      ref.read(sessionEngineFamilyProvider(_engineKey)).status,
+    );
+
+    // Seed the music gate with the current session state (a track may already
+    // be selected from a prior screen visit, and the session may be running).
+    _syncMusicToSession(
       ref.read(sessionEngineFamilyProvider(_engineKey)).status,
     );
 
@@ -511,6 +532,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState appState) {
     super.didChangeAppLifecycleState(appState);
+
+    // Track foreground/background so music (foreground-only) pauses when the app
+    // is backgrounded / screen is off, and resumes on return while running.
+    final foreground = appState == AppLifecycleState.resumed;
+    if (foreground != _isForeground) {
+      _isForeground = foreground;
+      _syncMusicToSession(
+        ref.read(sessionEngineFamilyProvider(_engineKey)).status,
+      );
+    }
+
     if (appState != AppLifecycleState.resumed) return;
     // The periodic UI ticker is frozen while the app is backgrounded / the
     // screen is off, and the monotonic clock skips deep-sleep time — so the
@@ -521,6 +553,210 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     engine.onAppResumed();
     _applyWakelockForStatus(
       ref.read(sessionEngineFamilyProvider(_engineKey)).status,
+    );
+  }
+
+  /// Drive the session music gate from the current session status + foreground
+  /// state. Best-effort — the controller swallows any audio error.
+  void _syncMusicToSession(SessionStatus status) {
+    _musicController?.applyConditions(
+      sessionRunning: status == SessionStatus.running,
+      appForeground: _isForeground,
+    );
+  }
+
+  /// Bottom sheet to pick the session "Atmosphere" track + mute, mirroring the
+  /// web app. Music plays only while the session is running (foreground-only).
+  void _showAtmosphereSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: ThemeConstants.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return Consumer(
+          builder: (ctx, sheetRef, _) {
+            final music = sheetRef.watch(sessionMusicControllerProvider);
+            final controller =
+                sheetRef.read(sessionMusicControllerProvider.notifier);
+            final tracksAsync = sheetRef.watch(musicListProvider);
+            final maxHeight = MediaQuery.of(ctx).size.height * 0.6;
+
+            return SafeArea(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.graphic_eq_rounded,
+                              size: 20, color: ThemeConstants.accent),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Session Atmosphere',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: ThemeConstants.textPrimary,
+                              ),
+                            ),
+                          ),
+                          // Mute toggle (keeps the track running, silent).
+                          IconButton(
+                            tooltip: music.isMuted ? 'Unmute' : 'Mute',
+                            onPressed: music.hasTrack
+                                ? () => controller.toggleMute()
+                                : null,
+                            icon: Icon(
+                              music.isMuted
+                                  ? Icons.volume_off_rounded
+                                  : Icons.volume_up_rounded,
+                              color: music.hasTrack
+                                  ? ThemeConstants.textSecondary
+                                  : ThemeConstants.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Looping music plays while the session is running.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: ThemeConstants.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      // "None" — clear the current selection.
+                      _atmosphereTile(
+                        icon: Icons.not_interested_rounded,
+                        name: 'None',
+                        selected: !music.hasTrack,
+                        onTap: () => controller.clear(),
+                      ),
+                      const SizedBox(height: 8),
+                      Flexible(
+                        child: tracksAsync.when(
+                          loading: () => const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 28),
+                            child: Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                          error: (e, _) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 24),
+                            child: Text(
+                              'Couldn\'t load music.',
+                              style:
+                                  TextStyle(color: ThemeConstants.textSecondary),
+                            ),
+                          ),
+                          data: (tracks) {
+                            if (tracks.isEmpty) {
+                              return Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 24),
+                                child: Text(
+                                  'No music tracks available.',
+                                  style: TextStyle(
+                                    color: ThemeConstants.textSecondary,
+                                  ),
+                                ),
+                              );
+                            }
+                            return ListView.separated(
+                              shrinkWrap: true,
+                              physics: const ClampingScrollPhysics(),
+                              itemCount: tracks.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (_, i) {
+                                final track = tracks[i];
+                                final isActive = music.activeTrackId == track.id;
+                                final isAudible =
+                                    isActive && music.isPlaying && !music.isMuted;
+                                return _atmosphereTile(
+                                  icon: isActive
+                                      ? Icons.graphic_eq_rounded
+                                      : Icons.music_note_outlined,
+                                  name: track.name,
+                                  selected: isActive,
+                                  trailing: isAudible
+                                      ? Icon(Icons.equalizer_rounded,
+                                          size: 18,
+                                          color: ThemeConstants.accent)
+                                      : null,
+                                  onTap: () => controller.selectTrack(track),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// A selectable row in the Atmosphere sheet (track or the "None" option).
+  Widget _atmosphereTile({
+    required IconData icon,
+    required String name,
+    required bool selected,
+    Widget? trailing,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.12)
+              : ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon,
+                size: 18,
+                color: selected
+                    ? ThemeConstants.accent
+                    : ThemeConstants.textTertiary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: ThemeConstants.textPrimary,
+                ),
+              ),
+            ),
+            if (trailing != null) ...[const SizedBox(width: 8), trailing],
+          ],
+        ),
+      ),
     );
   }
 
@@ -552,6 +788,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Music is a session-screen feature — never let it outlive the screen.
+    unawaited(_musicController?.stopAndReset() ?? Future<void>.value());
     unawaited(_setWakelock(false));
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
@@ -998,6 +1236,46 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             context.pop();
           },
         ),
+        actions: [
+          Consumer(
+            builder: (context, musicRef, _) {
+              final music = musicRef.watch(sessionMusicControllerProvider);
+              final controller =
+                  musicRef.read(sessionMusicControllerProvider.notifier);
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Mute toggle — visible top-level control while a track is
+                  // active (mirrors the web's Mute button).
+                  if (music.hasTrack)
+                    IconButton(
+                      tooltip: music.isMuted ? 'Unmute' : 'Mute',
+                      onPressed: () => controller.toggleMute(),
+                      icon: Icon(
+                        music.isMuted
+                            ? Icons.volume_off_rounded
+                            : Icons.volume_up_rounded,
+                        color: music.isMuted
+                            ? ThemeConstants.textSecondary
+                            : ThemeConstants.accent,
+                      ),
+                    ),
+                  // Session "Atmosphere" music — accent when a track is active.
+                  IconButton(
+                    tooltip: 'Session music',
+                    onPressed: _showAtmosphereSheet,
+                    icon: Icon(
+                      music.hasTrack
+                          ? Icons.music_note_rounded
+                          : Icons.music_note_outlined,
+                      color: music.hasTrack ? ThemeConstants.accent : null,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
@@ -1046,6 +1324,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
                       plusDelaySeconds:
                           engine.protocolPlusDelayByDevice[id] ?? 0,
+                      plusOnBreak:
+                          engine.protocolPlusOnBreakByDevice[id] ?? false,
+                      plusBreakRemaining:
+                          engine.protocolPlusBreakRemainingByDevice[id] ?? 0,
                     );
                   },
                 ),
@@ -1125,10 +1407,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required String name,
     required int index,
     int delaySeconds = 0,
+    bool onBreak = false,
+    int breakRemaining = 0,
   }) {
     var currentIndex = index;
     if (currentIndex < 0) currentIndex = 0;
     if (currentIndex > names.length - 1) currentIndex = names.length - 1;
+    // While on break the current protocol has finished and the next is "up
+    // next" — there's always a next when on break (the engine never flags a
+    // break on the final protocol).
+    final hasNext = currentIndex < names.length - 1;
+    final breaking = onBreak && hasNext;
+    final nextIndex = breaking ? currentIndex + 1 : -1;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -1174,6 +1464,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               ),
             ],
           ),
+          // Break banner: the current protocol has finished and the next one
+          // starts after the device's break gap. Shows a live countdown.
+          if (breaking) ...[
+            const SizedBox(height: 12),
+            _buildBreakBanner(
+              nextName: names[nextIndex],
+              remaining: breakRemaining,
+            ),
+          ],
           const SizedBox(height: 14),
           // Horizontal route: stations + connecting track.
           Row(
@@ -1184,14 +1483,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   child: _routeStop(
                     index: i,
                     name: names[i],
-                    isActive: i == currentIndex,
-                    isPast: i < currentIndex,
+                    // During a break the finished protocol reads as "past" and
+                    // the next one is highlighted as "up next".
+                    isActive: !breaking && i == currentIndex,
+                    isPast: i < currentIndex || (breaking && i == currentIndex),
+                    isNext: breaking && i == nextIndex,
                   ),
                 ),
                 if (i < names.length - 1)
                   _routeTrack(
                     done: i < currentIndex,
                     delaySeconds: delaySeconds,
+                    // The connector being "traversed" right now is the break gap
+                    // between the finished protocol and the next one.
+                    active: breaking && i == currentIndex,
+                    countdown: breaking && i == currentIndex ? breakRemaining : null,
                   ),
               ],
             ],
@@ -1207,12 +1513,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required String name,
     required bool isActive,
     required bool isPast,
+    bool isNext = false,
   }) {
     final Color dotBg;
     final Color dotFg;
     if (isActive) {
       dotBg = ThemeConstants.accent;
       dotFg = Colors.white;
+    } else if (isNext) {
+      // "Up next" during a break — a hollow accent ring that pulses.
+      dotBg = ThemeConstants.accent.withValues(alpha: 0.14);
+      dotFg = ThemeConstants.accent;
     } else if (isPast) {
       dotBg = ThemeConstants.accent.withValues(alpha: 0.20);
       dotFg = ThemeConstants.accent;
@@ -1226,23 +1537,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       children: [
         AnimatedContainer(
           duration: const Duration(milliseconds: 250),
-          width: isActive ? 30 : 26,
-          height: isActive ? 30 : 26,
+          width: (isActive || isNext) ? 30 : 26,
+          height: (isActive || isNext) ? 30 : 26,
           decoration: BoxDecoration(
             color: dotBg,
             shape: BoxShape.circle,
             border: Border.all(
-              color: isActive
+              color: isActive || isNext
                   ? ThemeConstants.accent
                   : isPast
                       ? ThemeConstants.accent.withValues(alpha: 0.35)
                       : ThemeConstants.border,
               width: 2,
             ),
-            boxShadow: isActive
+            boxShadow: isActive || isNext
                 ? [
                     BoxShadow(
-                      color: ThemeConstants.accent.withValues(alpha: 0.40),
+                      color: ThemeConstants.accent
+                          .withValues(alpha: isActive ? 0.40 : 0.22),
                       blurRadius: 10,
                       spreadRadius: 1,
                     ),
@@ -1252,14 +1564,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           alignment: Alignment.center,
           child: isPast
               ? Icon(Icons.check_rounded, size: 15, color: dotFg)
-              : Text(
-                  '${index + 1}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: dotFg,
-                  ),
-                ),
+              : isNext
+                  ? Icon(Icons.hourglass_top_rounded, size: 15, color: dotFg)
+                  : Text(
+                      '${index + 1}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: dotFg,
+                      ),
+                    ),
         ),
         const SizedBox(height: 6),
         Text(
@@ -1270,8 +1584,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           style: TextStyle(
             fontSize: 11,
             height: 1.15,
-            fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-            color: isActive
+            fontWeight: isActive || isNext ? FontWeight.w700 : FontWeight.w500,
+            color: isActive || isNext
                 ? ThemeConstants.textPrimary
                 : isPast
                     ? ThemeConstants.textTertiary
@@ -1288,6 +1602,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               letterSpacing: 0.6,
               color: ThemeConstants.accent,
             ),
+          )
+        else if (isNext)
+          Text(
+            'UP NEXT',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: ThemeConstants.accent.withValues(alpha: 0.85),
+            ),
           ),
       ],
     );
@@ -1295,19 +1619,48 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// The connecting track segment between two stations. Sits at dot height.
   /// When [delaySeconds] > 0 (a Protocol Plus break), shows the break time in
-  /// seconds above the line, e.g. "90s".
-  Widget _routeTrack({required bool done, int delaySeconds = 0}) {
+  /// seconds above the line, e.g. "90s". When [active] is true the break on
+  /// THIS segment is happening right now, so [countdown] (the live remaining
+  /// seconds) is shown instead and the line is accented.
+  Widget _routeTrack({
+    required bool done,
+    int delaySeconds = 0,
+    bool active = false,
+    int? countdown,
+  }) {
     final line = AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       width: 26,
-      height: 3,
+      height: active ? 4 : 3,
       decoration: BoxDecoration(
         color: done
             ? ThemeConstants.accent.withValues(alpha: 0.55)
-            : ThemeConstants.border,
+            : active
+                ? ThemeConstants.accent
+                : ThemeConstants.border,
         borderRadius: BorderRadius.circular(3),
       ),
     );
+
+    // Live break on this segment → show the counting-down remaining time.
+    if (active) {
+      final secs = (countdown ?? 0) > 0 ? '${countdown}s' : '…';
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            secs,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: ThemeConstants.accent,
+            ),
+          ),
+          const SizedBox(height: 2),
+          line,
+        ],
+      );
+    }
 
     // No break time → keep the bare line vertically centered on the ~26-30px dot.
     if (delaySeconds <= 0) {
@@ -1335,6 +1688,87 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
+  /// A prominent banner shown while a Plus device is between protocols: the
+  /// break is counting down and the next protocol is named. Replaces the old
+  /// "value only" hint (B-32) with the live countdown UI requested in B-24.
+  Widget _buildBreakBanner({
+    required String nextName,
+    required int remaining,
+  }) {
+    final counting = remaining > 0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: ThemeConstants.accent.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: ThemeConstants.accent.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            counting ? Icons.pause_circle_filled_rounded : Icons.sync_rounded,
+            size: 18,
+            color: ThemeConstants.accent,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  counting ? 'BREAK' : 'SWITCHING',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                    color: ThemeConstants.accent,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  counting
+                      ? 'Next: $nextName'
+                      : 'Starting $nextName…',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (counting) ...[
+            const SizedBox(width: 8),
+            Text(
+              _formatBreak(remaining),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: ThemeConstants.accent,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Format break seconds as M:SS (or SS for sub-minute gaps).
+  String _formatBreak(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final m = seconds ~/ 60;
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
   Widget _buildDeviceSessionCard({
     required String id,
     required String label,
@@ -1351,6 +1785,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     String plusName = '',
     int plusIndex = 0,
     int plusDelaySeconds = 0,
+    bool plusOnBreak = false,
+    int plusBreakRemaining = 0,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
@@ -1386,6 +1822,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 name: plusName,
                 index: plusIndex,
                 delaySeconds: plusDelaySeconds,
+                onBreak: plusOnBreak,
+                breakRemaining: plusBreakRemaining,
               ),
             ],
             if (protocolName.isNotEmpty) ...[
@@ -1480,7 +1918,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ],
             const SizedBox(height: 16),
             _buildPerDeviceControls(id, status, ctrl,
-                isProtocolPlusDevice: isProtocolPlusDevice),
+                isProtocolPlusDevice: isProtocolPlusDevice,
+                plusOnBreak: plusOnBreak),
           ],
         ),
       ),
@@ -1492,6 +1931,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     SessionStatus status,
     SessionEngine ctrl, {
     bool isProtocolPlusDevice = false,
+    bool plusOnBreak = false,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
@@ -1512,11 +1952,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // protocol devices (incl. those in a mixed session) keep pause/resume.
     if (isProtocolPlusDevice &&
         (status == SessionStatus.running || status == SessionStatus.paused)) {
+      // During a break the firmware is idle and the BLE link is expected to be
+      // down — that's NOT a reason to block Stop. Stopping then just cancels the
+      // server-scheduled remaining protocols (no live link needed), so keep the
+      // button enabled even while disconnected mid-break.
+      final blockStop = disconnected && !plusOnBreak;
       return SizedBox(
         height: 44,
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: disconnected ? null : () => ctrl.stopDevice(deviceId),
+          onPressed: blockStop ? null : () => ctrl.stopDevice(deviceId),
           style: ElevatedButton.styleFrom(
             backgroundColor: ThemeConstants.error,
             foregroundColor: ThemeConstants.textPrimary,

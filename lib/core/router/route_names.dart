@@ -9,6 +9,7 @@ class RouteNames {
   static const String signup = 'signup';
   static const String forgotPassword = 'forgot-password';
   static const String resetPassword = 'reset-password';
+  static const String onboarding = 'onboarding';
   static const selectOrganization = 'selectOrganization';
   // Main tabs
   static const String protocols = 'protocols';
@@ -52,6 +53,7 @@ class RoutePaths {
   static const String signup = '/signup';
   static const String forgotPassword = '/forgot-password';
   static const String resetPassword = '/reset-password';
+  static const String onboarding = '/onboarding';
 
   // Main tabs
   static const String protocols = '/protocols';
