@@ -32,6 +32,8 @@
 	<string>Hydrawav3 needs Bluetooth to communicate with your Hydra devices during recovery sessions.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Hydrawav3 may use the camera to scan payment cards during checkout.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hydrawav3 uses audio playback features; microphone access is not used to record you.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Hydrawav3 uses Face ID to securely protect your account credentials and saved payment information.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

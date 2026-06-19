@@ -38,7 +38,7 @@ class AppConstants {
 
   // Version and Release Notes
   static const String appVersion = '1.0.2';
-  static const String buildNumber = '9';
+  static const String buildNumber = '10';
   static const String releaseNotes = '''
 Version 1.0.2
 - Account sign-up now opens securely inside the app
