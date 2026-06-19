@@ -41,6 +41,9 @@ class AppConstants {
   static const String buildNumber = '9';
   static const String releaseNotes = '''
 Version 1.0.2
+- Account sign-up now opens securely inside the app
+- The app now opens in light theme by default
+- Refreshed app icon and a larger, centered logo on the home screen
 - Session notifications now show while running in the background
 - Improved background session reliability
 - Bug fixes and stability improvements
