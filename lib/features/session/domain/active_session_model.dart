@@ -16,6 +16,17 @@ class ActiveSession {
   /// schedule when the session is re-opened from history. Empty for normal runs.
   final List<Map<String, String>> protocolPlusBindings;
 
+  /// Per-device live state sourced from the BACKEND (active-sessions feed /
+  /// SESSION_UPDATED): timer + sun/moon pad state. Populated for sessions read
+  /// from the org-wide live feed; empty for purely-local view models. The app
+  /// renders these values verbatim and does not compute timing or pad state.
+  final List<LiveDeviceState> liveDevices;
+
+  /// True when this phone owns the live run (it has the local engine driving
+  /// the hardware). False for sessions started on the web or another phone —
+  /// those are foreign and may be read-only (BLE) or remote-controllable (WiFi).
+  final bool isOwn;
+
   const ActiveSession({
     required this.id,
     required this.protocolId,
@@ -29,6 +40,8 @@ class ActiveSession {
     this.totalDurationSeconds = 0,
     this.elapsedSeconds = 0,
     this.protocolPlusBindings = const [],
+    this.liveDevices = const [],
+    this.isOwn = true,
   });
 
   ActiveSession copyWith({
@@ -44,6 +57,8 @@ class ActiveSession {
     int? totalDurationSeconds,
     int? elapsedSeconds,
     List<Map<String, String>>? protocolPlusBindings,
+    List<LiveDeviceState>? liveDevices,
+    bool? isOwn,
   }) {
     return ActiveSession(
       id: id ?? this.id,
@@ -58,6 +73,8 @@ class ActiveSession {
       totalDurationSeconds: totalDurationSeconds ?? this.totalDurationSeconds,
       elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
       protocolPlusBindings: protocolPlusBindings ?? this.protocolPlusBindings,
+      liveDevices: liveDevices ?? this.liveDevices,
+      isOwn: isOwn ?? this.isOwn,
     );
   }
 
@@ -123,7 +140,45 @@ class ActiveSession {
         totalDurationSeconds,
         elapsedSeconds,
         protocolPlusBindings,
+        liveDevices,
+        isOwn,
       ];
+}
+
+/// Per-device live state as reported by the backend (active-sessions feed /
+/// SESSION_UPDATED). Timing and pad (sun/moon) are taken verbatim — never
+/// computed on-device.
+class LiveDeviceState {
+  /// Device address — Wi-Fi macAddress or BLE bluetoothId, as the backend keys.
+  final String deviceId;
+  final String? deviceName;
+  final String? bodyPart;
+  final String? protocol;
+  final String? slotId;
+  final SessionStatus status;
+  final int remainingSeconds;
+  final int elapsedSeconds;
+  final int totalDurationSeconds;
+  final String? sun;
+  final String? moon;
+
+  /// 'ble' or 'wifi', inferred from whether the backend reported a bluetoothId.
+  final String transport;
+
+  const LiveDeviceState({
+    required this.deviceId,
+    this.deviceName,
+    this.bodyPart,
+    this.protocol,
+    this.slotId,
+    this.status = SessionStatus.running,
+    this.remainingSeconds = 0,
+    this.elapsedSeconds = 0,
+    this.totalDurationSeconds = 0,
+    this.sun,
+    this.moon,
+    this.transport = 'wifi',
+  });
 }
 
 enum SessionStatus { idle, running, paused, stopped, completed }

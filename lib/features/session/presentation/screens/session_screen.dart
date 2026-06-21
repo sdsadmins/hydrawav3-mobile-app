@@ -7,9 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../../../../core/constants/api_endpoints.dart';
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/network/dio_client.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -20,6 +18,7 @@ import '../../../musics/presentation/providers/music_provider.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../../services/session_engine.dart';
 import '../../services/protocol_plus_controller.dart';
+import '../../services/session_sync_service.dart';
 import '../../domain/session_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
@@ -29,6 +28,7 @@ import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
 import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/services/background_session_runtime.dart';
 
 class SessionScreen extends ConsumerStatefulWidget {
@@ -106,9 +106,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   String? _historySnapshotSessionId;
   late final String _engineKey;
 
-  /// Backend pad labels from Node `GET sessions/active/:org` (Hydrawav3-Server).
-  String? _backendMoon;
-  String? _backendSun;
   Timer? _padPollTimer;
 
   final Map<String, String> _deviceLabelById = {};
@@ -136,6 +133,36 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Subscription to the late-binding delivery provider (instant-UI launch).
   ProviderSubscription<List<ProtocolPlusBinding>>? _plusBindingsSub;
 
+  /// Backend sessionId for a NORMAL (non-Plus) run. Arrives after launch via
+  /// [normalServerSessionIdProvider] (the `/sessions/start` POST is async), so
+  /// it's tracked here to drive backend pause/resume/stop for parity with web.
+  String? _normalBackendSessionId;
+
+  /// Subscription to the normal-run backend sessionId delivery provider.
+  ProviderSubscription<String?>? _normalServerIdSub;
+
+  /// One-shot guard so the normal-run backend stop POST fires at most once.
+  bool _normalServerStopped = false;
+
+  /// One-shot guard for the pad-poll diagnostic log.
+  bool _padDiagLogged = false;
+
+  /// Whether this run's backend session has appeared in the live feed — lets us
+  /// tell "not started yet" from "stopped remotely" (web/another device).
+  bool _backendSessionSeen = false;
+
+  /// Last backend status we reconciled, so remote pause/resume is applied only
+  /// on an actual transition (edge-triggered) — never level-triggered off the
+  /// 1s poll, which would fight a local pause during the backend round-trip.
+  active_session.SessionStatus? _lastRemoteStatus;
+
+  /// Last reconcile log signature, to log transitions without per-second spam.
+  String? _lastReconcileSig;
+
+  /// Listener that reconciles the local engine with remote stop/pause/resume
+  /// for a normal run (Protocol Plus runs are reconciled by their controller).
+  ProviderSubscription<List<active_session.ActiveSession>>? _liveSessionsSub;
+
   String _deviceLabel(String id) {
     final key = _normalizeMac(id);
     return _deviceLabelById[key] ?? id;
@@ -158,6 +185,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         final prevS = prev?.status;
         final nextS = next.status;
         _maybeSyncProtocolPlusServer(prevS, nextS);
+        _maybeSyncNormalServer(prevS, nextS);
         final deviceStatusesChanged = prev == null
             ? next.deviceStatuses.isNotEmpty
             : !mapEquals(prev.deviceStatuses, next.deviceStatuses);
@@ -366,6 +394,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // Protocol Plus: open the socket and apply server-driven protocol switches.
     WidgetsBinding.instance.addPostFrameCallback((_) => _initProtocolPlus());
 
+    // Normal runs: track the backend sessionId (published after the async
+    // `/sessions/start` POST) so we can drive backend pause/resume/stop.
+    _initNormalServerSync();
+
+    // Reconcile the local engine with remote stop/pause/resume: when this run's
+    // backend session is paused/resumed/stopped from the web or another device,
+    // the org-wide feed reflects it (via the /sessions socket) — apply it here
+    // so the timer screen mirrors everywhere (web parity).
+    _liveSessionsSub = ref.listenManual<List<active_session.ActiveSession>>(
+      liveSessionsProvider,
+      (prev, next) => _reconcileNormalRunFromBackend(next),
+    );
+
+    // Ensure the org-wide live feed (source of backend sun/moon + timing) is
+    // running, in case the app bootstrap hasn't started it yet.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final orgId = ref.read(authStateProvider).selectedOrgId ??
+          ref.read(authStateProvider).user?.organizationId;
+      if (orgId != null && orgId.isNotEmpty) {
+        ref.read(liveSessionsProvider.notifier).start(orgId);
+      }
+    });
+
     // Load device names once so the session UI can show user-friendly labels.
     unawaited(_loadDeviceNames());
   }
@@ -499,6 +550,121 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // app-scoped controller owns end-of-run via its own engine listener, so the
     // server stop + active-session removal + socket teardown happen even when
     // this screen is not mounted (e.g. a Plus run that finishes off-screen).
+  }
+
+  /// Track the backend sessionId for a normal (non-Plus) run. It's published to
+  /// [normalServerSessionIdProvider] after the async `/sessions/start` POST, so
+  /// it may already be present or arrive slightly later — handle both.
+  void _initNormalServerSync() {
+    final key = widget.sessionId ?? _engineKey;
+    final current = ref.read(normalServerSessionIdProvider(key));
+    if (current != null && current.isNotEmpty) {
+      _normalBackendSessionId = current;
+    }
+    _normalServerIdSub = ref.listenManual<String?>(
+      normalServerSessionIdProvider(key),
+      (prev, next) {
+        if (next != null && next.isNotEmpty) _normalBackendSessionId = next;
+      },
+    );
+  }
+
+  /// Keep the backend session for a NORMAL run in sync with the local engine on
+  /// pause/resume (parity with web). Terminal stop is handled in
+  /// [_handleTerminalSessionState]. No-op until the backend sessionId is known.
+  void _maybeSyncNormalServer(SessionStatus? prevS, SessionStatus nextS) {
+    final backendId = _normalBackendSessionId;
+    if (backendId == null || backendId.isEmpty || prevS == nextS) return;
+    final sync = ref.read(sessionSyncServiceProvider);
+    if (prevS == SessionStatus.running && nextS == SessionStatus.paused) {
+      unawaited(sync.pauseServerSession(backendId));
+    } else if (prevS == SessionStatus.paused &&
+        nextS == SessionStatus.running) {
+      unawaited(sync.resumeServerSession(backendId));
+    }
+  }
+
+  /// Mirror a remote stop/pause/resume onto the local engine for a NORMAL run.
+  /// Pause/resume reconcile the UI only (the remote client already commanded the
+  /// device — Wi-Fi via MQTT); a remote stop ends the run locally too.
+  void _reconcileNormalRunFromBackend(
+    List<active_session.ActiveSession> sessions,
+  ) {
+    if (!mounted) return;
+    final backendId = _normalBackendSessionId;
+    if (backendId == null || backendId.isEmpty) return;
+
+    active_session.ActiveSession? backendSession;
+    for (final s in sessions) {
+      if (s.id == backendId) {
+        backendSession = s;
+        break;
+      }
+    }
+
+    final engineCtrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final localStatus = ref.read(sessionEngineFamilyProvider(_engineKey)).status;
+    final localLive = localStatus == SessionStatus.running ||
+        localStatus == SessionStatus.paused;
+
+    if (backendSession == null) {
+      // Backend session is gone — stopped/finished elsewhere. End locally too,
+      // but only if we'd actually seen it (so we don't stop a run whose backend
+      // session simply hasn't appeared in the feed yet).
+      if (_backendSessionSeen && !_normalServerStopped && localLive) {
+        _normalServerStopped = true; // remote already stopped the server side
+        appLogger.i('Session: backend $backendId removed — applying remote stop');
+        unawaited(engineCtrl.stop());
+      }
+      return;
+    }
+
+    _backendSessionSeen = true;
+    // Use the PER-DEVICE backend status, not the session-level one: pausing a
+    // single device leaves the session status RUNNING on the backend, so the
+    // session-level status would miss a per-device pause/resume.
+    final dev = _findBackendLiveDevice(sessions, widget.deviceIds.first);
+    final remote = dev?.status ?? backendSession.status;
+
+    // Log transitions so we can see remote vs local state without per-second spam.
+    final sig = 'dev=${dev?.status} sess=${backendSession.status} '
+        'local=$localStatus lastRemote=$_lastRemoteStatus';
+    if (sig != _lastReconcileSig) {
+      _lastReconcileSig = sig;
+      appLogger.i('Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
+    }
+
+    // Edge-triggered: only act when the backend status actually changes, so a
+    // local pause isn't undone by the poll still reporting the old status during
+    // the backend round-trip. applyRemoteLifecycle is a no-op if already there.
+    if (_lastRemoteStatus == remote) return;
+    _lastRemoteStatus = remote;
+    if (remote == active_session.SessionStatus.paused &&
+        localStatus == SessionStatus.running) {
+      appLogger.i('Reconcile[$backendId]: APPLY remote PAUSE');
+      // Full pause path (cancels the ticker + syncs the background runtime) so
+      // it sticks; applyRemoteLifecycle alone gets resynced back to running.
+      // Re-sending the Wi-Fi pause is idempotent (device is already paused).
+      unawaited(engineCtrl.pause());
+    } else if (remote == active_session.SessionStatus.running &&
+        localStatus == SessionStatus.paused) {
+      appLogger.i('Reconcile[$backendId]: APPLY remote RESUME');
+      unawaited(engineCtrl.resume());
+    } else {
+      appLogger.i('Reconcile[$backendId]: remote changed to $remote but '
+          'local=$localStatus — no engine action');
+    }
+  }
+
+  /// Stop the backend session for a NORMAL run exactly once (on terminal). This
+  /// is what clears the run from every client's live feed and prevents a stale
+  /// RUNNING session lingering on the web.
+  void _stopNormalServerSession() {
+    if (_normalServerStopped) return;
+    final backendId = _normalBackendSessionId;
+    if (backendId == null || backendId.isEmpty) return;
+    _normalServerStopped = true;
+    unawaited(ref.read(sessionSyncServiceProvider).stopServerSession(backendId));
   }
 
   Future<void> _loadDeviceNames() async {
@@ -768,10 +934,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     unawaited(_setWakelock(live));
   }
 
-  Future<void> _setWakelock(bool enable) async {
+  Future<void> _setWakelock(bool enable, {bool fromDispose = false}) async {
     try {
       if (enable) {
         await WakelockPlus.enable();
+      } else if (fromDispose) {
+        // dispose() runs after the widget is unmounted, so `ref` is no longer
+        // usable — disable unconditionally (best-effort) to avoid leaking the
+        // wakelock. A still-live session's screen re-enables it on its own.
+        await WakelockPlus.disable();
       } else {
         // Don't drop the wakelock if another tracked session is still live
         // (concurrent sessions share the single app-wide screen-on flag).
@@ -790,11 +961,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     WidgetsBinding.instance.removeObserver(this);
     // Music is a session-screen feature — never let it outlive the screen.
     unawaited(_musicController?.stopAndReset() ?? Future<void>.value());
-    unawaited(_setWakelock(false));
+    unawaited(_setWakelock(false, fromDispose: true));
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
     _plusBindingsSub?.close();
+    _normalServerIdSub?.close();
+    _liveSessionsSub?.close();
     // NOTE: We intentionally do NOT dispose the Protocol Plus socket here.
     // The socket must outlive this screen: a Protocol Plus run keeps receiving
     // the server's START_PROTOCOL switches and applying them via the
@@ -807,74 +980,102 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     super.dispose();
   }
 
-  String? _resolveOrganizationId() {
-    final auth = ref.read(authStateProvider);
-    final id = auth.selectedOrgId ?? auth.user?.organizationId;
-    if (id == null || id.isEmpty) return null;
-    return id;
-  }
-
   static String _normalizeMac(String raw) {
     return raw.toLowerCase().replaceAll(RegExp(r'[^0-9a-f]'), '');
   }
 
   void _startBackendPadPolling() {
     if (_padPollTimer != null) return;
-    final orgId = _resolveOrganizationId();
-    if (orgId == null || widget.deviceIds.isEmpty) return;
-    final targetMac = _normalizeMac(widget.deviceIds.first);
-    if (targetMac.isEmpty) return;
+    if (widget.deviceIds.isEmpty) return;
+    final firstMac = _normalizeMac(widget.deviceIds.first);
 
-    Future<void> tick() async {
+    void tick() {
       if (!mounted) return;
       try {
-        final dio = ref.read(nodeDioProvider);
-        final resp = await dio.get<Map<String, dynamic>>(
-          ApiEndpoints.sessionsActive(orgId),
+        // Source pad state + timing from the org-wide backend feed (the single
+        // source of truth) rather than a separate fetch — it already polls
+        // /sessions/active every second and parses per-device sun/moon. Match
+        // each local device to its backend device (WiFi exact mac, BLE ±1) and
+        // feed the backend frame into the engine keyed by the LOCAL id so the
+        // per-device card picks it up (and goes grey when the backend reports
+        // the pad disabled — web parity).
+        final sessions = ref.read(liveSessionsProvider);
+        final engine = ref.read(
+          sessionEngineFamilyProvider(_engineKey).notifier,
         );
-        final data = resp.data;
-        if (data == null || !mounted) return;
-        final sessions = data['sessions'] as List<dynamic>?;
-        if (sessions == null) return;
 
         String? moon;
         String? sun;
-        sessionLoop:
-        for (final raw in sessions) {
-          if (raw is! Map<String, dynamic>) continue;
-          final devices = raw['devices'] as List<dynamic>?;
-          if (devices == null) continue;
-          for (final dev in devices) {
-            if (dev is! Map<String, dynamic>) continue;
-            final mac = _normalizeMac('${dev['macAddress'] ?? ''}');
-            if (mac.isEmpty || mac != targetMac) continue;
-            final m = dev['moon'];
-            final s = dev['sun'];
-            if (m != null) moon = m.toString();
-            if (s != null) sun = s.toString();
-            break sessionLoop;
+        var matched = 0;
+        for (final localId in widget.deviceIds) {
+          final dev = _findBackendLiveDevice(sessions, localId);
+          if (dev == null) continue;
+          matched++;
+          engine.updateDeviceTelemetry(localId, {
+            'macAddress': localId,
+            'moon': dev.moon,
+            'sun': dev.sun,
+            'remainingSeconds': dev.remainingSeconds,
+            'elapsedSeconds': dev.elapsedSeconds,
+            'totalDurationSeconds': dev.totalDurationSeconds,
+          });
+          if (_normalizeMac(localId) == firstMac) {
+            moon = dev.moon;
+            sun = dev.sun;
           }
         }
-
-        if (!mounted) return;
-        // Keep this update passive to avoid defunct setState races during
-        // route transitions; pads are a visual hint only.
-        _backendMoon = moon;
-        _backendSun = sun;
+        if (!_padDiagLogged) {
+          _padDiagLogged = true;
+          appLogger.i(
+            'PadPoll: liveSessions=${sessions.length}, '
+            'localDevices=${widget.deviceIds}, matched=$matched, '
+            'firstMoon=$moon firstSun=$sun',
+          );
+        }
       } catch (e, st) {
         appLogger.d('Session pad poll: $e\n$st');
       }
     }
 
-    unawaited(tick());
+    tick();
     _padPollTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  /// Find the backend live-device for a local device id across all live
+  /// sessions. Matches WiFi by exact (normalized) MAC and BLE by ±1 last byte
+  /// (units advertise on a MAC ±1 from the registered/firmware id).
+  active_session.LiveDeviceState? _findBackendLiveDevice(
+    List<active_session.ActiveSession> sessions,
+    String localId,
+  ) {
+    final candidates = _normalizedMacVariants(localId);
+    for (final s in sessions) {
+      for (final d in s.liveDevices) {
+        if (candidates.contains(_normalizeMac(d.deviceId))) return d;
+      }
+    }
+    return null;
+  }
+
+  static Set<String> _normalizedMacVariants(String raw) {
+    final norm = _normalizeMac(raw); // hex-only, lowercase
+    final variants = <String>{norm};
+    if (norm.length == 12) {
+      final lastByte = int.tryParse(norm.substring(10), radix: 16);
+      if (lastByte != null) {
+        for (final delta in const [1, -1]) {
+          final nb =
+              ((lastByte + delta) & 0xFF).toRadixString(16).padLeft(2, '0');
+          variants.add(norm.substring(0, 10) + nb);
+        }
+      }
+    }
+    return variants;
   }
 
   void _stopBackendPadPolling({bool fromDispose = false}) {
     _padPollTimer?.cancel();
     _padPollTimer = null;
-    _backendMoon = null;
-    _backendSun = null;
   }
 
   Future<void> _ensureActiveSessionCreated({String? protocolName}) async {
@@ -1116,12 +1317,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 
   Future<void> _handleTerminalSessionState(SessionEngineState engine) async {
-    if (_terminalSessionCleanupInFlight) return;
-    if (_activeSessionId == null) return;
     if (engine.status != SessionStatus.stopped &&
         engine.status != SessionStatus.completed) {
       return;
     }
+    // End the backend session for a normal run first, so the run clears from
+    // every client's live feed even if there's no local active-session record.
+    _stopNormalServerSession();
+    if (_terminalSessionCleanupInFlight) return;
+    if (_activeSessionId == null) return;
 
     _terminalSessionCleanupInFlight = true;
     final trackedSessionId = _activeSessionId!;
@@ -1193,22 +1397,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     } else {
       padCycleIdx = -1;
     }
-    final padCycle = padCycleIdx >= 0 && protocol != null
-        ? protocol.cycles[padCycleIdx]
-        : null;
-    // Web parity: Hydrawav3-ai/.../liveSession.tsx DeviceTimer (moon/sun).
-    Color moonColor = Colors.grey;
-    Color sunColor = Colors.grey;
-    final pc = padCycle;
-    if (pc != null &&
-        (status == SessionStatus.running || status == SessionStatus.paused)) {
-      final moonFn =
-          _useBackendPad(_backendMoon) ? _backendMoon! : pc.leftFunction;
-      final sunFn =
-          _useBackendPad(_backendSun) ? _backendSun! : pc.rightFunction;
-      moonColor = _webMoonPadColor(moonFn);
-      sunColor = _webSunPadColor(sunFn);
-    }
+    // Web parity: pad colors come straight from the backend per-device sun/moon
+    // (the org-wide live feed). No local cycle fallback — when the backend
+    // reports the pad off/neutral the mapping returns grey, exactly like the web.
+    // Colors are resolved PER DEVICE at the card call site below.
+    final liveSessions = ref.watch(liveSessionsProvider);
     final orderedDeviceIds = widget.deviceIds
         .where((id) => engine.deviceTimers.containsKey(id))
         .toList();
@@ -1219,6 +1412,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         orderedDeviceIds.isNotEmpty) {
       _activeDevicePage = 0;
     }
+
+    // Telemetry adds optional blocks (fault card / warning banner / sensor row)
+    // to the device card. Give the fixed-height PageView extra room when any
+    // device is showing them, so the controls (incl. Stop) stay on-screen
+    // instead of being scrolled out of view.
+    final hasTelemetryExtras = orderedDeviceIds.any((id) {
+      final t = engine.telemetryByDevice[id];
+      return t != null &&
+          (t.isFault || t.isWarning || t.sensorReadouts.isNotEmpty);
+    });
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -1289,8 +1492,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               SizedBox(
                 // Plus devices render an extra progress card inside the device
                 // card, so give the page more height when any device is Plus.
-                height:
-                    engine.protocolPlusSequenceByDevice.isNotEmpty ? 560 : 420,
+                height: (engine.protocolPlusSequenceByDevice.isNotEmpty
+                        ? 560
+                        : 420) +
+                    (hasTelemetryExtras ? 130 : 0),
                 child: PageView.builder(
                   itemCount: orderedDeviceIds.length,
                   onPageChanged: (idx) =>
@@ -1307,6 +1512,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     final deviceSequence =
                         engine.protocolPlusSequenceByDevice[id] ??
                             const <String>[];
+                    final backendDev =
+                        _findBackendLiveDevice(liveSessions, id);
                     return _buildDeviceSessionCard(
                       id: id,
                       label: _deviceLabel(id),
@@ -1315,8 +1522,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       status: deviceStatus,
                       totalCycles: timer.totalCycles,
                       padCycleIdx: padCycleIdx,
-                      moonColor: moonColor,
-                      sunColor: sunColor,
+                      moonColor: _webMoonPadColor(backendDev?.moon),
+                      sunColor: _webSunPadColor(backendDev?.sun),
+                      // Timer comes from the backend (single source of truth) so
+                      // the app matches the web exactly instead of drifting from
+                      // the local engine clock.
+                      backendRemainingSeconds: backendDev?.remainingSeconds,
+                      backendTotalSeconds: backendDev?.totalDurationSeconds,
+                      telemetry: engine.telemetryByDevice[id],
                       ctrl: ctrl,
                       isProtocolPlusDevice: deviceSequence.isNotEmpty,
                       plusSequence: deviceSequence,
@@ -1769,6 +1982,141 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return '$m:$s';
   }
 
+  /// Red fault card — blocking firmware error (overcurrent / device fault).
+  /// Mirrors the web live-session fault card (label + fault value + reason).
+  Widget _buildFaultCard(DeviceTelemetry t) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.red, width: 1.5),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  (t.faultLabel ?? 'Device Fault').toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                if (t.faultValue != null)
+                  Text(
+                    'fv: ${t.faultValue}',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontSize: 11,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                if (t.faultReason != null && t.faultReason!.isNotEmpty)
+                  Text(
+                    'fr: ${t.faultReason}',
+                    style: TextStyle(
+                      color: Colors.red.shade400,
+                      fontSize: 10,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Orange warning banner — non-blocking (firmware keeps running). Mirrors the
+  /// web warning copy for pad-disconnect / NTC-overheat.
+  Widget _buildWarningBanner(DeviceTelemetry t) {
+    final isPadDisconnect = t.isPadDisconnect;
+    final label = isPadDisconnect ? 'Pad Not Connected' : 'Device Overheated';
+    final icon =
+        isPadDisconnect ? Icons.power_off_rounded : Icons.warning_amber_rounded;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.shade300),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.orange.shade800, size: 18),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.orange.shade800,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Friendly labels for the firmware's short telemetry keys.
+  ///
+  /// ⚠️ BEST-EFFORT — these short keys are firmware-defined and are NOT
+  /// documented in the app/web codebase. Confirm each meaning (and unit) with
+  /// the firmware team and correct the mapping below; unknown keys fall back to
+  /// the raw key so nothing is hidden.
+  static const Map<String, ({String label, String? unit})> _telemetryLabels = {
+    // Confirmed against a real frame; units still BEST-EFFORT (verify w/ firmware).
+    'tp': (label: 'Temp', unit: '°C'),
+    'c': (label: 'Current', unit: 'A'),
+    'av': (label: 'Voltage', unit: 'V'),
+    // `td` / `tl` meanings are NOT yet identified (both read 0 mid-session) —
+    // intentionally left unmapped so they render as raw keys, not mislabeled.
+  };
+
+  /// Generic live sensor readouts (temperature/voltage/current/…). Field names
+  /// are firmware-defined; known short keys are mapped to readable labels via
+  /// [_telemetryLabels], unknown keys render as-is.
+  Widget _buildSensorReadouts(Map<String, num> readouts) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      alignment: WrapAlignment.center,
+      children: readouts.entries.map((e) {
+        final mapped = _telemetryLabels[e.key.toLowerCase()];
+        final label = mapped?.label ?? e.key;
+        final unit = mapped?.unit;
+        final valueText = unit != null ? '${e.value}$unit' : '${e.value}';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: ThemeConstants.accent.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            '$label: $valueText',
+            style: TextStyle(
+              color: ThemeConstants.textSecondary,
+              fontSize: 11,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildDeviceSessionCard({
     required String id,
     required String label,
@@ -1780,6 +2128,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required Color moonColor,
     required Color sunColor,
     required SessionEngine ctrl,
+    int? backendRemainingSeconds,
+    int? backendTotalSeconds,
+    DeviceTelemetry? telemetry,
     bool isProtocolPlusDevice = false,
     List<String> plusSequence = const [],
     String plusName = '',
@@ -1790,13 +2141,50 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
+
+    // Live telemetry (device→app) takes precedence over the cycle-derived pad
+    // colors when present — the firmware's actual thermode state is authoritative.
+    final effectiveMoonColor = (telemetry?.moon != null)
+        ? _webMoonPadColor(telemetry!.moon)
+        : moonColor;
+    final effectiveSunColor = (telemetry?.sun != null)
+        ? _webSunPadColor(telemetry!.sun)
+        : sunColor;
+    final isFault = telemetry?.isFault ?? false;
+    final isWarning = telemetry?.isWarning ?? false;
+
+    // Prefer the backend timer (single source of truth → matches the web). Fall
+    // back to the local engine timer only until the backend value is available.
+    final useBackendTimer =
+        backendRemainingSeconds != null && backendRemainingSeconds >= 0;
+    final displayRemaining = useBackendTimer
+        ? Duration(seconds: backendRemainingSeconds)
+        : timer.remaining;
+    final double displayProgress;
+    if (useBackendTimer &&
+        backendTotalSeconds != null &&
+        backendTotalSeconds > 0) {
+      displayProgress =
+          (1 - backendRemainingSeconds / backendTotalSeconds).clamp(0.0, 1.0);
+    } else {
+      displayProgress = timer.progress;
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.borderLight),
+        // Web parity: red border on fault, orange on warning, default otherwise.
+        border: Border.all(
+          color: isFault
+              ? Colors.red
+              : isWarning
+                  ? Colors.orange
+                  : ThemeConstants.borderLight,
+          width: isFault ? 2 : 1,
+        ),
       ),
       // Scrollable so the card never overflows — Plus devices add a progress
       // card, and small screens may not fit the ring + status + controls.
@@ -1814,6 +2202,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 fontSize: 13,
               ),
             ),
+            // FAULT card (red) / WARNING banner (orange) — device→app telemetry,
+            // mirroring the web live-session card. Fault supersedes warning.
+            if (isFault) ...[
+              const SizedBox(height: 10),
+              _buildFaultCard(telemetry!),
+            ] else if (isWarning) ...[
+              const SizedBox(height: 10),
+              _buildWarningBanner(telemetry!),
+            ],
             // Per-device Protocol Plus progress card (only for Plus devices).
             if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -1858,14 +2255,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 height: 200,
                 child: CustomPaint(
                   painter: _TimerRing(
-                      progress: timer.progress,
+                      progress: displayProgress,
                       active: status == SessionStatus.running),
                   child: Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          timer.remaining.formatted,
+                          displayRemaining.formatted,
                           style: TextStyle(
                             fontSize: 38,
                             fontWeight: FontWeight.w700,
@@ -1878,10 +2275,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.dark_mode_rounded,
-                                size: 20, color: moonColor),
+                                size: 20, color: effectiveMoonColor),
                             const SizedBox(width: 12),
                             Icon(Icons.wb_sunny_rounded,
-                                size: 22, color: sunColor),
+                                size: 22, color: effectiveSunColor),
                           ],
                         ),
                       ],
@@ -1915,6 +2312,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   fontSize: 12,
                 ),
               ),
+            ],
+            // Live sensor readouts (temperature/voltage/current/…) when the
+            // firmware/backend includes them in the telemetry frame.
+            if (telemetry != null && telemetry.sensorReadouts.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _buildSensorReadouts(telemetry.sensorReadouts),
             ],
             const SizedBox(height: 16),
             _buildPerDeviceControls(id, status, ctrl,
@@ -2126,30 +2529,34 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   static bool _strEqIc(String a, String b) =>
       a.toLowerCase().trim() == b.toLowerCase().trim();
 
-  /// Prefer Node session device `moon` / `sun` when present (see Hydrawav3-Server session.service).
-  static bool _useBackendPad(String? v) {
-    if (v == null) return false;
-    final s = v.trim();
-    return s.isNotEmpty && s != 'null';
-  }
-
-  /// Same rules as web `DeviceTimer` Moon icon (left pad).
+  /// Same rules as web `DeviceTimer` Moon icon (left pad). Accepts both the
+  /// backend vocabulary ('hot'/'cold'/'leftHotRed'/'leftColdBlue') and the BLE
+  /// frame's LED color ('red'/'blue', from p2.l) so live telemetry colors match.
   Color _webMoonPadColor(String? moon) {
     if (moon == null || moon.isEmpty) return Colors.grey;
     final m = moon.trim();
-    if (_strEqIc(m, 'leftHotRed') || _strEqIc(m, 'hot')) return Colors.red;
-    if (_strEqIc(m, 'leftColdBlue') || _strEqIc(m, 'cold')) {
+    if (_strEqIc(m, 'leftHotRed') || _strEqIc(m, 'hot') || _strEqIc(m, 'red')) {
+      return Colors.red;
+    }
+    if (_strEqIc(m, 'leftColdBlue') ||
+        _strEqIc(m, 'cold') ||
+        _strEqIc(m, 'blue')) {
       return Colors.blue;
     }
     return Colors.grey;
   }
 
-  /// Same rules as web `DeviceTimer` Sun icon (right pad).
+  /// Same rules as web `DeviceTimer` Sun icon (right pad). Accepts 'red'/'blue'
+  /// (from p1.l) in addition to the backend 'hot'/'cold' vocabulary.
   Color _webSunPadColor(String? sun) {
     if (sun == null || sun.isEmpty) return Colors.grey;
     final s = sun.trim();
-    if (_strEqIc(s, 'rightHotRed') || _strEqIc(s, 'hot')) return Colors.red;
-    if (_strEqIc(s, 'rightColdBlue') || _strEqIc(s, 'cold')) {
+    if (_strEqIc(s, 'rightHotRed') || _strEqIc(s, 'hot') || _strEqIc(s, 'red')) {
+      return Colors.red;
+    }
+    if (_strEqIc(s, 'rightColdBlue') ||
+        _strEqIc(s, 'cold') ||
+        _strEqIc(s, 'blue')) {
       return Colors.blue;
     }
     return Colors.grey;

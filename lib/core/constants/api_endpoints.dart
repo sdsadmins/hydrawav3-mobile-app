@@ -90,6 +90,12 @@ class ApiEndpoints {
   // MQTT
   static const String mqttPublish = '/mqtt/publish';
 
+  /// Node Nest: `POST /hydrawav/v1/sessions/start`
+  /// Creates a backend session (status RUNNING) and broadcasts `SESSION_STARTED`
+  /// over the `/sessions` socket. Mobile normal runs call this (parity with web)
+  /// so they appear in the org-wide live-session feed.
+  static const String sessionStart = 'sessions/start';
+
   /// Node Nest: `GET /hydrawav/v1/sessions/active/:organizationId`
   /// Returns active sessions with per-device `moon` / `sun` pad strings.
   static String sessionsActive(String organizationId) =>

@@ -20,6 +20,8 @@ import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../domain/protocol_model.dart';
 import '../providers/protocol_provider.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../payments/presentation/providers/token_balance_provider.dart';
+import '../../../payments/presentation/widgets/token_balance_badge.dart';
 
 final homePairedDevicesProvider = StreamProvider<List<PairedDevice>>((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
@@ -36,6 +38,20 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
   String? _selectedGoalTagId;
 
   @override
+  void initState() {
+    super.initState();
+    // Ensure the token balance feed is running for the badge in the header
+    // (idempotent if the app bootstrap already started it).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = ref.read(authStateProvider);
+      final orgId = auth.selectedOrgId ?? auth.user?.organizationId;
+      if (orgId != null && orgId.isNotEmpty) {
+        ref.read(tokenBalanceProvider.notifier).start(orgId);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final selectedGoalTagId = _selectedGoalTagId?.trim().isEmpty ?? true
         ? null
@@ -47,7 +63,6 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
         : ref
             .watch(protocolSelectionOptionsProvider(selectedGoalTagId))
             .whenData((protocols) => protocols.map((p) => p.id).toSet());
-    final auth = ref.watch(authStateProvider);
     final connectionStates = ref.watch(bleConnectionStatesProvider);
     final connectedIds = connectionStates.maybeWhen(
       data: (map) => map.entries
@@ -126,37 +141,31 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        /// 🔥 TOP BAR — "Home" (left) + logo (center) + org name (right)
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
+                        /// 🔥 TOP BAR — "Home" (left) + logo (CENTER) + token badge (right).
+                        /// Stack keeps the logo dead-center; the Row places Home
+                        /// on the left and the badge (natural width) on the right.
+                        Stack(
+                          alignment: Alignment.center,
                           children: [
-                            Expanded(
-                              child: Text(
-                                'Home',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: ThemeConstants.textPrimary,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
                             const _HomeLogo(),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                auth.selectedOrgName ?? 'No Organization',
-                                textAlign: TextAlign.right,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: ThemeConstants.accent,
-                                  fontWeight: FontWeight.w600,
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Home',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: ThemeConstants.textPrimary,
+                                  ),
                                 ),
-                              ),
+                                const Spacer(),
+                                // Token chip — tap for the full plan/usage
+                                // breakdown (web parity).
+                                const TokenBalanceBadge(),
+                              ],
                             ),
                           ],
                         ),
@@ -947,36 +956,57 @@ class _ProtocolCard extends StatelessWidget {
         ? ThemeConstants.surface
         : Colors.white;
 
-    return GradientCard(
-      onTap: () => context
-          .push(RoutePaths.protocolDetail.replaceFirst(':id', protocol.id)),
-      // Flat web-style card: solid fill + thin border, no drop shadow.
-      showShadow: false,
-      gradientColors: [cardColor, cardColor],
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const GlowIconBox(icon: Icons.science_rounded),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  protocol.templateName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: ThemeConstants.textPrimary,
+    // Plan gating (web parity): a protocol not included in the org's plan is
+    // shown disabled (greyed + a lock) and can't be opened.
+    final locked = !protocol.active;
+
+    return Opacity(
+      opacity: locked ? 0.55 : 1,
+      child: GradientCard(
+        onTap: () {
+          if (locked) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('This protocol isn\'t included in your plan.'),
+              ),
+            );
+            return;
+          }
+          context.push(
+              RoutePaths.protocolDetail.replaceFirst(':id', protocol.id));
+        },
+        // Flat web-style card: solid fill + thin border, no drop shadow.
+        showShadow: false,
+        gradientColors: [cardColor, cardColor],
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const GlowIconBox(icon: Icons.science_rounded),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    protocol.templateName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: ThemeConstants.textPrimary,
+                    ),
                   ),
                 ),
-              ),
-              Icon(Icons.chevron_right_rounded,
-                  color: ThemeConstants.textTertiary, size: 20),
-            ],
-          ),
+                Icon(
+                  locked
+                      ? Icons.lock_outline_rounded
+                      : Icons.chevron_right_rounded,
+                  color: ThemeConstants.textTertiary,
+                  size: 20,
+                ),
+              ],
+            ),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -998,7 +1028,8 @@ class _ProtocolCard extends StatelessWidget {
               ),
             ],
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -8,7 +8,9 @@ import 'app.dart';
 import 'core/storage/preferences.dart';
 import 'features/auth/presentation/providers/auth_provider.dart';
 import 'features/ble/services/auto_connect_manager.dart';
+import 'features/payments/presentation/providers/token_balance_provider.dart';
 import 'features/session/presentation/providers/active_sessions_provider.dart';
+import 'features/session/presentation/providers/live_sessions_provider.dart';
 import 'features/session/services/background_session_runtime.dart';
 
 void main() async {
@@ -70,6 +72,30 @@ class _AppBootstrapState extends ConsumerState<_AppBootstrap> {
           }
         },
       );
+
+      // Keep the org-wide live-session feed and token balance running while
+      // authenticated with an org selected (parity with the web app). The
+      // backend is the source of truth: every run creates a backend session and
+      // is rendered from this feed. Restarts on org change, tears down on logout.
+      void syncOrgScopedFeeds(AuthState auth) {
+        final live = ref.read(liveSessionsProvider.notifier);
+        final balance = ref.read(tokenBalanceProvider.notifier);
+        final orgId = auth.selectedOrgId;
+        if (auth.isAuthenticated && orgId != null && orgId.isNotEmpty) {
+          live.start(orgId);
+          balance.start(orgId);
+        } else if (!auth.isAuthenticated) {
+          live.stop();
+          balance.stop();
+        }
+      }
+
+      ref.listen<AuthState>(
+        authStateProvider,
+        (previous, next) => syncOrgScopedFeeds(next),
+      );
+      // Cover the case where auth is already resolved before this listener wires.
+      syncOrgScopedFeeds(ref.read(authStateProvider));
     });
   }
 

@@ -26,6 +26,147 @@ final sessionEngineFamilyProvider =
   return SessionEngine(ref, sessionId: sessionId);
 });
 
+/// Live per-device telemetry received FROM the device during a running session
+/// (device→app direction). Mirrors the fields the web app renders on its device
+/// card: pad thermode state ([sun]/[moon]), non-blocking warnings ([warnCode]),
+/// and blocking faults ([faultReason]/[faultValue]/[telemetryState]). [raw] keeps
+/// the full merged frame — exactly like the web's `{...device, ...json}` spread —
+/// so richer sensor fields the firmware/backend sends are preserved for display.
+///
+/// Both transports converge here: BLE devices report over the EVENT/STATUS notify
+/// channels; Wi-Fi devices report via the backend (Socket.IO `SESSION_UPDATED`
+/// and the active-sessions poll). Field names are normalized so the firmware's
+/// short forms (`w`/`fr`/`fv`/`s`) and the backend's long forms
+/// (`pad`/`faultReason`/`faultValue`/`telemetryState`) both resolve.
+class DeviceTelemetry {
+  final String? sun; // right pad: 'hot' | 'cold' | 'disabled'
+  final String? moon; // left pad: 'hot' | 'cold' | 'disabled'
+  final String? warnCode; // 'pad_disconnect' | 'ntc_overheat'
+  final String? faultReason; // 'overcurrent_spike' | 'overcurrent_sustained'
+  final num? faultValue;
+  final String? telemetryState; // 'fault'
+  final Map<String, dynamic> raw;
+  final DateTime? updatedAt;
+
+  const DeviceTelemetry({
+    this.sun,
+    this.moon,
+    this.warnCode,
+    this.faultReason,
+    this.faultValue,
+    this.telemetryState,
+    this.raw = const {},
+    this.updatedAt,
+  });
+
+  bool get isPadDisconnect => warnCode == 'pad_disconnect';
+  bool get isNtcOverheat => warnCode == 'ntc_overheat';
+  bool get isWarning => isPadDisconnect || isNtcOverheat;
+
+  bool get isOvercurrentSpike => faultReason == 'overcurrent_spike';
+  bool get isOvercurrentSustained => faultReason == 'overcurrent_sustained';
+  bool get isFaultState => telemetryState == 'fault';
+  bool get isFault =>
+      isOvercurrentSpike || isOvercurrentSustained || isFaultState;
+
+  /// Human label for the fault card (web parity).
+  String? get faultLabel => isOvercurrentSpike
+      ? 'Overcurrent Spike'
+      : isOvercurrentSustained
+          ? 'Overcurrent Sustained'
+          : isFaultState
+              ? 'Device Fault'
+              : null;
+
+  /// Structural / already-surfaced keys excluded from the generic sensor row.
+  static const Set<String> _structuralKeys = {
+    'mac', 'macaddress', 'deviceid', 'device_id', 'id', 'bluetoothid',
+    'slotid', 'devicename', 'sun', 'moon', 'pad', 'w', 'faultreason', 'fr',
+    'faultvalue', 'fv', 'telemetrystate', 's', 'lastseen', 'playcmd', 'type',
+    // Session bookkeeping fields from the backend active-sessions frame — not
+    // device sensors, so they must not appear as readout chips.
+    'remainingseconds', 'elapsedseconds', 'totaldurationseconds',
+    'organizationid', 'bodypart', 'protocol', 'status', 'advancedsettings',
+    'sessionid', 'clientid',
+    // Compact firmware-frame fields that aren't sensor readings: firmware
+    // version (parses numeric), medium, run state, user mode, and the p1/p2 pad
+    // objects (surfaced via sun/moon instead).
+    'fw', 'm', 'rs', 'lm', 'p1', 'p2', 'pe', 'pw', 'l', 'v',
+  };
+
+  /// Numeric "extra" readings (temperature/voltage/current/cycle progress/…)
+  /// the firmware/backend includes beyond what the web card renders. Generic by
+  /// design — exact field names vary by firmware, so any numeric, non-structural
+  /// key is surfaced rather than hard-coded.
+  Map<String, num> get sensorReadouts {
+    final out = <String, num>{};
+    raw.forEach((key, value) {
+      if (_structuralKeys.contains(key.toLowerCase())) return;
+      if (value is num) {
+        out[key] = value;
+      } else if (value is String) {
+        final n = num.tryParse(value);
+        if (n != null) out[key] = n;
+      }
+    });
+    return out;
+  }
+
+  /// Merge a freshly-received frame onto this telemetry, web-style ({...d, ...json}),
+  /// then re-derive the normalized fields from the accumulated map.
+  DeviceTelemetry mergeJson(Map<String, dynamic> json) {
+    final merged = Map<String, dynamic>.from(raw)..addAll(json);
+
+    dynamic pick(List<String> keys) {
+      for (final k in keys) {
+        final v = merged[k];
+        if (v != null) return v;
+      }
+      return null;
+    }
+
+    String? str(List<String> keys) {
+      final v = pick(keys);
+      if (v == null) return null;
+      final s = v.toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    num? number(List<String> keys) {
+      final v = pick(keys);
+      if (v is num) return v;
+      if (v is String) return num.tryParse(v);
+      return null;
+    }
+
+    // Web parity (session.tsx maps `devicedata.p1.l` / `p2.l`): the firmware's
+    // compact frame carries pad state under p1/p2, and the web reads the LED
+    // color field `l` ("red"/"blue") — sun ← p1.l, moon ← p2.l — falling back to
+    // the backend's sun/moon ('hot'/'cold'/'disabled') when p1/p2 are absent.
+    String? padLed(String key) {
+      final p = merged[key];
+      if (p is Map && p['l'] is String) {
+        final l = (p['l'] as String).trim();
+        if (l.isNotEmpty) return l;
+      }
+      return null;
+    }
+
+    return DeviceTelemetry(
+      sun: str(['sun']) ?? padLed('p1'),
+      moon: str(['moon']) ?? padLed('p2'),
+      warnCode: str(['pad', 'w']),
+      faultReason: str(['faultReason', 'fr']),
+      faultValue: number(['faultValue', 'fv']),
+      // Web maps firmware `s` straight to telemetryState; only the literal value
+      // "fault" drives the fault UI (a normal frame's `s` is e.g. "cycle3").
+      telemetryState: str(['telemetryState', 's']),
+      raw: merged,
+      updatedAt: DateTime.now(),
+    );
+  }
+}
+
 class SessionEngineState {
   final SessionStatus status;
   final TimerState timer;
@@ -70,6 +211,10 @@ class SessionEngineState {
   /// meaningful while [protocolPlusOnBreakByDevice] is true for that device.
   final Map<String, int> protocolPlusBreakRemainingByDevice;
 
+  /// Live device→app telemetry per device (faults, warnings, pad state, sensors).
+  /// Empty until the first frame arrives over BLE notify or the backend channel.
+  final Map<String, DeviceTelemetry> telemetryByDevice;
+
   final String? error;
 
   const SessionEngineState({
@@ -94,6 +239,7 @@ class SessionEngineState {
     this.protocolPlusDelayByDevice = const {},
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
+    this.telemetryByDevice = const {},
     this.error,
   });
 
@@ -119,6 +265,7 @@ class SessionEngineState {
     Map<String, int>? protocolPlusDelayByDevice,
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
+    Map<String, DeviceTelemetry>? telemetryByDevice,
     String? error,
   }) {
     return SessionEngineState(
@@ -151,6 +298,7 @@ class SessionEngineState {
           protocolPlusOnBreakByDevice ?? this.protocolPlusOnBreakByDevice,
       protocolPlusBreakRemainingByDevice: protocolPlusBreakRemainingByDevice ??
           this.protocolPlusBreakRemainingByDevice,
+      telemetryByDevice: telemetryByDevice ?? this.telemetryByDevice,
       error: error,
     );
   }
@@ -203,6 +351,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   final Map<String, Duration> _plusSegmentEndByDevice = {};
 
   Future<void> _stateUpdateQueue = Future.value();
+
+  /// Listens to the BLE notify/status stream and turns telemetry frames into
+  /// per-device [DeviceTelemetry] (device→app direction). Wired only for BLE
+  /// sessions; Wi-Fi telemetry arrives via the backend channel.
+  StreamSubscription<BleNotification>? _telemetrySub;
+
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
   static const int _bleStopByte = 0x03;
@@ -354,6 +508,280 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       appLogger.e(
         'WiFi: playCmd publish failed (cmd=$playCmd, mac=$mac): $e',
       );
+    }
+  }
+
+  // ───────────────────────── device→app telemetry ─────────────────────────
+
+  /// Subscribe to the BLE notification stream and convert telemetry frames into
+  /// per-device [DeviceTelemetry]. Idempotent; only meaningful for BLE sessions
+  /// (the handler early-returns for other transports). Wi-Fi telemetry is fed by
+  /// the backend channel (socket `SESSION_UPDATED` / active-sessions poll).
+  void _ensureBleTelemetrySubscription() {
+    if (_telemetrySub != null) return;
+    final connector = _ref.read(bleConnectorProvider);
+    _telemetrySub = connector.notifications.listen((n) {
+      if (!_isActive) return;
+      if (state.transport != SessionTransport.ble) return;
+      _ingestBleTelemetryFrame(n.deviceId, n.value);
+    });
+  }
+
+  /// Parse a BLE notify/status payload and, if it carries telemetry, merge it.
+  /// Non-telemetry frames (MAC/ACK/sessionId) are ignored here — those are
+  /// handled inside the connector. Mirrors the web's EVENT_NOTIFY handler.
+  void _ingestBleTelemetryFrame(String deviceId, List<int> value) {
+    Map<String, dynamic>? json;
+    try {
+      final s = utf8.decode(value, allowMalformed: true).trim();
+      if (s.isEmpty || !s.startsWith('{')) return;
+      final decoded = jsonDecode(s);
+      if (decoded is! Map) return;
+      json = decoded.cast<String, dynamic>();
+    } catch (_) {
+      return; // not JSON / not UTF-8
+    }
+    // Map-key format {"<id>": {...}} — unwrap one level (firmware sometimes
+    // namespaces the payload under its device id).
+    if (json.length == 1) {
+      final only = json.values.first;
+      if (only is Map) json = only.cast<String, dynamic>();
+    }
+
+    // Reflect a pause/resume/stop pressed ON the device: the firmware reports
+    // its run state in `rs` ("play"/"pause"/"stop"). Web parity: session.tsx
+    // reconciles this against the session status.
+    final rs = json['rs'];
+    if (rs is String && rs.trim().isNotEmpty) {
+      appLogger.i(
+          '🔎 rs-frame from $deviceId: rs=$rs (keys=${json.keys.toList()})');
+      _reconcileDeviceRunState(deviceId, rs);
+    }
+
+    if (!_looksLikeTelemetry(json)) return;
+    updateDeviceTelemetry(deviceId, json);
+  }
+
+  /// Last `rs` value acted on per device, so a steady stream of identical run
+  /// states doesn't re-fire and user-initiated actions aren't double-applied.
+  final Map<String, String> _lastRsByDevice = {};
+
+  /// Reconcile a device-reported run state ([rs] = "play"/"pause"/"stop") for the
+  /// SINGLE device that sent it — the device→app half of the per-device controls.
+  /// In a multi-device session, a stop/pause/resume on one device affects ONLY
+  /// that device; the others keep running. BLE only (Wi-Fi lifecycle is handled
+  /// by the backend channel).
+  ///
+  /// Calls the same per-device [pauseDevice]/[resumeDevice]/[stopDevice] the
+  /// per-device buttons use. Their status guards + the per-device `rs` dedupe
+  /// make this safe against a steady frame stream and against a button the user
+  /// just pressed in-app for that device.
+  void _reconcileDeviceRunState(String incomingId, String rs) {
+    if (!_isActive) return;
+    if (state.transport != SessionTransport.ble) {
+      appLogger.i('🔎 rs-reconcile skip: transport=${state.transport} (not BLE)');
+      return; // BLE only
+    }
+
+    final deviceId = _resolveTelemetryDeviceId(incomingId);
+    if (deviceId == null) {
+      appLogger.i(
+          '🔎 rs-reconcile skip: $incomingId not matched to session devices=${state.deviceIds}');
+      return;
+    }
+
+    // Protocol Plus lifecycle is server-driven (the controller handles
+    // SESSION_STOPPED and the protocol switches). The firmware physically stops
+    // between stacked protocols, so honoring `rs` here would tear the sequence
+    // down mid-break — mirror the tick loop's Plus guard and skip entirely.
+    final deviceIsPlus = _protocolPlusDeviceIds.contains(deviceId) ||
+        (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty) ||
+        state.protocolPlusSequenceByDevice.containsKey(deviceId);
+    if (deviceIsPlus) {
+      appLogger.i(
+          '🔎 rs-reconcile skip: $deviceId is Protocol Plus (rs=$rs ignored to avoid break teardown)');
+      return;
+    }
+
+    final normalized = rs.trim().toLowerCase();
+    if (_lastRsByDevice[deviceId] == normalized) {
+      appLogger.i('🔎 rs-reconcile skip: dedupe (rs=$normalized unchanged)');
+      return; // dedupe
+    }
+    _lastRsByDevice[deviceId] = normalized;
+    appLogger.i('🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
+
+    final current = state.deviceStatuses[deviceId];
+    if (current == null) return;
+
+    switch (normalized) {
+      case 'pause':
+        if (current == SessionStatus.running) {
+          appLogger.i('Session: device $deviceId reported rs=pause → pausing that device');
+          unawaited(pauseDevice(deviceId));
+        }
+        break;
+      case 'play':
+        if (current == SessionStatus.paused) {
+          appLogger.i('Session: device $deviceId reported rs=play → resuming that device');
+          unawaited(resumeDevice(deviceId));
+        }
+        break;
+      case 'stop':
+        if (current != SessionStatus.stopped &&
+            current != SessionStatus.completed) {
+          appLogger.i(
+              'Session: device $deviceId reported rs=stop → stopping that device');
+          // Use the force-stop path (NOT stopDevice): the firmware stops and
+          // then drops the BLE link, so by the time this runs the device may
+          // already be disconnected — and stopDevice deliberately skips a
+          // disconnected device. force-stop registers it regardless and
+          // suppresses the auto-reconnect so it doesn't come back.
+          _forceDeviceStopped(deviceId);
+        }
+        break;
+    }
+  }
+
+  /// Mark a device stopped because the DEVICE itself stopped (rs=stop) and is
+  /// dropping the BLE link. Unlike [stopDevice], this does NOT skip a
+  /// disconnected device — the device genuinely stopped, so we must reflect it
+  /// even if the link is already gone. Suppresses that device's auto-reconnect
+  /// and ends the session when every device is stopped/completed.
+  void _forceDeviceStopped(String deviceId) {
+    if (!_isActive) return;
+    appLogger.i('🔎 _forceDeviceStopped($deviceId) — engineKey=$sessionId '
+        'devices=${state.deviceIds} statuses=${state.deviceStatuses}');
+    _deviceStopwatches[deviceId]?.stop();
+    _suppressDeviceReconnect(deviceId);
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = SessionStatus.stopped;
+    if (statuses.values.every(
+      (s) => s == SessionStatus.stopped || s == SessionStatus.completed,
+    )) {
+      _timer?.cancel();
+      _timer = null;
+      _stopwatch.stop();
+    }
+    final overallStatus = _deriveOverallStatus(statuses);
+    try {
+      state = state.copyWith(deviceStatuses: statuses, status: overallStatus);
+    } catch (_) {
+      return; // notifier disposed
+    }
+    appLogger.i('🔎 _forceDeviceStopped done: overall=$overallStatus '
+        'newStatuses=$statuses');
+    if (overallStatus == SessionStatus.stopped ||
+        overallStatus == SessionStatus.completed) {
+      unawaited(_syncBackgroundRuntime('stopped'));
+    } else {
+      _pushNotificationSync();
+    }
+  }
+
+  /// Stop the BLE connector from auto-reconnecting [deviceId] now that it has
+  /// stopped/completed — so a device that drops the link after the session ends
+  /// isn't pulled back. BLE only; the next session's connect() re-enables it.
+  void _suppressDeviceReconnect(String deviceId) {
+    if (state.transport != SessionTransport.ble) return;
+    _ref.read(bleConnectorProvider).suppressReconnect(deviceId);
+  }
+
+  static const Set<String> _telemetryKeys = {
+    'sun', 'moon', 'pad', 'w', 'faultReason', 'fr', 'faultValue', 'fv',
+    'telemetryState', 's',
+  };
+
+  bool _looksLikeTelemetry(Map<String, dynamic> json) =>
+      json.keys.any(_telemetryKeys.contains);
+
+  /// Merge a telemetry frame for [incomingId] (BLE remoteId, or a MAC from the
+  /// backend) onto that device's [DeviceTelemetry]. Drops frames that don't map
+  /// to a device in this session.
+  void updateDeviceTelemetry(String incomingId, Map<String, dynamic> json) {
+    if (!_isActive) return;
+    final deviceId = _resolveTelemetryDeviceId(incomingId);
+    if (deviceId == null) return;
+    final existing = state.telemetryByDevice[deviceId];
+    final merged = (existing ?? const DeviceTelemetry()).mergeJson(json);
+    final map = Map<String, DeviceTelemetry>.from(state.telemetryByDevice)
+      ..[deviceId] = merged;
+    try {
+      state = state.copyWith(telemetryByDevice: map);
+    } catch (_) {
+      // notifier disposed — ignore.
+    }
+  }
+
+  static String _hexOnly(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^0-9a-f]'), '');
+
+  /// Resolve an inbound telemetry id to one of this session's device ids. BLE
+  /// notifications arrive keyed by remoteId (a direct match); backend frames
+  /// arrive keyed by MAC, matched against device ids and the firmware-reported
+  /// hardware MAC.
+  String? _resolveTelemetryDeviceId(String incoming) {
+    if (incoming.isEmpty) return null;
+    final ids = state.deviceIds;
+    if (ids.contains(incoming)) return incoming;
+    final wantHex = _hexOnly(incoming);
+    if (wantHex.isEmpty) return null;
+    final connector = _ref.read(bleConnectorProvider);
+    for (final id in ids) {
+      if (_hexOnly(id) == wantHex) return id;
+      final hw = connector.getHardwareMac(id);
+      if (hw != null && _hexOnly(hw) == wantHex) return id;
+    }
+    return null;
+  }
+
+  /// Apply a remote session lifecycle change (another client / the backend
+  /// paused, resumed, or stopped this session) WITHOUT re-issuing device
+  /// commands — UI-only reconciliation, mirroring the web's socket handlers.
+  void applyRemoteLifecycle(SessionStatus remoteStatus) {
+    if (!_isActive) return;
+    if (state.status == remoteStatus) return;
+    switch (remoteStatus) {
+      case SessionStatus.paused:
+        if (state.status != SessionStatus.running) return;
+        for (final id in state.deviceIds) {
+          _deviceStopwatches[id]?.stop();
+        }
+        final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+        for (final id in state.deviceIds) {
+          if (statuses[id] == SessionStatus.running) {
+            statuses[id] = SessionStatus.paused;
+          }
+        }
+        state = state.copyWith(
+          deviceStatuses: statuses,
+          status: _deriveOverallStatus(statuses),
+        );
+        break;
+      case SessionStatus.running:
+        if (state.status != SessionStatus.paused) return;
+        for (final id in state.deviceIds) {
+          if (state.deviceStatuses[id] == SessionStatus.paused) {
+            _deviceStopwatches[id]?.start();
+          }
+        }
+        final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
+        for (final id in state.deviceIds) {
+          if (statuses[id] == SessionStatus.paused) {
+            statuses[id] = SessionStatus.running;
+          }
+        }
+        state = state.copyWith(
+          deviceStatuses: statuses,
+          status: _deriveOverallStatus(statuses),
+        );
+        _timer?.cancel();
+        _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+        _anchorWallClock();
+        _syncDisplayedTimerFromStopwatch();
+        break;
+      default:
+        break;
     }
   }
 
@@ -510,6 +938,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _deviceStopwatches
       ..clear()
       ..addEntries(selectedDeviceIds.map((e) => MapEntry(e, Stopwatch())));
+
+    _lastRsByDevice.clear();
+
+    // Begin listening for device→app telemetry over BLE. Subscribed
+    // unconditionally so no session-entry path can skip it; the listener itself
+    // no-ops for non-BLE transports (Wi-Fi telemetry comes from the backend).
+    _ensureBleTelemetrySubscription();
   }
 
   Future<void> start() async {
@@ -1600,6 +2035,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _timer?.cancel();
     for (final id in state.deviceIds) {
       _deviceStopwatches[id]?.stop();
+      // Session ended → don't let the auto-reconnect loop pull devices back.
+      _suppressDeviceReconnect(id);
     }
     if (!_isActive) return;
     try {
@@ -1691,6 +2128,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
     }
     _deviceStopwatches[deviceId]?.stop();
+    // This device is stopping → don't let it auto-reconnect.
+    _suppressDeviceReconnect(deviceId);
     final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
       ..[deviceId] = SessionStatus.stopped;
     if (statuses.values.every(
@@ -1798,6 +2237,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _isProtocolPlus = false;
     _protocolPlusDeviceIds.clear();
     _plusSegmentEndByDevice.clear();
+    _lastRsByDevice.clear();
     try {
       state = const SessionEngineState();
       unawaited(_ref
@@ -1875,6 +2315,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               isRunning: false,
             );
             sw.stop();
+            // Completed naturally → don't auto-reconnect this device.
+            _suppressDeviceReconnect(id);
           }
         } else {
           updatedTimers[id] = timerState.copyWith(
@@ -2105,6 +2547,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void dispose() {
     _isActive = false; // Mark as inactive before disposing
     _timer?.cancel();
+    _telemetrySub?.cancel();
+    _telemetrySub = null;
     _stopwatch.stop();
     super.dispose();
   }

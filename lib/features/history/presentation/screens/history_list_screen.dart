@@ -7,8 +7,12 @@ import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
+import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../../session/presentation/providers/live_sessions_provider.dart';
+import '../../../session/services/session_sync_service.dart';
+import '../../../session/services/wifi_remote_control.dart';
 
 enum _HistoryTab { live, history }
 
@@ -24,6 +28,19 @@ class HistoryListScreen extends ConsumerStatefulWidget {
 class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
   _HistoryTab _selectedTab = _HistoryTab.live;
   _HistoryFilter _historyFilter = _HistoryFilter.all;
+
+  @override
+  void initState() {
+    super.initState();
+    // Defensively ensure the org-wide live feed is running (idempotent if the
+    // app bootstrap already started it) so the Live tab reflects the backend.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final orgId = ref.read(authStateProvider).selectedOrgId;
+      if (orgId != null && orgId.isNotEmpty) {
+        ref.read(liveSessionsProvider.notifier).start(orgId);
+      }
+    });
+  }
 
   bool _isLiveStatus(SessionStatus status) {
     return status == SessionStatus.running || status == SessionStatus.paused;
@@ -47,7 +64,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final allActiveSessions = ref.watch(activeSessionsProvider);
+    final allActiveSessions = ref.watch(liveSessionsProvider);
 
     // Keep only genuinely live sessions (running on top, older below).
     final runningSessions = allActiveSessions
@@ -284,13 +301,13 @@ String _formatHistoryDuration(int seconds) {
   return '${safeSeconds}s';
 }
 
-class _ActiveSessionCard extends StatelessWidget {
+class _ActiveSessionCard extends ConsumerWidget {
   final ActiveSession session;
   final bool canOpenLive;
   const _ActiveSessionCard({required this.session, required this.canOpenLive});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // session.status is the ActiveSession SessionStatus enum — compare against
     // that, not session_model's (the cross-enum compare was always false, so the
     // card always read 'Running').
@@ -300,31 +317,47 @@ class _ActiveSessionCard extends StatelessWidget {
         .map((id) => session.deviceStatuses[id] ?? session.status)
         .toList();
 
+    // Control gating (parity with web):
+    //   • own run        → tap to open the live screen (full control).
+    //   • foreign WiFi    → remote-controllable via the cloud broker (no open).
+    //   • foreign BLE     → read-only (can't reach a BLE device we aren't bonded to).
+    final isWifi = session.transport == 'wifi';
+    final canRemoteControl = !session.isOwn && isWifi;
+    // Resolve the LOCAL active session this backend run maps to (own runs only);
+    // re-opening must target the real local engine, not the backend sessionId.
+    final localId = ref.read(ownBackendToLocalSessionProvider)[session.id];
+    ActiveSession? localSession;
+    if (localId != null) {
+      for (final s in ref.read(activeSessionsProvider)) {
+        if (s.id == localId) {
+          localSession = s;
+          break;
+        }
+      }
+    }
+    final canOpen = session.isOwn && canOpenLive && localSession != null;
+
     return GradientCard(
       onTap: () {
-        if (!canOpenLive) return;
+        final local = localSession;
+        if (!canOpen || local == null) return;
         context.pushNamed(
           RouteNames.session,
           extra: {
-            'sessionId': session.id,
-            'protocolId': session.protocolId,
-            'deviceIds': session.deviceIds,
-            // session.transport is already the String 'wifi' or 'ble'. (The old
-            // `== SessionTransport.wifi` enum compare was always false, so every
-            // re-opened session was mislabelled 'ble' — which disabled the live
-            // controls and routed Stop to the no-op BLE path for WiFi sessions.)
-            'transport': session.transport == 'wifi' ? 'wifi' : 'ble',
+            'sessionId': local.id,
+            'protocolId': local.protocolId,
+            'deviceIds': local.deviceIds,
+            'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
             'advancedSettings': {},
             'advancedSettingsByDevice': {},
             'delayedDeviceId': null,
             'protocolByDeviceId': {},
             'skipEngineBootstrap': false,
-            'sessionClockAnchorMs': session.createdAt.millisecondsSinceEpoch,
+            'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
             // Restore Protocol Plus wiring so Stop cancels the server schedule.
-            if (session.protocolPlusBindings.isNotEmpty) ...{
-              'protocolPlusBindings': session.protocolPlusBindings,
-              'protocolPlusId':
-                  session.protocolPlusBindings.first['plusId'] ?? '',
+            if (local.protocolPlusBindings.isNotEmpty) ...{
+              'protocolPlusBindings': local.protocolPlusBindings,
+              'protocolPlusId': local.protocolPlusBindings.first['plusId'] ?? '',
             },
           },
         );
@@ -427,6 +460,11 @@ class _ActiveSessionCard extends StatelessWidget {
                 final statusLabel =
                     isPaused ? 'Paused' : (isRunning ? 'Running' : 'Idle');
 
+                final live = index < session.liveDevices.length
+                    ? session.liveDevices[index]
+                    : null;
+                final remaining = live?.remainingSeconds;
+
                 return Padding(
                   padding: EdgeInsets.only(
                       bottom: index == session.deviceIds.length - 1 ? 0 : 8),
@@ -453,6 +491,33 @@ class _ActiveSessionCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                      // Sun/moon pad colors straight from the backend
+                      // (web parity). Moon = left pad, Sun = right pad.
+                      if (live != null) ...[
+                        _PadDot(
+                          icon: Icons.nightlight_round,
+                          color: _padColor(live.moon),
+                        ),
+                        const SizedBox(width: 6),
+                        _PadDot(
+                          icon: Icons.wb_sunny_rounded,
+                          color: _padColor(live.sun),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      // Per-device countdown straight from the backend (never
+                      // computed on-device). Hidden when not provided.
+                      if (remaining != null && remaining > 0) ...[
+                        Text(
+                          _formatRemaining(remaining),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: ThemeConstants.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
                       Text(
                         statusLabel,
                         style: TextStyle(
@@ -467,6 +532,25 @@ class _ActiveSessionCard extends StatelessWidget {
               }),
             ),
           ),
+          if (canRemoteControl)
+            _RemoteWifiControls(session: session)
+          else if (!session.isOwn) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(Icons.visibility_outlined,
+                    size: 14, color: ThemeConstants.textTertiary),
+                const SizedBox(width: 6),
+                Text(
+                  'View only (BLE session on another device)',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: ThemeConstants.textTertiary,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -483,6 +567,151 @@ class _ActiveSessionCard extends StatelessWidget {
     } else {
       return '${date.day}/${date.month}/${date.year}';
     }
+  }
+}
+
+String _formatRemaining(int seconds) {
+  final s = seconds < 0 ? 0 : seconds;
+  final m = s ~/ 60;
+  final r = s % 60;
+  return '${m.toString().padLeft(2, '0')}:${r.toString().padLeft(2, '0')}';
+}
+
+/// Web-parity pad colors (Hydrawav3-ai liveSession.tsx): hot/red → red,
+/// cold/blue → blue, anything else (disabled/off/empty) → grey.
+Color _padColor(String? v) {
+  if (v == null) return Colors.grey;
+  final s = v.toLowerCase().trim();
+  if (s.contains('hot') || s == 'red') return Colors.red;
+  if (s.contains('cold') || s == 'blue') return Colors.blue;
+  return Colors.grey;
+}
+
+/// A labelled pad chip (Moon = left pad, Sun = right pad) coloured from the
+/// backend sun/moon string.
+class _PadDot extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const _PadDot({required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        shape: BoxShape.circle,
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      child: Icon(icon, size: 12, color: color),
+    );
+  }
+}
+
+/// Pause/Resume/Stop for a foreign Wi-Fi session — reaches the devices through
+/// the cloud broker and reconciles backend state so every client updates.
+class _RemoteWifiControls extends ConsumerStatefulWidget {
+  final ActiveSession session;
+  const _RemoteWifiControls({required this.session});
+
+  @override
+  ConsumerState<_RemoteWifiControls> createState() =>
+      _RemoteWifiControlsState();
+}
+
+class _RemoteWifiControlsState extends ConsumerState<_RemoteWifiControls> {
+  bool _busy = false;
+
+  Future<void> _run(Future<void> Function(WifiRemoteControl) action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action(ref.read(wifiRemoteControlProvider));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPaused = widget.session.status == SessionStatus.paused;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: _RemoteControlButton(
+              label: isPaused ? 'Resume' : 'Pause',
+              icon: isPaused
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+              color: ThemeConstants.warning,
+              enabled: !_busy,
+              onTap: () => _run((c) =>
+                  isPaused ? c.resume(widget.session) : c.pause(widget.session)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _RemoteControlButton(
+              label: 'Stop',
+              icon: Icons.stop_rounded,
+              color: ThemeConstants.error,
+              enabled: !_busy,
+              onTap: () => _run((c) => c.stop(widget.session)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RemoteControlButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _RemoteControlButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: enabled ? 0.14 : 0.06),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

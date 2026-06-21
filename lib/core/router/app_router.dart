@@ -20,7 +20,7 @@ import '../../features/protocols/domain/protocol_model.dart';
 import '../../features/session/services/protocol_plus_controller.dart';
 import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
-import '../../features/session/presentation/providers/active_sessions_provider.dart';
+import '../../features/session/presentation/providers/live_sessions_provider.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
 import '../../features/session/presentation/screens/session_setup_screen.dart';
 import '../../features/settings/presentation/screens/change_password_screen.dart';
@@ -316,7 +316,9 @@ class _AppShell extends ConsumerWidget {
     if (location.startsWith(RoutePaths.history)) idx = 2;
     if (location.startsWith(RoutePaths.settings)) idx = 3;
 
-    final activeSessions = ref.watch(activeSessionsProvider);
+    // Backend-driven live feed (same source as the History → Live tab) so the
+    // badge stays consistent and clears when a session stops/finishes.
+    final activeSessions = ref.watch(liveSessionsProvider);
     final activeBackgroundCount =
         activeSessions.where(_isVisibleActiveSession).length;
 

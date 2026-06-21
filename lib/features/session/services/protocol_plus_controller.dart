@@ -22,8 +22,11 @@ import '../../protocols/domain/protocol_plus_model.dart';
 import '../../protocols/presentation/providers/protocol_provider.dart';
 import '../domain/session_model.dart';
 import '../presentation/providers/active_sessions_provider.dart';
+import '../presentation/providers/live_sessions_provider.dart';
 import 'background_session_runtime.dart';
 import 'session_engine.dart';
+import 'session_sync_service.dart';
+import 'sessions_socket.dart';
 
 /// Result of starting a Protocol Plus run on the backend.
 class ProtocolPlusStartResult {
@@ -608,40 +611,16 @@ class ProtocolPlusController {
     );
 
     // Derive the socket endpoint from the REST base so it tracks config changes.
-    // nodeBaseUrl is like `https://host[/<proxyPrefix>]/hydrawav/v1/`.
-    //   • The Nest server uses global prefix `hydrawav/v1` and serves socket.io
-    //     at the default path `/socket.io`, gateway namespace `/sessions`.
-    //   • Any path segment BEFORE `hydrawav/v1` (e.g. `/api`) is a reverse-proxy
-    //     prefix that also fronts socket.io, so the external socket path is
-    //     `<proxyPrefix>/socket.io`. Unlike the browser web app (which can use a
-    //     relative URL resolved against window.origin), Flutter must dial an
-    //     absolute origin — a bare `/sessions` has no host and just times out.
-    final restUri = Uri.parse(ApiEndpoints.nodeBaseUrl);
-    final origin = '${restUri.scheme}://${restUri.host}'
-        '${restUri.hasPort ? ':${restUri.port}' : ''}';
-    final proxyPrefix = restUri.path
-        .split('hydrawav/v1')
-        .first
-        .replaceAll(RegExp(r'/+$'), ''); // e.g. `/api` or ``
-    final socketUrl = '$origin/sessions';
-    final socketPath = '$proxyPrefix/socket.io';
-
+    // Shared with the org-wide live-session + credits feeds via [SessionsSocket]
+    // so all consumers dial the identical host/proxy path.
     appLogger.i(
-      'ProtocolPlus: connecting socket → $socketUrl (path=$socketPath)',
+      'ProtocolPlus: connecting socket → ${SessionsSocket.urlFor('/sessions')} '
+      '(path=${SessionsSocket.path})',
     );
 
-    final socket = io.io(
-      socketUrl,
-      io.OptionBuilder()
-          .setPath(socketPath)
-          .setTransports(['websocket', 'polling'])
-          .setAuth({'token': token})
-          // ngrok free tier injects a browser-warning page that breaks the
-          // socket.io handshake unless this header is present.
-          .setExtraHeaders({'ngrok-skip-browser-warning': 'true'})
-          .disableAutoConnect()
-          .enableForceNew()
-          .build(),
+    final socket = SessionsSocket.buildSocket(
+      token: token,
+      namespace: '/sessions',
     );
     _socket = socket;
 
@@ -755,6 +734,43 @@ class ProtocolPlusController {
       try {
         if (data is! Map) return;
         final type = data['type']?.toString();
+
+        // SESSION_UPDATED carries per-device telemetry (pad state, warnings,
+        // faults, sensors) — the device→app channel the web card renders. Feed
+        // it to the engine, which matches each device by MAC against this
+        // session and ignores devices that aren't ours, so no binding gate is
+        // needed here.
+        if (type == 'SESSION_UPDATED') {
+          final devices = data['devices'];
+          final engine = _engine;
+          if (devices is List && engine != null) {
+            for (final dev in devices) {
+              if (dev is! Map) continue;
+              final m = dev.cast<String, dynamic>();
+              final id = (m['macAddress'] ?? m['slotId'] ?? m['deviceName'])
+                  ?.toString();
+              if (id == null || id.isEmpty) continue;
+              engine.updateDeviceTelemetry(id, m);
+            }
+          }
+          return;
+        }
+
+        // SESSION_PAUSED / SESSION_RESUMED — another client or the backend
+        // changed this run's lifecycle. Reconcile the local UI without
+        // re-issuing device commands (mirrors the web's socket handlers).
+        if (type == 'SESSION_PAUSED' || type == 'SESSION_RESUMED') {
+          final evSession = data['sessionId']?.toString();
+          if (evSession == null || evSession.isEmpty) return;
+          if (!_bindings.any((b) => b.serverSessionId == evSession)) return;
+          _engine?.applyRemoteLifecycle(
+            type == 'SESSION_PAUSED'
+                ? SessionStatus.paused
+                : SessionStatus.running,
+          );
+          return;
+        }
+
         if (type != 'SESSION_STOPPED') return;
         final evSession = data['sessionId']?.toString();
         if (evSession == null || evSession.isEmpty) return;
@@ -1128,11 +1144,60 @@ Future<void> launchSession(
     // Register the Plus device(s) with the server in the background; the
     // session screen connects its socket when the bindings are published.
     if (plusPlans.isNotEmpty) {
-      unawaited(controller.registerAndPublishBindings(
+      unawaited(controller
+          .registerAndPublishBindings(
         sessionId: sid,
         plans: plusPlans,
         transport: transport,
-      ));
+      )
+          .then((bindings) {
+        // Flag these backend sessions as owned by this phone so the live feed
+        // treats them as controllable own-runs (not foreign), and map each back
+        // to the local engine for safe re-open from the History live tab.
+        final live = ref.read(liveSessionsProvider.notifier);
+        final mapNotifier =
+            ref.read(ownBackendToLocalSessionProvider.notifier);
+        for (final b in bindings) {
+          live.markOwned(b.serverSessionId);
+          mapNotifier.update((m) => {...m, b.serverSessionId: sid});
+        }
+      }));
+    }
+
+    // Create a BACKEND session for the NORMAL (non-Plus) device subset so the
+    // run shows up in the org-wide live-session feed (parity with the web app).
+    // Plus devices already create their own backend sessions above — don't
+    // double-start them. Runs in the background; failure-tolerant (the devices
+    // are already physically running). The backend sessionId is published to
+    // [normalServerSessionIdProvider] so the live session screen can drive
+    // pause/resume/stop.
+    final normalSelections =
+        selections.where((s) => !s.protocol.isProtocolPlus).toList();
+    if (normalSelections.isNotEmpty) {
+      final specs = normalSelections
+          .map((s) => NormalDeviceSpec(
+                localMac: s.deviceId,
+                protocolId: s.protocol.id,
+                protocolName: s.protocol.templateName,
+                advancedSettings: s.advanced.toJson(),
+                totalDurationSeconds: s.protocol.totalDurationSeconds,
+              ))
+          .toList();
+      unawaited(
+        ref
+            .read(sessionSyncServiceProvider)
+            .startServerSession(devices: specs, transport: transport)
+            .then((backendId) {
+          if (backendId != null) {
+            ref.read(normalServerSessionIdProvider(sid).notifier).state =
+                backendId;
+            ref.read(liveSessionsProvider.notifier).markOwned(backendId);
+            ref.read(ownBackendToLocalSessionProvider.notifier).update(
+                  (m) => {...m, backendId: sid},
+                );
+          }
+        }),
+      );
     }
   } catch (e) {
     if (sessionId != null) {

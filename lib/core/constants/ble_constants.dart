@@ -70,8 +70,12 @@ class BleConstants {
   static const String? preferredNotifyCharacteristicUuid =
       'abcdef03-1234-5678-1234-56789abcdef9';
 
-  // web STATUS_NOTIFY_UUID — not yet wired in the mobile app (relevant to the
-  // device→app telemetry work, bug B-22): 'abcdef02-1234-5678-1234-56789abcdef9'
+  // web STATUS_NOTIFY_UUID — the device→app status/telemetry channel (B-22).
+  // Now wired: subscribed alongside the EVENT_NOTIFY channel so the firmware's
+  // MAC/status frames AND live telemetry both reach the app (see BleConnector).
+  // Optional: connect does not fail if a device lacks this characteristic.
+  static const String? preferredStatusCharacteristicUuid =
+      'abcdef02-1234-5678-1234-56789abcdef9';
 
   /// When true, we ONLY accept the exact UUIDs above.
   /// - Scan results are filtered to devices advertising [preferredServiceUuid]
@@ -163,7 +167,10 @@ class BleConstants {
   // Timeouts
   static const Duration scanTimeout = Duration(seconds: 10);
   static const Duration connectionTimeout = Duration(seconds: 6);
-  static const Duration reconnectDelay = Duration(seconds: 3);
+  // First reconnect attempt fires after this delay (it scales up per attempt:
+  // delay × attempt#). Kept short so a device that drops the link on stop comes
+  // back quickly and delivers its `rs:"stop"` frame with minimal lag.
+  static const Duration reconnectDelay = Duration(milliseconds: 600);
   static const int maxReconnectAttempts = 5;
 
   // MTU

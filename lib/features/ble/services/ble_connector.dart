@@ -16,7 +16,17 @@ class BleNotification {
   final String deviceId;
   final List<int> value;
 
-  const BleNotification({required this.deviceId, required this.value});
+  /// The characteristic this notification arrived on (normalized lower-case,
+  /// no dashes), or null if unknown. Lets consumers distinguish the EVENT
+  /// telemetry channel from the STATUS channel; MAC/ACK parsing is content-based
+  /// and ignores this.
+  final String? characteristicUuid;
+
+  const BleNotification({
+    required this.deviceId,
+    required this.value,
+    this.characteristicUuid,
+  });
 }
 
 class BleGattInfo {
@@ -40,6 +50,8 @@ class BleConnector {
   final Map<String, BluetoothCharacteristic> _jsonCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _writeCharacteristics = {};
   final Map<String, BluetoothCharacteristic> _notifyCharacteristics = {};
+  final Map<String, BluetoothCharacteristic> _statusCharacteristics = {};
+  final Map<String, StreamSubscription> _statusSubs = {};
   final Map<String, String> _firmwareSessionIdByDevice = {};
   final _stateController =
       StreamController<Map<String, BleConnectionStatus>>.broadcast();
@@ -232,6 +244,21 @@ class BleConnector {
         await device.requestMtu(BleConstants.requestedMtu);
       } catch (_) {}
 
+      // Ask Android for a HIGH-priority (low-latency, tight interval)
+      // connection. Hydra firmware streams telemetry every ~3s; the default
+      // balanced interval lets the link go quiet and drop
+      // (LINK_SUPERVISION_TIMEOUT), which blanks out telemetry until reconnect.
+      // High priority keeps the link active so frames arrive reliably. Android
+      // only; no-op / harmless on iOS.
+      try {
+        await device.requestConnectionPriority(
+          connectionPriorityRequest: ConnectionPriority.high,
+        );
+        appLogger.i('BLE: requested HIGH connection priority for $deviceId');
+      } catch (e) {
+        appLogger.w('BLE: requestConnectionPriority failed for $deviceId: $e');
+      }
+
       // Discover services
       // Keep this short; long delays make Connect feel unresponsive.
       await Future.delayed(const Duration(milliseconds: 250));
@@ -291,8 +318,11 @@ class BleConnector {
           _jsonCharacteristics.remove(deviceId);
           _writeCharacteristics.remove(deviceId);
           _notifyCharacteristics.remove(deviceId);
+          _statusCharacteristics.remove(deviceId);
           _notifySubs[deviceId]?.cancel();
           _notifySubs.remove(deviceId);
+          _statusSubs[deviceId]?.cancel();
+          _statusSubs.remove(deviceId);
           _batterySubs[deviceId]?.cancel();
           _batterySubs.remove(deviceId);
           _batteryLevels.remove(deviceId);
@@ -363,10 +393,15 @@ class BleConnector {
         await notifyChar.setNotifyValue(true);
         // Let the bridge/firmware + Android BLE stack finish CCCD setup.
         await Future<void>.delayed(const Duration(milliseconds: 150));
+        final notifyUuidTag = _normUuid(notifyChar.uuid.str);
         await _notifySubs[deviceId]?.cancel();
         _notifySubs[deviceId] = notifyChar.onValueReceived.listen((value) {
           _notificationController.add(
-            BleNotification(deviceId: deviceId, value: value),
+            BleNotification(
+              deviceId: deviceId,
+              value: value,
+              characteristicUuid: notifyUuidTag,
+            ),
           );
           _tryCaptureFirmwareSessionId(deviceId, value);
           _tryCaptureHardwareMac(deviceId, value);
@@ -374,6 +409,12 @@ class BleConnector {
         }, onError: (e) {
           appLogger.e('BLE: Notification stream error for $deviceId: $e');
         });
+
+        // STATUS channel (web STATUS_NOTIFY_UUID, B-22). Optional: only wired if
+        // the device exposes it. Feeds the SAME broadcast stream so telemetry
+        // and MAC/status frames on this channel reach all consumers; tagged with
+        // its UUID so the engine can tell the channels apart.
+        await _subscribeStatusChannel(deviceId);
       } else {
         if (BleConstants.strictHydraGattProfile &&
             BleConstants.preferredNotifyCharacteristicUuid != null) {
@@ -412,6 +453,18 @@ class BleConnector {
     }
   }
 
+  /// Suppress auto-reconnect for [deviceId] WITHOUT forcing a disconnect of a
+  /// still-connected device. Used when a session ends (device stop, in-app stop,
+  /// or completion) so a device that drops the link afterwards is not pulled back
+  /// by the auto-reconnect loop. Any pending/in-flight reconnect is aborted (the
+  /// reconnect loop re-checks [_manualDisconnects] after its delay). A later
+  /// explicit [connect] clears this, re-enabling reconnect for the next session.
+  void suppressReconnect(String deviceId) {
+    _manualDisconnects.add(deviceId);
+    _reconnectAttempts[deviceId] = BleConstants.maxReconnectAttempts;
+    appLogger.i('BLE: auto-reconnect suppressed for $deviceId (session ended)');
+  }
+
   /// Disconnect a specific device.
   Future<void> disconnect(String deviceId) async {
     // Always suppress any pending/in-flight auto-reconnect for this device,
@@ -426,6 +479,8 @@ class BleConnector {
       _connectionSubs.remove(deviceId);
       await _notifySubs[deviceId]?.cancel();
       _notifySubs.remove(deviceId);
+      await _statusSubs[deviceId]?.cancel();
+      _statusSubs.remove(deviceId);
       await _batterySubs[deviceId]?.cancel();
       _batterySubs.remove(deviceId);
       await device.disconnect();
@@ -434,6 +489,7 @@ class BleConnector {
       _jsonCharacteristics.remove(deviceId);
       _writeCharacteristics.remove(deviceId);
       _notifyCharacteristics.remove(deviceId);
+      _statusCharacteristics.remove(deviceId);
       _gattInfoByDevice.remove(deviceId);
       _firmwareSessionIdByDevice.remove(deviceId);
       _batteryLevels.remove(deviceId);
@@ -655,6 +711,41 @@ class BleConnector {
   bool isConnected(String deviceId) =>
       _deviceStates[deviceId] == BleConnectionStatus.connected;
 
+  /// Lower-case, dash-stripped UUID for tagging/compare.
+  String _normUuid(String uuid) => uuid.toLowerCase().replaceAll('-', '');
+
+  /// Enable notify on the optional STATUS characteristic (web STATUS_NOTIFY_UUID)
+  /// and route its frames into the shared notification stream. Best-effort:
+  /// no-ops when the device doesn't expose the characteristic, so it never
+  /// affects the strict EVENT_NOTIFY binding above.
+  Future<void> _subscribeStatusChannel(String deviceId) async {
+    final statusChar = _statusCharacteristics[deviceId];
+    if (statusChar == null) return;
+    final statusUuidTag = _normUuid(statusChar.uuid.str);
+    try {
+      await statusChar.setNotifyValue(true);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _statusSubs[deviceId]?.cancel();
+      _statusSubs[deviceId] = statusChar.onValueReceived.listen((value) {
+        _notificationController.add(
+          BleNotification(
+            deviceId: deviceId,
+            value: value,
+            characteristicUuid: statusUuidTag,
+          ),
+        );
+        _tryCaptureFirmwareSessionId(deviceId, value);
+        _tryCaptureHardwareMac(deviceId, value);
+        appLogger.d('BLE: Status notification from $deviceId: $value');
+      }, onError: (e) {
+        appLogger.e('BLE: Status stream error for $deviceId: $e');
+      });
+      appLogger.i('BLE: STATUS channel enabled for $deviceId (${statusChar.uuid.str})');
+    } catch (e) {
+      appLogger.w('BLE: Failed to enable STATUS channel for $deviceId: $e');
+    }
+  }
+
   Future<void> _findCharacteristics(
       String deviceId, List<BluetoothService> services) async {
     // Prevent stale UUID matches from a previous connection attempt.
@@ -662,6 +753,7 @@ class BleConnector {
     _controlCharacteristics.remove(deviceId);
     _jsonCharacteristics.remove(deviceId);
     _notifyCharacteristics.remove(deviceId);
+    _statusCharacteristics.remove(deviceId);
     _gattInfoByDevice.remove(deviceId);
 
     String? selectedServiceUuid;
@@ -677,6 +769,10 @@ class BleConnector {
     final preferredJson = BleConstants.preferredJsonCharacteristicUuid == null
         ? null
         : n(BleConstants.preferredJsonCharacteristicUuid!);
+    final preferredStatus =
+        BleConstants.preferredStatusCharacteristicUuid == null
+            ? null
+            : n(BleConstants.preferredStatusCharacteristicUuid!);
     appLogger.i("EXPECTED CONTROL WRITE → $preferredWrite");
     appLogger.i("EXPECTED JSON WRITE → $preferredJson");
     final preferredNotify =
@@ -747,6 +843,19 @@ class BleConnector {
             _jsonCharacteristics[deviceId] = char;
             appLogger
                 .d('BLE: Found preferred JSON characteristic for $deviceId');
+          }
+          if (preferredStatus != null && charUuid == preferredStatus) {
+            final canNotify =
+                char.properties.notify || char.properties.indicate;
+            if (canNotify) {
+              _statusCharacteristics[deviceId] = char;
+              appLogger.d(
+                  'BLE: Found preferred STATUS characteristic for $deviceId');
+            } else {
+              appLogger.w(
+                'BLE: Preferred STATUS UUID matched but not notifiable: ${char.uuid.str}',
+              );
+            }
           }
           if (preferredNotify != null && charUuid == preferredNotify) {
             final canNotify =
@@ -927,6 +1036,9 @@ class BleConnector {
       sub.cancel();
     }
     for (final sub in _notifySubs.values) {
+      sub.cancel();
+    }
+    for (final sub in _statusSubs.values) {
       sub.cancel();
     }
     for (final sub in _batterySubs.values) {

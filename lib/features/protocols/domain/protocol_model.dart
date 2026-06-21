@@ -28,6 +28,11 @@ class Protocol {
   /// uses this value whenever it's present.
   final int apiTotalDurationSeconds;
 
+  /// Whether this protocol is unlocked by the org's current plan. The backend
+  /// sets this on the protocol-list endpoints (`active = product.protocols
+  /// .includes(_id)`). Locked protocols are shown disabled (web parity).
+  final bool active;
+
   const Protocol({
     required this.id,
     required this.templateName,
@@ -47,6 +52,7 @@ class Protocol {
     this.isProtocolPlus = false,
     this.protocolPlusIds = const [],
     this.apiTotalDurationSeconds = 0,
+    this.active = true,
   });
 
   factory Protocol.fromJson(Map<String, dynamic> json) {
@@ -81,6 +87,10 @@ class Protocol {
       isProtocolPlus: data['protocolPlus'] as bool? ?? false,
       protocolPlusIds: _parseProtocolPlusIds(data),
       apiTotalDurationSeconds: (data['totalDuration'] as num?)?.toInt() ?? 0,
+      // Plan gating: backend sets `active` per protocol. Default true so a
+      // protocol is usable when the field is absent (matches the backend's
+      // regular-protocol default).
+      active: data['active'] as bool? ?? true,
     );
   }
 
@@ -171,6 +181,7 @@ class Protocol {
       isProtocolPlus: isProtocolPlus,
       protocolPlusIds: protocolPlusIds,
       apiTotalDurationSeconds: apiTotalDurationSeconds,
+      active: active,
     );
   }
 
@@ -217,12 +228,16 @@ class ProtocolSelectionOption {
   final String? goalTagName;
   final int? durationSeconds;
 
+  /// Whether this protocol is unlocked by the org's current plan (web parity).
+  final bool active;
+
   const ProtocolSelectionOption({
     required this.id,
     required this.templateName,
     this.description = '',
     this.goalTagName,
     this.durationSeconds,
+    this.active = true,
   });
 
   factory ProtocolSelectionOption.fromProtocol(Protocol protocol) {
@@ -231,6 +246,7 @@ class ProtocolSelectionOption {
       templateName: protocol.templateName,
       description: protocol.description,
       durationSeconds: protocol.totalDurationSeconds,
+      active: protocol.active,
     );
   }
 
@@ -244,6 +260,7 @@ class ProtocolSelectionOption {
       templateName: data['template_name'] as String? ?? '',
       goalTagName: data['goalTagName'] as String?,
       durationSeconds: (data['duration'] as num?)?.toInt(),
+      active: data['active'] as bool? ?? true,
     );
   }
 

@@ -28,6 +28,9 @@ import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../../session/services/protocol_plus_controller.dart';
+import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../payments/presentation/providers/token_balance_provider.dart';
+import '../../../payments/presentation/widgets/token_balance_badge.dart';
 
 final pairedDevicesProvider = StreamProvider((ref) {
   return ref.read(bleRepositoryProvider).watchPairedDevices();
@@ -93,7 +96,15 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeAutoScan());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeAutoScan();
+      // Ensure the token balance feed is running for the header chip.
+      final auth = ref.read(authStateProvider);
+      final orgId = auth.selectedOrgId ?? auth.user?.organizationId;
+      if (orgId != null && orgId.isNotEmpty) {
+        ref.read(tokenBalanceProvider.notifier).start(orgId);
+      }
+    });
   }
 
   void _initializeAutoScan() {
@@ -611,6 +622,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                               itemBuilder: (ctx, index) {
                                 final protocol = list[index];
                                 final selected = protocol.id == currentId;
+                                // Plan gating (web parity): locked protocols are
+                                // greyed + show a lock and can't be selected.
+                                final locked = !protocol.active;
                                 final meta = [
                                   if (protocol.goalTagName?.isNotEmpty ?? false)
                                     protocol.goalTagName!,
@@ -618,9 +632,20 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     protocol.totalDuration!.formatted,
                                 ].join(' - ');
 
-                                return InkWell(
+                                return Opacity(
+                                  opacity: locked ? 0.55 : 1,
+                                  child: InkWell(
                                   borderRadius: BorderRadius.circular(14),
                                   onTap: () {
+                                    if (locked) {
+                                      ScaffoldMessenger.of(ctx).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                              'This protocol isn\'t included in your plan.'),
+                                        ),
+                                      );
+                                      return;
+                                    }
                                     ref
                                         .read(
                                             recentProtocolIdsProvider.notifier)
@@ -644,9 +669,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     child: Row(
                                       children: [
                                         Icon(
-                                          selected
-                                              ? Icons.check_circle_rounded
-                                              : Icons.science_outlined,
+                                          locked
+                                              ? Icons.lock_outline_rounded
+                                              : selected
+                                                  ? Icons.check_circle_rounded
+                                                  : Icons.science_outlined,
                                           size: 18,
                                           color: selected
                                               ? ThemeConstants.accent
@@ -711,6 +738,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       ],
                                     ),
                                   ),
+                                  ),
                                 );
                               },
                             );
@@ -736,14 +764,17 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required bool selected,
     required VoidCallback onTap,
   }) {
+    final locked = !protocol.active;
     final meta = [
       if (protocol.goalTagName?.isNotEmpty ?? false) protocol.goalTagName!,
       if (protocol.totalDuration != null) protocol.totalDuration!.formatted,
     ].join(' - ');
 
-    return InkWell(
+    return Opacity(
+      opacity: locked ? 0.55 : 1,
+      child: InkWell(
       borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
+      onTap: locked ? null : onTap,
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -758,7 +789,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         child: Row(
           children: [
             Icon(
-              selected ? Icons.check_circle_rounded : Icons.science_outlined,
+              locked
+                  ? Icons.lock_outline_rounded
+                  : selected
+                      ? Icons.check_circle_rounded
+                      : Icons.science_outlined,
               size: 18,
               color: selected
                   ? ThemeConstants.accent
@@ -811,6 +846,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -1169,7 +1205,12 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 14),
+                          const SizedBox(width: 10),
+                          const Padding(
+                            padding: EdgeInsets.only(top: 4),
+                            child: TokenBalanceBadge(),
+                          ),
+                          const SizedBox(width: 10),
                           _HeaderBtn(
                             icon: Icons.add_rounded,
                             filled: true,

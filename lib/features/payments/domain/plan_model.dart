@@ -7,6 +7,13 @@ class SubscriptionPlan {
   final String? currency;
   final DateTime? currentPeriodEnd;
 
+  /// Available (unlocked) tokens for the organization — the same value the web
+  /// header shows as "Tokens: N". `lockTokens` (reserved during a running
+  /// session) is intentionally not surfaced.
+  final double? remainingTokens;
+  final int? sessionsAvailable;
+  final int? aiReportsAvailable;
+
   const SubscriptionPlan({
     this.id,
     required this.name,
@@ -15,20 +22,36 @@ class SubscriptionPlan {
     this.amount,
     this.currency,
     this.currentPeriodEnd,
+    this.remainingTokens,
+    this.sessionsAvailable,
+    this.aiReportsAvailable,
   });
 
-  factory SubscriptionPlan.fromJson(Map<String, dynamic> json) =>
-      SubscriptionPlan(
-        id: json['id']?.toString(),
-        name: json['name'] as String? ?? 'Free',
-        status: json['status'] as String?,
-        billingCycle: json['billingCycle'] as String?,
-        amount: (json['amount'] as num?)?.toDouble(),
-        currency: json['currency'] as String?,
-        currentPeriodEnd: json['currentPeriodEnd'] != null
-            ? DateTime.tryParse(json['currentPeriodEnd'] as String)
-            : null,
-      );
+  factory SubscriptionPlan.fromJson(Map<String, dynamic> json) {
+    // Backend `getCurrentPlan` returns `planName` (= product name, e.g. "Pro"),
+    // not `name`, and exposes `hasActivePlan`/`isFreePlan` rather than a status.
+    final displayName = (json['planName'] ?? json['plan'] ?? json['name'])
+            ?.toString() ??
+        'Free';
+    final hasActive = json['hasActivePlan'] == true;
+    final isFree = json['isFreePlan'] == true;
+    final status = json['status']?.toString() ??
+        (isFree ? 'Free plan' : (hasActive ? 'Active' : 'Inactive'));
+    return SubscriptionPlan(
+      id: json['id']?.toString() ?? json['paymentId']?.toString(),
+      name: displayName,
+      status: status,
+      billingCycle: json['billingCycle'] as String?,
+      amount: (json['amountInDollars'] ?? json['amount'] as num?)?.toDouble(),
+      currency: json['currency'] as String?,
+      currentPeriodEnd: json['currentPeriodEnd'] != null
+          ? DateTime.tryParse(json['currentPeriodEnd'].toString())
+          : null,
+      remainingTokens: (json['remainingTokens'] as num?)?.toDouble(),
+      sessionsAvailable: (json['sessionsAvailable'] as num?)?.toInt(),
+      aiReportsAvailable: (json['aiReportsAvailable'] as num?)?.toInt(),
+    );
+  }
 
   bool get isPaid => status == 'active' && name.toLowerCase() != 'free';
 
