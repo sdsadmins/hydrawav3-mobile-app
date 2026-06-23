@@ -166,6 +166,14 @@ class BleConstants {
   static const Duration reconnectDelay = Duration(seconds: 3);
   static const int maxReconnectAttempts = 5;
 
+  /// Per-chunk BLE write timeout. Some Android stacks (notably Samsung — e.g.
+  /// S24 Ultra) can leave `characteristic.write` pending indefinitely when the
+  /// GATT is busy or just-reconnected. Without a bound this hangs the whole
+  /// Protocol Plus switch ("stuck on SWITCHING"). On timeout we treat it like a
+  /// transient failure and run the reconnect+retry recovery (cross-platform —
+  /// iOS surfaces different errors than Android's GATT 133).
+  static const Duration writeTimeout = Duration(seconds: 4);
+
   // MTU
   static const int requestedMtu = 512;
 

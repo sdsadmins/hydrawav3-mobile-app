@@ -11,6 +11,7 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
 import '../../../../core/utils/logger.dart';
+import '../../../../core/utils/log_export.dart'; // TEMP-LOG-EXPORT
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../../core/network/dio_client.dart'; // ✅ ADD
@@ -682,6 +683,24 @@ class SettingsScreen extends ConsumerWidget {
                       // Coming soon — hidden for now
                       // _Item(Icons.payment_outlined, 'Payment Methods',
                       //     trailing: _comingSoonBadge()),
+                    ])),
+                const SizedBox(height: 16),
+
+                // TEMP-LOG-EXPORT: internal-test diagnostics — share the on-disk
+                // log file so we can debug field issues (e.g. Protocol Plus
+                // switching). Remove this whole block when done.
+                AnimatedEntrance(
+                    index: 3,
+                    child: _SettingsGroup(title: 'DIAGNOSTICS', items: [
+                      _Item(Icons.bug_report_outlined, 'Share Logs',
+                          onTap: () async {
+                        final ok = await shareLogFile();
+                        if (!ok && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('No logs to share yet.')),
+                          );
+                        }
+                      }),
                     ])),
                 const SizedBox(height: 16),
 

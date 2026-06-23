@@ -172,6 +172,15 @@ class ProtocolPlusController {
   StreamSubscription<Map<String, BleConnectionStatus>>? _connStatesSub;
   Map<String, BleConnectionStatus> _lastConnStates = {};
 
+  /// Periodic safety net that drains [_pendingSwitches]. The connection-state
+  /// stream ([_applyPendingSwitchesOn]) only fires on the exact disconnected→
+  /// connected transition — if that edge is missed, or a switch lands here after
+  /// a failed/timed-out write (see the START_PROTOCOL handler), the held switch
+  /// would otherwise strand the device on "SWITCHING" forever. This timer keeps
+  /// retrying every connected device's pending switch until it succeeds, which
+  /// is what makes the run converge instead of freezing on a flaky stack.
+  Timer? _pendingSwitchReconciler;
+
   ProtocolPlusController(this._ref);
 
   /// Pretty-print any JSON-ish payload for debugging (falls back to toString).
@@ -246,40 +255,59 @@ class ProtocolPlusController {
     final orgId = await storage.getSelectedOrgId();
 
     final dio = _ref.read(nodeDioProvider);
-    final res = await dio.post(
-      ApiEndpoints.protocolPlusStart,
-      data: {
-        'protocolPlusId': protocolPlusId,
-        if (orgId != null) 'organizationId': int.tryParse(orgId),
-        'clientId': clientId,
-        'isGuestMode': isGuestMode,
-        'isMobile': isMobile,
-        'deviceName': deviceName,
-        // BLE devices are identified by bluetoothId; Wi-Fi devices by macAddress.
-        if (transport == 'ble')
-          'bluetoothId': macAddress
-        else
-          'macAddress': macAddress,
-        if (slotId != null) 'slotId': slotId,
-        if (bodyPart != null) 'bodyPart': bodyPart,
-        'advancedSettings': advancedSettings ?? const {},
-      },
-      options: Options(
-        headers: {
-          if (userId != null) 'x-user-id': userId,
-          if (token != null) 'Authorization': token,
-        },
-      ),
-    );
+    // Build the payload as a value first so we can log EXACTLY what we sent if
+    // the server rejects it (the device-identity 400 we're chasing).
+    final payload = <String, dynamic>{
+      'protocolPlusId': protocolPlusId,
+      if (orgId != null) 'organizationId': int.tryParse(orgId),
+      'clientId': clientId,
+      'isGuestMode': isGuestMode,
+      'isMobile': isMobile,
+      'deviceName': deviceName,
+      // BLE devices are identified by bluetoothId; Wi-Fi devices by macAddress.
+      if (transport == 'ble')
+        'bluetoothId': macAddress
+      else
+        'macAddress': macAddress,
+      if (slotId != null) 'slotId': slotId,
+      if (bodyPart != null) 'bodyPart': bodyPart,
+      'advancedSettings': advancedSettings ?? const {},
+    };
 
-    appLogger.i(
-      'ProtocolPlus: ⇐ POST /protocol-plus/start payload:\n${_pretty(res.data)}',
-    );
-    final data = (res.data as Map).cast<String, dynamic>();
-    return ProtocolPlusStartResult(
-      sessionId: data['sessionId']?.toString() ?? '',
-      protocolCount: (data['protocolCount'] as num?)?.toInt() ?? 0,
-    );
+    try {
+      final res = await dio.post(
+        ApiEndpoints.protocolPlusStart,
+        data: payload,
+        options: Options(
+          headers: {
+            if (userId != null) 'x-user-id': userId,
+            if (token != null) 'Authorization': token,
+          },
+        ),
+      );
+
+      appLogger.i(
+        'ProtocolPlus: ⇐ POST /protocol-plus/start payload:\n${_pretty(res.data)}',
+      );
+      final data = (res.data as Map).cast<String, dynamic>();
+      return ProtocolPlusStartResult(
+        sessionId: data['sessionId']?.toString() ?? '',
+        protocolCount: (data['protocolCount'] as num?)?.toInt() ?? 0,
+      );
+    } on DioException catch (e) {
+      // This is the line that was previously invisible: log the server's reason
+      // AND the exact request, so the backend rejection (e.g. unregistered/
+      // mismatched device id, BLE MAC ±1) is diagnosable from a shared log.
+      appLogger.e(
+        'ProtocolPlus: ❌ POST /protocol-plus/start FAILED '
+        '(status=${e.response?.statusCode})\n'
+        'SERVER BODY: ${e.response?.data}\n'
+        'SENT PAYLOAD: $payload\n'
+        'orgId(raw)=$orgId  transport=$transport  '
+        'sentDeviceId=$macAddress  deviceName="$deviceName"',
+      );
+      rethrow;
+    }
   }
 
   /// Build the auth headers + organizationId used by the session lifecycle
@@ -470,6 +498,13 @@ class ProtocolPlusController {
           serverSessionId: result.sessionId,
           plusId: plan.plusId,
         );
+      } on DioException catch (e) {
+        appLogger.e(
+          'ProtocolPlus: ❌ failed to register ${plan.deviceId} '
+          '(serverDeviceId=$serverDeviceId, status=${e.response?.statusCode})\n'
+          'SERVER BODY: ${e.response?.data}',
+        );
+        return null;
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to register ${plan.deviceId}: $e');
         return null;
@@ -586,6 +621,15 @@ class ProtocolPlusController {
         .read(bleConnectorProvider)
         .connectionStates
         .listen(_applyPendingSwitchesOn);
+
+    // Safety net for the above: re-attempt held switches on a fixed cadence too,
+    // not only on the connection-state edge. Covers missed transitions and
+    // switches re-queued after a failed/timed-out write.
+    _pendingSwitchReconciler?.cancel();
+    _pendingSwitchReconciler = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => _reconcilePendingSwitches(),
+    );
 
     final storage = _ref.read(secureStorageProvider);
     final token = await storage.getAccessToken();
@@ -737,11 +781,23 @@ class ProtocolPlusController {
         // Write to the device using our LOCAL id (BLE remoteId / Wi-Fi mac).
         // The event's `bluetoothId` is the firmware id, which is NOT what the
         // BLE connector uses to address the device — so we must not write to it.
-        await engine.applyProtocolPlusSwitch(
+        final ok = await engine.applyProtocolPlusSwitch(
           binding.localMac,
           protocol,
           index,
         );
+        // If the write failed/timed out (e.g. the device dropped between the
+        // connection check and the write), DON'T lose the switch — queue it so
+        // the reconciler retries once the link is healthy again. Otherwise the
+        // device would strand on "SWITCHING".
+        if (!ok) {
+          _pendingSwitches[binding.localMac] =
+              (protocol: protocol, index: index);
+          appLogger.w(
+            'ProtocolPlus: switch apply failed for ${binding.localMac} '
+            '(index=$index) — queued for retry',
+          );
+        }
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to handle START_PROTOCOL: $e');
       }
@@ -879,21 +935,53 @@ class ProtocolPlusController {
       final justConnected = now == BleConnectionStatus.connected &&
           prev != BleConnectionStatus.connected;
       if (!justConnected) continue;
-      final pending = _pendingSwitches.remove(b.localMac);
-      if (pending == null) continue;
-      appLogger.i(
-        'ProtocolPlus: ${b.localMac} reconnected — applying held switch '
-        'index=${pending.index}',
-      );
-      unawaited(
-        engine.applyProtocolPlusSwitch(
-          b.localMac,
-          pending.protocol,
-          pending.index,
-        ),
-      );
+      _applyPendingSwitch(engine, b.localMac, reason: 'reconnected');
     }
     _lastConnStates = Map.of(states);
+  }
+
+  /// Fixed-cadence safety net: re-apply any held switch for a device that is
+  /// CURRENTLY connected, regardless of whether we observed the reconnect edge.
+  /// This is what converges a run that would otherwise sit on "SWITCHING"
+  /// because a connection-state transition was missed or a write timed out.
+  void _reconcilePendingSwitches() {
+    final engine = _engine;
+    if (engine == null || _pendingSwitches.isEmpty) return;
+    final connector = _ref.read(bleConnectorProvider);
+    for (final b in _bindings) {
+      if (!_pendingSwitches.containsKey(b.localMac)) continue;
+      if (!connector.isConnected(b.localMac)) continue;
+      _applyPendingSwitch(engine, b.localMac, reason: 'reconciler');
+    }
+  }
+
+  /// Remove and apply the held switch for [mac] (no-op if none). The synchronous
+  /// `remove` before any await makes this safe against the connection-state
+  /// listener and the reconciler racing for the same entry — whoever removes it
+  /// first applies it; the other sees null and skips.
+  void _applyPendingSwitch(SessionEngine engine, String mac,
+      {required String reason}) {
+    final pending = _pendingSwitches.remove(mac);
+    if (pending == null) return;
+    appLogger.i(
+      'ProtocolPlus: applying held switch for $mac (index=${pending.index}, '
+      'via=$reason)',
+    );
+    unawaited(
+      engine
+          .applyProtocolPlusSwitch(mac, pending.protocol, pending.index)
+          .then((ok) {
+        // Re-queue on failure so the next reconciler tick retries — keep trying
+        // until the device actually accepts the switch.
+        if (!ok && _engine != null) {
+          _pendingSwitches[mac] = pending;
+          appLogger.w(
+            'ProtocolPlus: held switch for $mac (index=${pending.index}) '
+            'still failing — will retry',
+          );
+        }
+      }),
+    );
   }
 
   void dispose() {
@@ -901,6 +989,8 @@ class ProtocolPlusController {
     _removeEngineListener = null;
     _connStatesSub?.cancel();
     _connStatesSub = null;
+    _pendingSwitchReconciler?.cancel();
+    _pendingSwitchReconciler = null;
     _pendingSwitches.clear();
     _lastConnStates = {};
     _engine = null;

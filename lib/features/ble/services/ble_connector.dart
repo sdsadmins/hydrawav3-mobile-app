@@ -558,10 +558,15 @@ class BleConnector {
 
         final chunk = data.sublist(i, end);
 
-        await characteristic.write(
-          chunk,
-          withoutResponse: effectiveWithoutResponse,
-        );
+        // Bound every write: a silent hang here (seen on some Samsung stacks
+        // mid-Protocol-Plus-switch) would otherwise freeze the entire switch.
+        // On timeout we fall through to the catch and recover via reconnect.
+        await characteristic
+            .write(
+              chunk,
+              withoutResponse: effectiveWithoutResponse,
+            )
+            .timeout(BleConstants.writeTimeout);
 
         // Match web delay between chunks
         if (end < data.length) {
@@ -580,12 +585,15 @@ class BleConnector {
     } catch (e) {
       appLogger.e('BLE: Write failed for $deviceId: $e');
 
-      // One-shot recovery: Android GATT 133 is often resolved by reconnecting
-      // then retrying the write once.
+      // One-shot recovery: Android GATT 133 — and a write TIMEOUT (a stalled
+      // write, common on Samsung mid-switch) — are usually resolved by
+      // reconnecting then retrying the write once. Timeout is cross-platform,
+      // so this also covers iOS, which never reports the Android-specific 133.
       final isGatt133 = e.toString().contains('android-code: 133') ||
           e.toString().contains('GATT_ERROR (133)');
+      final isTimeout = e is TimeoutException;
 
-      if (recoverOnGatt133 && isGatt133 && attempt < 1) {
+      if (recoverOnGatt133 && (isGatt133 || isTimeout) && attempt < 1) {
         final device = _connectedDevices[deviceId];
         if (device != null) {
           try {

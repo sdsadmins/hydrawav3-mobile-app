@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
 import 'core/storage/preferences.dart';
+import 'core/utils/logger.dart'; // TEMP-LOG-EXPORT
 import 'features/auth/presentation/providers/auth_provider.dart';
 import 'features/ble/services/auto_connect_manager.dart';
 import 'features/session/presentation/providers/active_sessions_provider.dart';
@@ -21,6 +22,8 @@ void main() async {
       DeviceOrientation.portraitDown,
     ]);
   }
+
+  await initFileLogging(); // TEMP-LOG-EXPORT: persist logs to a file for field debugging
 
   // Initialize SharedPreferences
   final sharedPrefs = await SharedPreferences.getInstance();
