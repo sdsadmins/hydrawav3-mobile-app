@@ -163,6 +163,18 @@ class _TokenDetailsSheet extends ConsumerWidget {
                       children: [
                         _TokenDetailRow(
                             label: 'Organization', value: orgName ?? ph),
+                        const _SheetDivider(),
+                        _TokenDetailRow(
+                          // Max devices this plan can run at once (0 = unlimited).
+                          label: 'Devices you can run',
+                          value: plan == null
+                              ? ph
+                              : (plan.deviceLimit == null
+                                  ? ph
+                                  : (plan.deviceLimit == 0
+                                      ? 'Unlimited'
+                                      : plan.deviceLimit.toString())),
+                        ),
                         if (plan?.currentPeriodEnd != null) ...[
                           const _SheetDivider(),
                           _TokenDetailRow(

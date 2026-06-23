@@ -241,6 +241,8 @@ final routerProvider = Provider<GoRouter>((ref) {
               protocolPlusBindings: protocolPlusBindings,
               protocolPlusPending:
                   extra?['protocolPlusPending'] as bool? ?? false,
+              remoteView: extra?['remoteView'] as bool? ?? false,
+              backendSessionId: extra?['backendSessionId'] as String?,
             );
           }),
       GoRoute(

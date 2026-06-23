@@ -432,6 +432,13 @@ class ProtocolPlusController {
     final nameByDevice =
         await _resolveRegisteredNames(plans.map((p) => p.deviceId).toList());
 
+    // If any device hits a token/subscription rejection we must abort the whole
+    // launch (block the run, web parity). We don't throw mid-flight, though:
+    // other devices may already have registered + locked tokens server-side, so
+    // we let all POSTs settle, PUBLISH the succeeded bindings (so the launch
+    // catch can roll them back / stop them), then throw.
+    var tokenErrorSeen = false;
+
     final results = await Future.wait(plans.map((plan) async {
       // BLE registers by the firmware-reported bluetoothId (captured over BLE
       // after connect), not the phone-local id; Wi-Fi uses the macAddress.
@@ -473,6 +480,14 @@ class ProtocolPlusController {
           serverSessionId: result.sessionId,
           plusId: plan.plusId,
         );
+      } on DioException catch (e) {
+        // Flag token/subscription rejections; we throw after publishing (below)
+        // so already-registered devices can be rolled back by the launch catch.
+        if (isTokenOrSubscriptionError(e)) {
+          tokenErrorSeen = true;
+        }
+        appLogger.e('ProtocolPlus: failed to register ${plan.deviceId}: $e');
+        return null;
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to register ${plan.deviceId}: $e');
         return null;
@@ -487,6 +502,11 @@ class ProtocolPlusController {
       'ProtocolPlus: published ${bindings.length} binding(s) for session '
       '$sessionId',
     );
+    // Bindings are now published, so launchSession's catch can stop any that
+    // succeeded before this throw aborts the run.
+    if (tokenErrorSeen) {
+      throw const InsufficientTokensException();
+    }
     return bindings;
   }
 
@@ -1107,15 +1127,69 @@ Future<void> launchSession(
       }
     }
     engine.applySessionClockOffsetFromWallAnchor(DateTime.now());
+
+    final sid = sessionId;
+
+    // Register the run with the BACKEND *before* starting the device — and AWAIT
+    // it. The backend locks/deducts tokens on /sessions/start (and
+    // /protocol-plus/start), so an insufficient-tokens / no-subscription
+    // rejection must BLOCK the run (web parity). A token rejection throws
+    // [InsufficientTokensException], caught below: the engine never starts and
+    // any already-registered side is rolled back. (Transient network failures
+    // stay tolerant — they return null/fewer bindings, so an affordable run
+    // still proceeds offline.)
+    final normalSelections =
+        selections.where((s) => !s.protocol.isProtocolPlus).toList();
+
+    if (plusPlans.isNotEmpty) {
+      final bindings = await controller.registerAndPublishBindings(
+        sessionId: sid,
+        plans: plusPlans,
+        transport: transport,
+      );
+      // Flag these backend sessions as owned by this phone so the live feed
+      // treats them as controllable own-runs (not foreign), and map each back
+      // to the local engine for safe re-open from the History live tab.
+      final live = ref.read(liveSessionsProvider.notifier);
+      final mapNotifier = ref.read(ownBackendToLocalSessionProvider.notifier);
+      for (final b in bindings) {
+        live.markOwned(b.serverSessionId);
+        mapNotifier.update((m) => {...m, b.serverSessionId: sid});
+      }
+    }
+
+    // Create a BACKEND session for the NORMAL (non-Plus) device subset so the
+    // run shows up in the org-wide live-session feed (parity with the web app)
+    // and so the backend locks tokens. The backend sessionId is published to
+    // [normalServerSessionIdProvider] so the live session screen can drive
+    // pause/resume/stop (and so the terminal stop reliably deducts tokens).
+    if (normalSelections.isNotEmpty) {
+      final specs = normalSelections
+          .map((s) => NormalDeviceSpec(
+                localMac: s.deviceId,
+                protocolId: s.protocol.id,
+                protocolName: s.protocol.templateName,
+                advancedSettings: s.advanced.toJson(),
+                totalDurationSeconds: s.protocol.totalDurationSeconds,
+              ))
+          .toList();
+      final backendId = await ref
+          .read(sessionSyncServiceProvider)
+          .startServerSession(devices: specs, transport: transport);
+      if (backendId != null) {
+        ref.read(normalServerSessionIdProvider(sid).notifier).state = backendId;
+        ref.read(liveSessionsProvider.notifier).markOwned(backendId);
+        ref.read(ownBackendToLocalSessionProvider.notifier).update(
+              (m) => {...m, backendId: sid},
+            );
+      }
+    }
+
+    // Backend accepted the run (tokens are locked) — NOW start the device.
     await engine.start();
 
-    // Open the session screen IMMEDIATELY — before any server registration.
-    // The devices are already running after engine.start(); waiting on the
-    // (network) Protocol Plus registration here used to leave them running with
-    // no UI, so impatient users navigated away and the run was recorded
-    // nowhere. Registration now runs in the BACKGROUND below and delivers the
-    // socket bindings to the screen via [protocolPlusBindingsProvider].
-    final sid = sessionId;
+    // Open the session screen. The devices are running and the backend bindings
+    // are already published, so the screen wires its socket immediately.
     if (!context.mounted) return;
     context.push(
       RoutePaths.session,
@@ -1132,76 +1206,29 @@ Future<void> launchSession(
         },
         'delayedDeviceId': effectiveDelayedDeviceId,
         'skipEngineBootstrap': true,
-        // Tell the screen a Plus run is registering — it watches the bindings
-        // provider and wires its socket the moment they arrive.
-        if (plusPlans.isNotEmpty) ...{
-          'protocolPlusPending': true,
-          'protocolPlusId': plusPlans.first.plusId,
-        },
+        // Bindings are resolved up front now — hand them straight to the screen
+        // (it prefers this over the provider) so the socket wires on first frame.
+        if (plusPlans.isNotEmpty)
+          'protocolPlusBindings':
+              ref.read(protocolPlusBindingsProvider(sid)),
       },
     );
-
-    // Register the Plus device(s) with the server in the background; the
-    // session screen connects its socket when the bindings are published.
-    if (plusPlans.isNotEmpty) {
-      unawaited(controller
-          .registerAndPublishBindings(
-        sessionId: sid,
-        plans: plusPlans,
-        transport: transport,
-      )
-          .then((bindings) {
-        // Flag these backend sessions as owned by this phone so the live feed
-        // treats them as controllable own-runs (not foreign), and map each back
-        // to the local engine for safe re-open from the History live tab.
-        final live = ref.read(liveSessionsProvider.notifier);
-        final mapNotifier =
-            ref.read(ownBackendToLocalSessionProvider.notifier);
-        for (final b in bindings) {
-          live.markOwned(b.serverSessionId);
-          mapNotifier.update((m) => {...m, b.serverSessionId: sid});
-        }
-      }));
-    }
-
-    // Create a BACKEND session for the NORMAL (non-Plus) device subset so the
-    // run shows up in the org-wide live-session feed (parity with the web app).
-    // Plus devices already create their own backend sessions above — don't
-    // double-start them. Runs in the background; failure-tolerant (the devices
-    // are already physically running). The backend sessionId is published to
-    // [normalServerSessionIdProvider] so the live session screen can drive
-    // pause/resume/stop.
-    final normalSelections =
-        selections.where((s) => !s.protocol.isProtocolPlus).toList();
-    if (normalSelections.isNotEmpty) {
-      final specs = normalSelections
-          .map((s) => NormalDeviceSpec(
-                localMac: s.deviceId,
-                protocolId: s.protocol.id,
-                protocolName: s.protocol.templateName,
-                advancedSettings: s.advanced.toJson(),
-                totalDurationSeconds: s.protocol.totalDurationSeconds,
-              ))
-          .toList();
-      unawaited(
-        ref
-            .read(sessionSyncServiceProvider)
-            .startServerSession(devices: specs, transport: transport)
-            .then((backendId) {
-          if (backendId != null) {
-            ref.read(normalServerSessionIdProvider(sid).notifier).state =
-                backendId;
-            ref.read(liveSessionsProvider.notifier).markOwned(backendId);
-            ref.read(ownBackendToLocalSessionProvider.notifier).update(
-                  (m) => {...m, backendId: sid},
-                );
-          }
-        }),
-      );
-    }
   } catch (e) {
     if (sessionId != null) {
       ref.read(sessionEngineFamilyProvider(sessionId).notifier).reset();
+      // Stop any backend session that DID register before the failure, so no
+      // phantom RUNNING session / stuck token lock lingers (mixed normal+Plus
+      // and multi-device Plus runs can register one side before another 400s).
+      await _rollbackPartialRegistration(ref, sessionId);
+    }
+    if (e is InsufficientTokensException) {
+      appLogger.e('Session launch blocked — ${e.message}');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+      return;
     }
     if (e is DioException) {
       appLogger.e(
@@ -1218,5 +1245,28 @@ Future<void> launchSession(
         SnackBar(content: Text('Failed to start session: $e')),
       );
     }
+  }
+}
+
+/// Stop any backend session that registered for [localSessionId] before a launch
+/// failure, so a phantom RUNNING session / stuck token lock doesn't linger.
+///
+/// Reads the published Plus bindings and the normal backend sessionId for this
+/// local session and best-effort stops each via `/sessions/:id/stop/:org`
+/// (`stopAll`), which also releases the backend's token lock. Never throws.
+Future<void> _rollbackPartialRegistration(
+  WidgetRef ref,
+  String localSessionId,
+) async {
+  final sync = ref.read(sessionSyncServiceProvider);
+  final plusBindings = ref.read(protocolPlusBindingsProvider(localSessionId));
+  for (final b in plusBindings) {
+    if (b.serverSessionId.isNotEmpty) {
+      await sync.stopServerSession(b.serverSessionId);
+    }
+  }
+  final normalId = ref.read(normalServerSessionIdProvider(localSessionId));
+  if (normalId != null && normalId.isNotEmpty) {
+    await sync.stopServerSession(normalId);
   }
 }

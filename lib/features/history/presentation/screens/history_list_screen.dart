@@ -12,7 +12,6 @@ import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/services/session_sync_service.dart';
-import '../../../session/services/wifi_remote_control.dart';
 
 enum _HistoryTab { live, history }
 
@@ -339,28 +338,48 @@ class _ActiveSessionCard extends ConsumerWidget {
 
     return GradientCard(
       onTap: () {
+        // Own run → open the local live screen against the real engine.
         final local = localSession;
-        if (!canOpen || local == null) return;
-        context.pushNamed(
-          RouteNames.session,
-          extra: {
-            'sessionId': local.id,
-            'protocolId': local.protocolId,
-            'deviceIds': local.deviceIds,
-            'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
-            'advancedSettings': {},
-            'advancedSettingsByDevice': {},
-            'delayedDeviceId': null,
-            'protocolByDeviceId': {},
-            'skipEngineBootstrap': false,
-            'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
-            // Restore Protocol Plus wiring so Stop cancels the server schedule.
-            if (local.protocolPlusBindings.isNotEmpty) ...{
-              'protocolPlusBindings': local.protocolPlusBindings,
-              'protocolPlusId': local.protocolPlusBindings.first['plusId'] ?? '',
+        if (canOpen && local != null) {
+          context.pushNamed(
+            RouteNames.session,
+            extra: {
+              'sessionId': local.id,
+              'protocolId': local.protocolId,
+              'deviceIds': local.deviceIds,
+              'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
+              'advancedSettings': {},
+              'advancedSettingsByDevice': {},
+              'delayedDeviceId': null,
+              'protocolByDeviceId': {},
+              'skipEngineBootstrap': false,
+              'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
+              // Restore Protocol Plus wiring so Stop cancels the server schedule.
+              if (local.protocolPlusBindings.isNotEmpty) ...{
+                'protocolPlusBindings': local.protocolPlusBindings,
+                'protocolPlusId':
+                    local.protocolPlusBindings.first['plusId'] ?? '',
+              },
             },
-          },
-        );
+          );
+          return;
+        }
+        // Foreign WiFi run → open the live REMOTE VIEW (no local engine, no
+        // restart; display + control come from the backend feed).
+        if (canRemoteControl) {
+          context.pushNamed(
+            RouteNames.session,
+            extra: {
+              'remoteView': true,
+              'backendSessionId': session.id,
+              'sessionId': session.id,
+              'protocolId': '',
+              'deviceIds': session.deviceIds,
+              'transport': session.transport,
+              'skipEngineBootstrap': true,
+            },
+          );
+        }
       },
       padding: const EdgeInsets.all(16),
       showShadow: false,
@@ -532,17 +551,22 @@ class _ActiveSessionCard extends ConsumerWidget {
               }),
             ),
           ),
-          if (canRemoteControl)
-            _RemoteWifiControls(session: session)
-          else if (!session.isOwn) ...[
+          if (!session.isOwn) ...[
             const SizedBox(height: 10),
             Row(
               children: [
-                Icon(Icons.visibility_outlined,
-                    size: 14, color: ThemeConstants.textTertiary),
+                Icon(
+                  canRemoteControl
+                      ? Icons.touch_app_outlined
+                      : Icons.visibility_outlined,
+                  size: 14,
+                  color: ThemeConstants.textTertiary,
+                ),
                 const SizedBox(width: 6),
                 Text(
-                  'View only (BLE session on another device)',
+                  canRemoteControl
+                      ? 'Tap to open & control'
+                      : 'View only (BLE session on another device)',
                   style: TextStyle(
                     fontSize: 11,
                     color: ThemeConstants.textTertiary,
@@ -605,112 +629,6 @@ class _PadDot extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.6)),
       ),
       child: Icon(icon, size: 12, color: color),
-    );
-  }
-}
-
-/// Pause/Resume/Stop for a foreign Wi-Fi session — reaches the devices through
-/// the cloud broker and reconciles backend state so every client updates.
-class _RemoteWifiControls extends ConsumerStatefulWidget {
-  final ActiveSession session;
-  const _RemoteWifiControls({required this.session});
-
-  @override
-  ConsumerState<_RemoteWifiControls> createState() =>
-      _RemoteWifiControlsState();
-}
-
-class _RemoteWifiControlsState extends ConsumerState<_RemoteWifiControls> {
-  bool _busy = false;
-
-  Future<void> _run(Future<void> Function(WifiRemoteControl) action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await action(ref.read(wifiRemoteControlProvider));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isPaused = widget.session.status == SessionStatus.paused;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: _RemoteControlButton(
-              label: isPaused ? 'Resume' : 'Pause',
-              icon: isPaused
-                  ? Icons.play_arrow_rounded
-                  : Icons.pause_rounded,
-              color: ThemeConstants.warning,
-              enabled: !_busy,
-              onTap: () => _run((c) =>
-                  isPaused ? c.resume(widget.session) : c.pause(widget.session)),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _RemoteControlButton(
-              label: 'Stop',
-              icon: Icons.stop_rounded,
-              color: ThemeConstants.error,
-              enabled: !_busy,
-              onTap: () => _run((c) => c.stop(widget.session)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RemoteControlButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _RemoteControlButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: enabled ? onTap : null,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: enabled ? 0.14 : 0.06),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

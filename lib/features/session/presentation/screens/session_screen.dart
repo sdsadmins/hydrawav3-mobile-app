@@ -30,6 +30,7 @@ import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/services/background_session_runtime.dart';
+import '../../../session/services/wifi_remote_control.dart';
 
 class SessionScreen extends ConsumerStatefulWidget {
   final String? sessionId;
@@ -68,6 +69,14 @@ class SessionScreen extends ConsumerStatefulWidget {
   /// bindings arrive, instead of receiving them up-front in [protocolPlusBindings].
   final bool protocolPlusPending;
 
+  /// Live REMOTE VIEW of a foreign WiFi session (started on the web or another
+  /// phone). When true, no local SessionEngine is bootstrapped — timers/pads/
+  /// status come from the org-wide live feed ([liveSessionsProvider]) and
+  /// Pause/Resume/Stop go through [wifiRemoteControlProvider]. [backendSessionId]
+  /// is the live-feed session id to display.
+  final bool remoteView;
+  final String? backendSessionId;
+
   const SessionScreen({
     super.key,
     this.sessionId,
@@ -87,6 +96,8 @@ class SessionScreen extends ConsumerStatefulWidget {
     this.protocolPlusMac,
     this.protocolPlusBindings = const [],
     this.protocolPlusPending = false,
+    this.remoteView = false,
+    this.backendSessionId,
   });
 
   @override
@@ -177,6 +188,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _musicController = ref.read(sessionMusicControllerProvider.notifier);
     _activeSessionId = _findMatchingActiveSessionId();
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
+
+    // REMOTE VIEW: this screen mirrors a foreign WiFi session from the org-wide
+    // live feed — there is no local engine to bootstrap, listen to, or sync.
+    // Just make sure the feed is running and load device labels; build() reads
+    // everything from [liveSessionsProvider] and routes controls to the remote
+    // control service. Keep the screen awake while viewing a live run.
+    if (widget.remoteView) {
+      unawaited(WakelockPlus.enable());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final orgId = ref.read(authStateProvider).selectedOrgId ??
+            ref.read(authStateProvider).user?.organizationId;
+        if (orgId != null && orgId.isNotEmpty) {
+          ref.read(liveSessionsProvider.notifier).start(orgId);
+        }
+      });
+      unawaited(_loadDeviceNames());
+      return;
+    }
 
     _engineSub = ref.listenManual<SessionEngineState>(
       sessionEngineFamilyProvider(_engineKey),
@@ -1225,6 +1254,55 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     };
   }
 
+  /// REMOTE VIEW: build a read-only [SessionEngineState] from the matching
+  /// foreign session in the live feed, so the existing build() renders it like
+  /// a local run. Per-device timers/status come from the backend `liveDevices`;
+  /// pads still come from the feed at the card call site. Protocol-Plus tracker
+  /// data isn't carried by the feed, so those fields stay empty (the tracker is
+  /// hidden in remote mode).
+  SessionEngineState _remoteEngineState(
+    List<active_session.ActiveSession> sessions,
+  ) {
+    final id = widget.backendSessionId;
+    active_session.ActiveSession? s;
+    for (final x in sessions) {
+      if (x.id == id) {
+        s = x;
+        break;
+      }
+    }
+    if (s == null) return const SessionEngineState();
+
+    final deviceTimers = <String, TimerState>{};
+    final deviceStatuses = <String, SessionStatus>{};
+    var maxTotal = 0;
+    var maxElapsed = 0;
+    for (final d in s.liveDevices) {
+      deviceStatuses[d.deviceId] = _toSessionStatus(d.status);
+      deviceTimers[d.deviceId] = TimerState(
+        elapsed: Duration(seconds: d.elapsedSeconds),
+        totalDuration: Duration(seconds: d.totalDurationSeconds),
+        isRunning: d.status == active_session.SessionStatus.running,
+      );
+      if (d.totalDurationSeconds > maxTotal) maxTotal = d.totalDurationSeconds;
+      if (d.elapsedSeconds > maxElapsed) maxElapsed = d.elapsedSeconds;
+    }
+
+    return SessionEngineState(
+      status: _toSessionStatus(s.status),
+      transport: s.transport == 'wifi'
+          ? session_model.SessionTransport.wifi
+          : session_model.SessionTransport.ble,
+      deviceIds: s.deviceIds,
+      deviceTimers: deviceTimers,
+      deviceStatuses: deviceStatuses,
+      timer: TimerState(
+        elapsed: Duration(seconds: maxElapsed),
+        totalDuration: Duration(seconds: maxTotal),
+      ),
+    );
+  }
+
   Future<void> _syncCurrentSessionToActiveSessions() async {
     if (_activeSessionId == null) return;
     final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
@@ -1362,7 +1440,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   @override
   Widget build(BuildContext context) {
-    final engine = ref.watch(sessionEngineFamilyProvider(_engineKey));
+    // The org-wide live feed: source of backend sun/moon + per-device timing,
+    // and (in remote view) the entire display state.
+    final liveSessions = ref.watch(liveSessionsProvider);
+
+    // REMOTE VIEW mirrors a foreign WiFi session from the feed — synthesize a
+    // read-only engine state from it so the existing UI renders unchanged.
+    final engine = widget.remoteView
+        ? _remoteEngineState(liveSessions)
+        : ref.watch(sessionEngineFamilyProvider(_engineKey));
 
     // Get session-specific data instead of always using engine state
     final activeSessions = ref.watch(activeSessionsProvider);
@@ -1401,7 +1487,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // (the org-wide live feed). No local cycle fallback — when the backend
     // reports the pad off/neutral the mapping returns grey, exactly like the web.
     // Colors are resolved PER DEVICE at the card call site below.
-    final liveSessions = ref.watch(liveSessionsProvider);
     final orderedDeviceIds = widget.deviceIds
         .where((id) => engine.deviceTimers.containsKey(id))
         .toList();
@@ -1426,12 +1511,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
-        title: Text('Session(${widget.deviceIds.length} Devices)'),
+        title: Text(
+          widget.remoteView
+              ? 'Live: ${engine.deviceIds.length} device(s)'
+              : 'Session(${widget.deviceIds.length} Devices)',
+        ),
         leading: IconButton(
           icon: Icon(Icons.arrow_back_rounded),
           onPressed: () async {
-            // Save or update session to active sessions before going back
-            if (status != SessionStatus.idle) {
+            // Save or update session to active sessions before going back.
+            // Remote view owns no local session, so there's nothing to sync.
+            if (!widget.remoteView && status != SessionStatus.idle) {
               await _syncCurrentSessionToActiveSessions();
             }
 
@@ -1572,6 +1662,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ] else ...[
               const SizedBox(height: 24),
             ],
+
+            // REMOTE VIEW: session-wide Pause All / Resume All / Stop All.
+            if (widget.remoteView &&
+                (status == SessionStatus.running ||
+                    status == SessionStatus.paused))
+              _buildRemoteAllControls(status, liveSessions),
 
             // Device status
             if (widget.deviceIds.isNotEmpty)
@@ -2339,6 +2435,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
 
+    // REMOTE VIEW: drive the device over the cloud broker + backend instead of
+    // the local engine. Resolve the live session for this run; if it's gone from
+    // the feed there's nothing to control.
+    final bool remote = widget.remoteView;
+    active_session.ActiveSession? remoteSession;
+    if (remote) {
+      for (final x in ref.read(liveSessionsProvider)) {
+        if (x.id == widget.backendSessionId) {
+          remoteSession = x;
+          break;
+        }
+      }
+      if (remoteSession == null) return const SizedBox.shrink();
+    }
+    final wifiRemote = remote ? ref.read(wifiRemoteControlProvider) : null;
+    void pauseFn() => remote
+        ? wifiRemote!.pauseDevice(remoteSession!, deviceId)
+        : ctrl.pauseDevice(deviceId);
+    void resumeFn() => remote
+        ? wifiRemote!.resumeDevice(remoteSession!, deviceId)
+        : ctrl.resumeDevice(deviceId);
+    void stopFn() => remote
+        ? wifiRemote!.stopDevice(remoteSession!, deviceId)
+        : ctrl.stopDevice(deviceId);
+
     // While a BLE device's link is down during a live run, its pause/stop/resume
     // commands can't reach it — keep the buttons visible but DISABLED (greyed).
     // Reconnect happens silently in the background; no extra UI/label. WiFi is
@@ -2364,7 +2485,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         height: 44,
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: blockStop ? null : () => ctrl.stopDevice(deviceId),
+          onPressed: blockStop ? null : stopFn,
           style: ElevatedButton.styleFrom(
             backgroundColor: ThemeConstants.error,
             foregroundColor: ThemeConstants.textPrimary,
@@ -2381,8 +2502,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: OutlinedButton(
-                onPressed:
-                    disconnected ? null : () => ctrl.pauseDevice(deviceId),
+                onPressed: disconnected ? null : pauseFn,
                 style: OutlinedButton.styleFrom(
                   backgroundColor: softSurface,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -2397,8 +2517,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed:
-                    disconnected ? null : () => ctrl.stopDevice(deviceId),
+                onPressed: disconnected ? null : stopFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -2417,8 +2536,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed:
-                    disconnected ? null : () => ctrl.resumeDevice(deviceId),
+                onPressed: disconnected ? null : resumeFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.accent,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -2432,8 +2550,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed:
-                    disconnected ? null : () => ctrl.stopDevice(deviceId),
+                onPressed: disconnected ? null : stopFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ThemeConstants.error,
                   foregroundColor: ThemeConstants.textPrimary,
@@ -2451,6 +2568,64 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       child: OutlinedButton(
         onPressed: null,
         child: Text(_statusLabel(status)),
+      ),
+    );
+  }
+
+  /// REMOTE VIEW: session-wide Pause All / Resume All / Stop All for a foreign
+  /// WiFi run, routed through the cloud broker + backend.
+  Widget _buildRemoteAllControls(
+    SessionStatus status,
+    List<active_session.ActiveSession> sessions,
+  ) {
+    active_session.ActiveSession? s;
+    for (final x in sessions) {
+      if (x.id == widget.backendSessionId) {
+        s = x;
+        break;
+      }
+    }
+    if (s == null) return const SizedBox.shrink();
+    final session = s;
+    final remote = ref.read(wifiRemoteControlProvider);
+    final paused = status == SessionStatus.paused;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () =>
+                    paused ? remote.resume(session) : remote.pause(session),
+                icon: Icon(
+                  paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                ),
+                label: Text(paused ? 'Resume All' : 'Pause All'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ThemeConstants.accent,
+                  foregroundColor: ThemeConstants.textPrimary,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () => remote.stop(session),
+                icon: const Icon(Icons.stop_rounded),
+                label: const Text('Stop All'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ThemeConstants.error,
+                  foregroundColor: ThemeConstants.textPrimary,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

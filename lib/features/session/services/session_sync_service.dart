@@ -8,6 +8,41 @@ import '../../../core/utils/logger.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../devices/presentation/providers/wifi_devices_provider.dart';
 
+/// Thrown when the backend refuses a session start because the organization
+/// has insufficient tokens or no active subscription. The launch path catches
+/// this to BLOCK the run (web parity) instead of letting the device run for
+/// free. All other (transient) failures stay tolerant — they never throw this.
+class InsufficientTokensException implements Exception {
+  final String message;
+  const InsufficientTokensException([
+    this.message =
+        'Insufficient tokens. Please top up your subscription to start a session.',
+  ]);
+  @override
+  String toString() => message;
+}
+
+/// True when a Dio 400 is the backend's token/subscription rejection.
+///
+/// Nest `BadRequestException` body is `{statusCode, message, error}`; `message`
+/// may be a `String` or a `List<String>` (validation errors).
+bool isTokenOrSubscriptionError(DioException e) {
+  if (e.response?.statusCode != 400) return false;
+  final data = e.response?.data;
+  String text;
+  if (data is Map) {
+    final m = data['message'];
+    text = m is List ? m.join(' ') : (m?.toString() ?? data.toString());
+  } else {
+    text = data?.toString() ?? '';
+  }
+  final t = text.toLowerCase();
+  return t.contains('insufficient token') ||
+      t.contains('no remaining token') ||
+      t.contains('subscription payment record not found') ||
+      t.contains('subscription');
+}
+
 /// One normal (non-Protocol-Plus) device's spec for a backend session start.
 class NormalDeviceSpec {
   /// Local write target — BLE remoteId / Wi-Fi macAddress.
@@ -148,6 +183,11 @@ class SessionSyncService {
         'SessionSync: start failed (status=${e.response?.statusCode}) '
         '${e.response?.data}',
       );
+      // Token/subscription rejection must BLOCK the run (web parity); all other
+      // failures stay tolerant so flaky networks don't brick the device.
+      if (isTokenOrSubscriptionError(e)) {
+        throw const InsufficientTokensException();
+      }
       return null;
     } catch (e) {
       appLogger.e('SessionSync: start failed: $e');
@@ -166,6 +206,27 @@ class SessionSyncService {
   /// POST /sessions/:sessionId/stop/:organizationId — ends the whole session.
   Future<void> stopServerSession(String backendSessionId) =>
       _post(ApiEndpoints.sessionStop, backendSessionId, const {'stopAll': true});
+
+  /// Per-device backend control: targets a SINGLE device of the session by its
+  /// [macAddress] (the backend pause/resume/stop DTOs accept `macAddress` and
+  /// act on only that device, leaving the rest of the session running). Used
+  /// both for remote control of foreign Wi-Fi sessions and to mirror a local
+  /// per-device completion to the backend so it stops/deducts only that device
+  /// instead of the whole session.
+  Future<void> pauseServerSessionDevice(
+          String backendSessionId, String macAddress) =>
+      _post(ApiEndpoints.sessionPause, backendSessionId,
+          {'macAddress': macAddress});
+
+  Future<void> resumeServerSessionDevice(
+          String backendSessionId, String macAddress) =>
+      _post(ApiEndpoints.sessionResume, backendSessionId,
+          {'macAddress': macAddress});
+
+  Future<void> stopServerSessionDevice(
+          String backendSessionId, String macAddress) =>
+      _post(ApiEndpoints.sessionStop, backendSessionId,
+          {'macAddress': macAddress});
 
   Future<void> _post(
     String Function(String, String) endpoint,

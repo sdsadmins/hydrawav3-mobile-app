@@ -14,6 +14,10 @@ class SubscriptionPlan {
   final int? sessionsAvailable;
   final int? aiReportsAvailable;
 
+  /// Max devices this plan can run concurrently (backend `deviceLimit`).
+  /// `0` (or null) means unlimited.
+  final int? deviceLimit;
+
   const SubscriptionPlan({
     this.id,
     required this.name,
@@ -25,6 +29,7 @@ class SubscriptionPlan {
     this.remainingTokens,
     this.sessionsAvailable,
     this.aiReportsAvailable,
+    this.deviceLimit,
   });
 
   factory SubscriptionPlan.fromJson(Map<String, dynamic> json) {
@@ -50,6 +55,7 @@ class SubscriptionPlan {
       remainingTokens: (json['remainingTokens'] as num?)?.toDouble(),
       sessionsAvailable: (json['sessionsAvailable'] as num?)?.toInt(),
       aiReportsAvailable: (json['aiReportsAvailable'] as num?)?.toInt(),
+      deviceLimit: (json['deviceLimit'] as num?)?.toInt(),
     );
   }
 

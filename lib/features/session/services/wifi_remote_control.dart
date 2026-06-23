@@ -47,6 +47,36 @@ class WifiRemoteControl {
         backend: (sync, id) => sync.resumeServerSession(id),
       );
 
+  // ─────────────────────────── per-device control ───────────────────────────
+  // Command a SINGLE Wi-Fi device of a foreign session: publish the playCmd to
+  // just that device's mac over the broker AND target it on the backend by
+  // macAddress (the rest of the session keeps running). Mirrors the web's
+  // per-device pause/resume/stop.
+
+  Future<void> stopDevice(ActiveSession session, String deviceId) =>
+      _controlDevice(
+        session,
+        deviceId,
+        playCmd: _stopCmd,
+        backend: (sync, id, mac) => sync.stopServerSessionDevice(id, mac),
+      );
+
+  Future<void> pauseDevice(ActiveSession session, String deviceId) =>
+      _controlDevice(
+        session,
+        deviceId,
+        playCmd: _pauseCmd,
+        backend: (sync, id, mac) => sync.pauseServerSessionDevice(id, mac),
+      );
+
+  Future<void> resumeDevice(ActiveSession session, String deviceId) =>
+      _controlDevice(
+        session,
+        deviceId,
+        playCmd: _resumeCmd,
+        backend: (sync, id, mac) => sync.resumeServerSessionDevice(id, mac),
+      );
+
   Future<void> _control(
     ActiveSession session, {
     required int playCmd,
@@ -75,5 +105,29 @@ class WifiRemoteControl {
 
     // Update backend state + broadcast so every client's live feed reconciles.
     await backend(_ref.read(sessionSyncServiceProvider), session.id);
+  }
+
+  Future<void> _controlDevice(
+    ActiveSession session,
+    String deviceId, {
+    required int playCmd,
+    required Future<void> Function(SessionSyncService, String, String) backend,
+  }) async {
+    if (deviceId.isEmpty) return;
+    // Command just this device over the broker.
+    final dio = _ref.read(djangoDioProvider);
+    final payload = jsonEncode({'mac': deviceId, 'playCmd': playCmd});
+    try {
+      await postMqttPublishRequest(
+        dio,
+        data: {'topic': 'HydraWav3Pro/config', 'payload': payload},
+      );
+      appLogger.i('WifiRemoteControl: playCmd=$playCmd → $deviceId (device)');
+    } catch (e) {
+      appLogger.e('WifiRemoteControl: device publish failed for $deviceId: $e');
+    }
+
+    // Target only this device on the backend so the rest of the session runs on.
+    await backend(_ref.read(sessionSyncServiceProvider), session.id, deviceId);
   }
 }

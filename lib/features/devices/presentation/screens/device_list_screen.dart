@@ -26,6 +26,7 @@ import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../../session/services/protocol_plus_controller.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -49,8 +50,11 @@ class DeviceListScreen extends ConsumerStatefulWidget {
 }
 
 class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
-  static const String _defaultProtocolTemplateName =
-      'Deep-Tension Recovery Stack';
+  /// Protocol selected by default for a device. Matched by ID first (stable —
+  /// the name can change), with the template name as a cross-environment
+  /// fallback. This is the "1. Deep-Tension Recovery" Protocol Plus.
+  static const String _defaultProtocolId = '6a203088c1fa1f5ac0d4f333';
+  static const String _defaultProtocolTemplateName = 'Deep-Tension Recovery';
 
   final Map<String, String> _protocolIdByDeviceId = {};
   final Map<String, Protocol> _selectedProtocolByDeviceId = {};
@@ -103,6 +107,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       final orgId = auth.selectedOrgId ?? auth.user?.organizationId;
       if (orgId != null && orgId.isNotEmpty) {
         ref.read(tokenBalanceProvider.notifier).start(orgId);
+        // Keep the org-wide live feed running so devices already in use
+        // elsewhere (web / another phone) show as "In use" here. Idempotent.
+        ref.read(liveSessionsProvider.notifier).start(orgId);
       }
     });
   }
@@ -858,14 +865,31 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   ProtocolSelectionOption? _findDefaultProtocolOption(
     List<ProtocolSelectionOption> protocols,
   ) {
+    // Pass 0: match by ID — stable across renames.
+    for (final protocol in protocols) {
+      if (protocol.id == _defaultProtocolId) return protocol;
+    }
+
     final normalizedDefault =
         _normalizeProtocolTemplateName(_defaultProtocolTemplateName);
+    // Drop a leading numbering prefix (e.g. "1. ") before comparing.
+    String stripLeadingNumber(String n) =>
+        n.replaceFirst(RegExp(r'^[0-9]+'), '');
 
+    // Pass 1: prefer an EXACT name match (ignoring a leading number), so
+    // "1. Deep-Tension Recovery" wins over a longer variant like
+    // "Deep-Tension Recovery Stack".
     for (final protocol in protocols) {
       final normalizedTemplate =
           _normalizeProtocolTemplateName(protocol.templateName);
-      // Use `contains` so a leading numbering prefix (e.g. "1. ") in the
-      // backend template name doesn't prevent the default match.
+      if (stripLeadingNumber(normalizedTemplate) == normalizedDefault) {
+        return protocol;
+      }
+    }
+    // Pass 2: fall back to a substring match.
+    for (final protocol in protocols) {
+      final normalizedTemplate =
+          _normalizeProtocolTemplateName(protocol.templateName);
       if (normalizedTemplate.contains(normalizedDefault)) {
         return protocol;
       }
@@ -958,6 +982,30 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         ),
       );
       return;
+    }
+
+    // Enforce the plan's concurrent-device limit (0 = unlimited). Devices
+    // already running org-wide (this phone / web / another phone) plus the ones
+    // we're about to start must not exceed it.
+    final deviceLimit = ref.read(planDeviceLimitProvider).valueOrNull;
+    if (deviceLimit != null && deviceLimit > 0) {
+      final runningOrg = <String>{
+        ...busyDevices,
+        for (final s in ref.read(liveSessionsProvider)) ...s.deviceIds,
+      };
+      if (runningOrg.length + runIds.length > deviceLimit) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Your plan allows $deviceLimit device(s) at a time '
+              '(${runningOrg.length} already running). Stop a device or '
+              'upgrade your plan to run more.',
+            ),
+            backgroundColor: ThemeConstants.error,
+          ),
+        );
+        return;
+      }
     }
 
     setState(() => _starting = true);
@@ -1079,6 +1127,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       name: data.name,
       subtitle: data.subtitle,
       inUse: isIncluded,
+      isRunning: busyDeviceIds.contains(data.id),
       protocolTitle: selectedProtocol?.templateName ?? 'Select protocol',
       protocolSubtitle: protocolMeta,
       showAdvanced: showAdvanced,
@@ -1167,8 +1216,28 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final runIds = currentSessionDeviceIds
         .where((id) => _runDeviceIds.contains(id))
         .toList();
+    // Devices already running in ANY live session — this phone, the web, or
+    // another phone — can't be selected for a new run. Local busy set covers
+    // this phone's runs; the org-wide feed (only ever holds RUNNING/PAUSED
+    // sessions) covers web/other phones. Matched by id (WiFi = macAddress).
     final busyDeviceIds =
         ref.read(activeSessionsProvider.notifier).getBusyDevices().toSet();
+    final inUseDeviceIds = <String>{
+      ...busyDeviceIds,
+      for (final s in ref.watch(liveSessionsProvider)) ...s.deviceIds,
+    };
+    // Plan's max concurrent devices (0/null = unlimited). Devices already
+    // running org-wide consume slots, so a new run can add at most
+    // (deviceLimit - alreadyRunning) more — web parity.
+    final deviceLimit = ref.watch(planDeviceLimitProvider).valueOrNull;
+    // New (not-yet-running) selections only — exclude any already counted in
+    // inUseDeviceIds so an own running device isn't double-counted.
+    final newlySelectedCount = currentSessionDeviceIds
+        .where((id) => !inUseDeviceIds.contains(id))
+        .length;
+    final deviceLimitReached = deviceLimit != null &&
+        deviceLimit > 0 &&
+        (inUseDeviceIds.length + newlySelectedCount) >= deviceLimit;
     final canStart = runIds.isNotEmpty &&
         runIds.every((id) =>
             _protocolIdByDeviceId.containsKey(id) &&
@@ -1582,7 +1651,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                   delegate: SliverChildBuilderDelegate(
                     (ctx, index) {
                       final device = list[index];
-                      final selected =
+                      // Running in ANY live session — this phone's OWN run, the
+                      // web, or another phone — counts as "In use". "In use"
+                      // wins over "Selected" so a device this app started also
+                      // shows the badge (not a still-selectable "Selected").
+                      final inUse =
+                          inUseDeviceIds.contains(device.macAddress);
+                      final selected = !inUse &&
                           target.filteredDeviceIds.contains(device.macAddress);
                       return AnimatedEntrance(
                         index: index + 1,
@@ -1593,19 +1668,39 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                             name: device.name,
                             idText: device.macAddress,
                             buttonLabel: selected ? 'Selected' : 'Select',
-                            onTap: () {
-                              ref
-                                  .read(sessionTargetProvider.notifier)
-                                  .toggleDevice(device.macAddress);
-                              setState(() {
-                                if (selected) {
-                                  _clearDeviceSessionState(device.macAddress);
-                                } else {
-                                  _runDeviceIds.add(device.macAddress);
-                                  _excludedDeviceIds.remove(device.macAddress);
-                                }
-                              });
-                            },
+                            isInUse: inUse,
+                            onTap: inUse
+                                ? null
+                                : () {
+                                    // Enforce the plan's concurrent-device
+                                    // limit when adding a device (deselect is
+                                    // always allowed).
+                                    if (!selected && deviceLimitReached) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Your plan allows $deviceLimit device(s) at a time. '
+                                            'Stop a running device or upgrade your plan to run more.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    ref
+                                        .read(sessionTargetProvider.notifier)
+                                        .toggleDevice(device.macAddress);
+                                    setState(() {
+                                      if (selected) {
+                                        _clearDeviceSessionState(
+                                            device.macAddress);
+                                      } else {
+                                        _runDeviceIds.add(device.macAddress);
+                                        _excludedDeviceIds
+                                            .remove(device.macAddress);
+                                      }
+                                    });
+                                  },
                           ),
                         ),
                       );
@@ -1762,6 +1857,20 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     isLoading: connectingIds.contains(id),
                                     onTap: () async {
                                       if (connectingIds.contains(id)) return;
+                                      // Enforce the plan's concurrent-device
+                                      // limit before connecting another device.
+                                      if (deviceLimitReached) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Your plan allows $deviceLimit device(s) at a time. '
+                                              'Stop a device or upgrade your plan to run more.',
+                                            ),
+                                          ),
+                                        );
+                                        return;
+                                      }
                                       if (!uuidAllowed) {
                                         final expectedUuid =
                                             BleConstants.preferredServiceUuid;
@@ -2015,6 +2124,10 @@ class _SessionDeviceSetupCard extends StatelessWidget {
   final String name;
   final String subtitle;
   final bool inUse;
+
+  /// This device is in a LIVE session — grey the whole card (protocol, Use,
+  /// Advanced are locked) and keep only Disconnect active, glowing.
+  final bool isRunning;
   final String protocolTitle;
   final String protocolSubtitle;
   final bool showAdvanced;
@@ -2031,6 +2144,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
     required this.name,
     required this.subtitle,
     required this.inUse,
+    this.isRunning = false,
     required this.protocolTitle,
     required this.protocolSubtitle,
     required this.showAdvanced,
@@ -2138,8 +2252,10 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 14),
-              InkWell(
-                onTap: onSelectProtocol,
+              Opacity(
+                opacity: isRunning ? 0.5 : 1,
+                child: InkWell(
+                onTap: isRunning ? null : onSelectProtocol,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
                   width: double.infinity,
@@ -2189,12 +2305,15 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   ),
                 ),
               ),
+              ),
               const SizedBox(height: 14),
               Row(
                 children: [
                   Expanded(
                     flex: 4,
-                    child: Container(
+                    child: Opacity(
+                      opacity: isRunning ? 0.5 : 1,
+                      child: Container(
                       height: 34,
                       padding: const EdgeInsets.only(left: 8, right: 2),
                       decoration: BoxDecoration(
@@ -2245,13 +2364,14 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 activeColor: ThemeConstants.accent,
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
-                                onChanged: onToggleInUse,
+                                onChanged: isRunning ? null : onToggleInUse,
                               ),
                             ),
                           ),
                         ],
                       ),
                     ),
+                  ),
                   ),
                   const SizedBox(width: 6),
                   Expanded(
@@ -2981,7 +3101,11 @@ class _AvailableDeviceRow extends StatelessWidget {
   final String idText;
   final String buttonLabel;
   final bool isLoading;
-  final VoidCallback onTap;
+
+  /// Device is already running in a live session (this phone / web / another
+  /// phone). Selection is blocked and an "In use" badge replaces the button.
+  final bool isInUse;
+  final VoidCallback? onTap;
 
   const _AvailableDeviceRow({
     required this.icon,
@@ -2989,97 +3113,122 @@ class _AvailableDeviceRow extends StatelessWidget {
     required this.idText,
     required this.buttonLabel,
     this.isLoading = false,
+    this.isInUse = false,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: ThemeConstants.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: ThemeConstants.surfaceVariant,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: ThemeConstants.border),
+    return Opacity(
+      opacity: isInUse ? 0.55 : 1,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: ThemeConstants.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
-            child: Icon(icon, color: ThemeConstants.textSecondary, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: ThemeConstants.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  idText,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: true,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: ThemeConstants.textSecondary,
-                    height: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          GestureDetector(
-            onTap: isLoading ? null : onTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
                 color: ThemeConstants.surfaceVariant,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: ThemeConstants.border),
               ),
-              child: isLoading
-                  ? SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: ThemeConstants.accent,
-                      ),
-                    )
-                  : Text(
-                      buttonLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.textPrimary,
-                      ),
-                    ),
+              child: Icon(icon, color: ThemeConstants.textSecondary, size: 20),
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: ThemeConstants.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    idText,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: ThemeConstants.textSecondary,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            if (isInUse)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: ThemeConstants.error.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: ThemeConstants.error.withValues(alpha: 0.5)),
+                ),
+                child: Text(
+                  'In use',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: ThemeConstants.error,
+                  ),
+                ),
+              )
+            else
+              GestureDetector(
+                onTap: isLoading ? null : onTap,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.surfaceVariant,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: ThemeConstants.border),
+                  ),
+                  child: isLoading
+                      ? SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: ThemeConstants.accent,
+                          ),
+                        )
+                      : Text(
+                          buttonLabel,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: ThemeConstants.textPrimary,
+                          ),
+                        ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

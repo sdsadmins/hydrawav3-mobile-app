@@ -21,6 +21,20 @@ final tokenBalanceProvider =
   return notifier;
 });
 
+/// The current plan's max concurrent device limit (backend `deviceLimit`).
+/// `0` means unlimited; `null` means unknown (not loaded / no org). Used to cap
+/// how many devices can be selected/run at once (web parity).
+final planDeviceLimitProvider = FutureProvider.autoDispose<int?>((ref) async {
+  final orgId = await ref.read(secureStorageProvider).getSelectedOrgId();
+  if (orgId == null || orgId.isEmpty) return null;
+  try {
+    final plan = await ref.read(paymentRepositoryProvider).getCurrentPlan(orgId);
+    return plan.deviceLimit;
+  } catch (_) {
+    return null;
+  }
+});
+
 class TokenBalanceNotifier extends StateNotifier<double?> {
   final Ref _ref;
   io.Socket? _socket;
