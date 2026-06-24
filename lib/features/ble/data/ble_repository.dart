@@ -40,6 +40,12 @@ class BleRepository {
   // --- Scanning ---
 
   Stream<List<ScanResult>> get scanResults => _scanner.scanResults;
+
+  /// Snapshot of the latest non-stale scan results, used to seed stream
+  /// subscribers (the scan-results stream is a broadcast that won't replay its
+  /// last value to a late listener).
+  List<ScanResult> get currentScanResults => _scanner.currentResults;
+
   bool get isScanning => _scanner.isScanning;
 
   Future<void> startScan() => _scanner.startScan();
@@ -50,9 +56,18 @@ class BleRepository {
   Stream<Map<String, BleConnectionStatus>> get connectionStates =>
       _connector.connectionStates;
 
+  /// Current connection-state snapshot. Used to seed stream subscribers, since
+  /// the underlying stream is a broadcast controller that does not replay its
+  /// last value to a listener that subscribes after the event was emitted.
+  Map<String, BleConnectionStatus> get currentConnectionStates =>
+      _connector.currentStates;
+
   Stream<BleNotification> get notifications => _connector.notifications;
 
   Stream<Map<String, int>> get batteryLevels => _connector.batteryLevels;
+
+  /// Current battery-level snapshot (see [currentConnectionStates]).
+  Map<String, int> get currentBatteryLevels => _connector.currentBatteryLevels;
 
   Future<bool> connectDevice(
     BluetoothDevice device, {

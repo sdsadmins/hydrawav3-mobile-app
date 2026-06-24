@@ -117,6 +117,10 @@ Future<List<Protocol>> _enrichProtocolsWithGoalTagNames(
 }
 
 final protocolListProvider = FutureProvider<List<Protocol>>((ref) async {
+  // Re-run whenever the auth/org selection changes. Without this watch, picking
+  // a different organization left the list (and its per-protocol lock state)
+  // stale, because the backend gates protocols by the org's plan.
+  ref.watch(authStateProvider);
   final repository = ref.read(protocolRepositoryProvider);
   final orgId = await _resolveOrgId(ref);
   // NOTE: We intentionally skip goal-tag enrichment here. It issued one request

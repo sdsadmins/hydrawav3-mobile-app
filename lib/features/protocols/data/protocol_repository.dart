@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/constants/app_constants.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/storage/local_db.dart';
 import '../../auth/presentation/providers/auth_provider.dart';
@@ -54,15 +53,12 @@ class ProtocolRepository {
       // DB may fail on web; continue without cache.
     }
 
-    final hasMissingDeviceId =
-        cached.any((protocol) => protocol.deviceId?.isEmpty ?? true);
-    final isCacheStale = cached.isEmpty ||
-        hasMissingDeviceId ||
-        cached.first.cachedAt.isBefore(
-          DateTime.now().subtract(AppConstants.protocolCacheStaleness),
-        );
-
-    if (_isOnline && isCacheStale) {
+    // Protocols are gated per organization — the backend `active` (lock) flag
+    // depends on the selected org's plan — but the local cache is NOT org-scoped.
+    // A time-based "is stale" check would happily return the previous org's
+    // cached protocols (and their wrong lock state) right after an org switch.
+    // So always fetch fresh when online; the cache is only an offline fallback.
+    if (_isOnline) {
       try {
         final protocols = await _remoteSource.getProtocols(
           page: page,

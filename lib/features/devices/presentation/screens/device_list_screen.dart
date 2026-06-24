@@ -235,6 +235,18 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     await disconnect();
     if (!mounted) return;
     setState(() => _clearDeviceSessionState(deviceId));
+
+    // A just-disconnected BLE device starts advertising again, but the connect
+    // flow had stopped the scan — and with auto-connect off, nothing restarts
+    // it. Without this, freed devices don't reappear under "Available Bluetooth
+    // Devices" on their own (only the one caught in the brief window before the
+    // scan stopped would show); the user has to tap Scan. Re-arm a scan so ALL
+    // freed devices resurface. `startScan` no-ops if one is already running, and
+    // the manual disconnect already suppressed auto-reconnect for this device,
+    // so this won't fight a reconnect.
+    if (ref.read(sessionTargetProvider).transport == SessionTransport.ble) {
+      unawaited(ref.read(startScanProvider)());
+    }
   }
 
   Future<void> _connectAllHydrawaveDevices({

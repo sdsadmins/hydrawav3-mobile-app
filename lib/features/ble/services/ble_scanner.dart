@@ -32,6 +32,7 @@ class BleScanner {
   final Map<String, ScanResult> _knownResultsById = {};
   final Map<String, DateTime> _lastSeenAtById = {};
   final List<String> _orderedDeviceIds = [];
+  List<ScanResult> _lastEmittedResults = const <ScanResult>[];
   bool _isScanning = false;
   bool _autoScanEnabled = true;
   bool _suppressNextAutoRestart = false;
@@ -40,6 +41,13 @@ class BleScanner {
 
   Stream<List<ScanResult>> get scanResults => _resultsController.stream;
   bool get isScanning => _isScanning;
+
+  /// The most recently emitted (non-stale) scan results. Used to seed new stream
+  /// subscribers, since [scanResults] is a broadcast stream that won't replay
+  /// its last value to a listener that subscribes after the emission — which is
+  /// why a device already discovered by the background scan could be missing
+  /// from the list until the next scan tick (or a manual "Scan").
+  List<ScanResult> get currentResults => _lastEmittedResults;
 
   void _emitKnownResults() {
     final now = DateTime.now();
@@ -60,6 +68,7 @@ class BleScanner {
         .whereType<ScanResult>()
         .toList(growable: false);
 
+    _lastEmittedResults = stableList;
     _resultsController.add(stableList);
   }
 
@@ -154,6 +163,7 @@ class BleScanner {
     _knownResultsById.clear();
     _lastSeenAtById.clear();
     _orderedDeviceIds.clear();
+    _lastEmittedResults = const <ScanResult>[];
     _resultsController.add(const <ScanResult>[]);
 
     await _scanSubscription?.cancel();

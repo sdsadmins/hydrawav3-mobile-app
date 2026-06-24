@@ -3,9 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/ble_repository.dart';
 
-final bleScanResultsProvider = StreamProvider<List<ScanResult>>((ref) {
+final bleScanResultsProvider = StreamProvider<List<ScanResult>>((ref) async* {
   final repo = ref.read(bleRepositoryProvider);
-  return repo.scanResults;
+  // Seed with the latest known results so a screen that subscribes between scan
+  // ticks (e.g. during the auto-restart gap) immediately reflects devices the
+  // background scan already found, instead of an empty list until the next tick.
+  yield repo.currentScanResults;
+  yield* repo.scanResults;
 });
 
 final isScanningProvider = Provider<bool>((ref) {
