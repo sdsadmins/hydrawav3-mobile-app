@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/storage/preferences.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -31,6 +32,26 @@ import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/services/background_session_runtime.dart';
 import '../../../session/services/wifi_remote_control.dart';
+
+/// Session-screen device layout preference: `true` = vertical (all device cards
+/// in one scroll), `false` = horizontal pager (swipe + dot indicator). Persisted
+/// so the user's choice sticks across launches.
+final sessionDevicesVerticalProvider =
+    StateNotifierProvider<SessionDeviceLayoutController, bool>((ref) {
+  return SessionDeviceLayoutController(ref.read(preferencesProvider));
+});
+
+class SessionDeviceLayoutController extends StateNotifier<bool> {
+  SessionDeviceLayoutController(this._prefs)
+      : super(_prefs.sessionDevicesVertical);
+
+  final PreferencesService _prefs;
+
+  Future<void> toggle() async {
+    state = !state;
+    await _prefs.setSessionDevicesVertical(state);
+  }
+}
 
 class SessionScreen extends ConsumerStatefulWidget {
   final String? sessionId;
@@ -1508,6 +1529,47 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           (t.isFault || t.isWarning || t.sensorReadouts.isNotEmpty);
     });
 
+    final verticalLayout = ref.watch(sessionDevicesVerticalProvider);
+
+    // Builds one device card, shared by the vertical list and the horizontal
+    // pager so the (large) argument wiring isn't duplicated.
+    Widget buildDeviceCard(String id, {required bool scrollable}) {
+      final deviceTimer = engine.deviceTimers[id]!;
+      final deviceStatus = engine.deviceStatuses[id] ?? SessionStatus.idle;
+      final perDeviceProtocolName =
+          engine.protocolByDevice[id]?.templateName ??
+              protocol?.templateName ??
+              '';
+      final deviceSequence =
+          engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
+      final backendDev = _findBackendLiveDevice(liveSessions, id);
+      return _buildDeviceSessionCard(
+        id: id,
+        label: _deviceLabel(id),
+        protocolName: perDeviceProtocolName,
+        timer: deviceTimer,
+        status: deviceStatus,
+        totalCycles: timer.totalCycles,
+        padCycleIdx: padCycleIdx,
+        moonColor: _webMoonPadColor(backendDev?.moon),
+        sunColor: _webSunPadColor(backendDev?.sun),
+        // Timer comes from the backend (single source of truth) so the app
+        // matches the web exactly instead of drifting from the local engine.
+        backendRemainingSeconds: backendDev?.remainingSeconds,
+        backendTotalSeconds: backendDev?.totalDurationSeconds,
+        telemetry: engine.telemetryByDevice[id],
+        ctrl: ctrl,
+        isProtocolPlusDevice: deviceSequence.isNotEmpty,
+        plusSequence: deviceSequence,
+        plusName: engine.protocolPlusNameByDevice[id] ?? '',
+        plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
+        plusDelaySeconds: engine.protocolPlusDelayByDevice[id] ?? 0,
+        plusOnBreak: engine.protocolPlusOnBreakByDevice[id] ?? false,
+        plusBreakRemaining: engine.protocolPlusBreakRemainingByDevice[id] ?? 0,
+        scrollable: scrollable,
+      );
+    }
+
     return Scaffold(
       backgroundColor: ThemeConstants.background,
       appBar: AppBar(
@@ -1530,6 +1592,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           },
         ),
         actions: [
+          // Toggle between the vertical list (all cards in one scroll) and the
+          // horizontal pager (swipe + dots). Only useful with >1 device.
+          if (orderedDeviceIds.length > 1)
+            IconButton(
+              tooltip: verticalLayout
+                  ? 'Switch to swipe view'
+                  : 'Switch to list view',
+              onPressed: () =>
+                  ref.read(sessionDevicesVerticalProvider.notifier).toggle(),
+              icon: Icon(verticalLayout
+                  ? Icons.view_carousel_outlined
+                  : Icons.view_agenda_outlined),
+            ),
           Consumer(
             builder: (context, musicRef, _) {
               final music = musicRef.watch(sessionMusicControllerProvider);
@@ -1579,95 +1654,69 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
             ] else if (orderedDeviceIds.isNotEmpty) ...[
-              SizedBox(
-                // Plus devices render an extra progress card inside the device
-                // card, so give the page more height when any device is Plus.
-                height: (engine.protocolPlusSequenceByDevice.isNotEmpty
-                        ? 560
-                        : 420) +
-                    (hasTelemetryExtras ? 130 : 0),
-                child: PageView.builder(
-                  itemCount: orderedDeviceIds.length,
-                  onPageChanged: (idx) =>
-                      setState(() => _activeDevicePage = idx),
-                  itemBuilder: (context, index) {
-                    final id = orderedDeviceIds[index];
-                    final deviceTimer = engine.deviceTimers[id]!;
-                    final deviceStatus =
-                        engine.deviceStatuses[id] ?? SessionStatus.idle;
-                    final perDeviceProtocolName =
-                        engine.protocolByDevice[id]?.templateName ??
-                            protocol?.templateName ??
-                            '';
-                    final deviceSequence =
-                        engine.protocolPlusSequenceByDevice[id] ??
-                            const <String>[];
-                    final backendDev =
-                        _findBackendLiveDevice(liveSessions, id);
-                    return _buildDeviceSessionCard(
-                      id: id,
-                      label: _deviceLabel(id),
-                      protocolName: perDeviceProtocolName,
-                      timer: deviceTimer,
-                      status: deviceStatus,
-                      totalCycles: timer.totalCycles,
-                      padCycleIdx: padCycleIdx,
-                      moonColor: _webMoonPadColor(backendDev?.moon),
-                      sunColor: _webSunPadColor(backendDev?.sun),
-                      // Timer comes from the backend (single source of truth) so
-                      // the app matches the web exactly instead of drifting from
-                      // the local engine clock.
-                      backendRemainingSeconds: backendDev?.remainingSeconds,
-                      backendTotalSeconds: backendDev?.totalDurationSeconds,
-                      telemetry: engine.telemetryByDevice[id],
-                      ctrl: ctrl,
-                      isProtocolPlusDevice: deviceSequence.isNotEmpty,
-                      plusSequence: deviceSequence,
-                      plusName: engine.protocolPlusNameByDevice[id] ?? '',
-                      plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
-                      plusDelaySeconds:
-                          engine.protocolPlusDelayByDevice[id] ?? 0,
-                      plusOnBreak:
-                          engine.protocolPlusOnBreakByDevice[id] ?? false,
-                      plusBreakRemaining:
-                          engine.protocolPlusBreakRemainingByDevice[id] ?? 0,
-                    );
-                  },
+              // Session-wide control card (device summary + Pause/Resume All +
+              // Stop All) pinned above the per-device cards while the run is live.
+              if (status == SessionStatus.running ||
+                  status == SessionStatus.paused)
+                _buildTopControlCard(
+                    status, ctrl, liveSessions, orderedDeviceIds.length),
+              if (verticalLayout) ...[
+                // Vertical: every device card stacked in one scroll (the body
+                // ListView scrolls), so all devices are visible without swiping.
+                for (final id in orderedDeviceIds) ...[
+                  buildDeviceCard(id, scrollable: false),
+                  const SizedBox(height: 16),
+                ],
+                const SizedBox(height: 8),
+              ] else ...[
+                SizedBox(
+                  // Plus devices render an extra progress card inside the device
+                  // card, so give the page more height when any device is Plus.
+                  height: (engine.protocolPlusSequenceByDevice.isNotEmpty
+                          ? 560
+                          : 420) +
+                      (hasTelemetryExtras ? 130 : 0),
+                  child: PageView.builder(
+                    itemCount: orderedDeviceIds.length,
+                    onPageChanged: (idx) =>
+                        setState(() => _activeDevicePage = idx),
+                    itemBuilder: (context, index) => buildDeviceCard(
+                      orderedDeviceIds[index],
+                      scrollable: true,
+                    ),
+                  ),
                 ),
-              ),
-              if (orderedDeviceIds.length > 1) ...[
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(orderedDeviceIds.length, (idx) {
-                    final active = idx == _activeDevicePage;
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      width: active ? 16 : 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: active
-                            ? ThemeConstants.accent
-                            : ThemeConstants.textTertiary
-                                .withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    );
-                  }),
-                ),
+                if (orderedDeviceIds.length > 1) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(orderedDeviceIds.length, (idx) {
+                      final active = idx == _activeDevicePage;
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        width: active ? 16 : 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: active
+                              ? ThemeConstants.accent
+                              : ThemeConstants.textTertiary
+                                  .withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      );
+                    }),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                const SizedBox(height: 24),
               ],
-              const SizedBox(height: 18),
-              const SizedBox(height: 24),
             ] else ...[
               const SizedBox(height: 24),
             ],
 
-            // REMOTE VIEW: session-wide Pause All / Resume All / Stop All.
-            if (widget.remoteView &&
-                (status == SessionStatus.running ||
-                    status == SessionStatus.paused))
-              _buildRemoteAllControls(status, liveSessions),
+            // (Session-wide Pause/Resume/Stop All now live in the top control
+            // card above the device cards — see _buildTopControlCard.)
 
             // Device status
             if (widget.deviceIds.isNotEmpty)
@@ -2213,6 +2262,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
+  /// Wrap [child] in a [SingleChildScrollView] only when [scrollable]; otherwise
+  /// return it as-is (so it sizes to its content in the vertical list).
+  Widget _maybeScroll({required bool scrollable, required Widget child}) {
+    return scrollable ? SingleChildScrollView(child: child) : child;
+  }
+
   Widget _buildDeviceSessionCard({
     required String id,
     required String label,
@@ -2234,6 +2289,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     int plusDelaySeconds = 0,
     bool plusOnBreak = false,
     int plusBreakRemaining = 0,
+    // Horizontal pager gives each card a fixed height, so its content scrolls
+    // within (true). In the vertical list the outer ListView scrolls, so the
+    // card must size to its content instead (false).
+    bool scrollable = true,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
@@ -2282,9 +2341,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           width: isFault ? 2 : 1,
         ),
       ),
-      // Scrollable so the card never overflows — Plus devices add a progress
-      // card, and small screens may not fit the ring + status + controls.
-      child: SingleChildScrollView(
+      // In the pager each card has a fixed height, so make its content scroll
+      // within (Plus devices add a progress card, and small screens may not fit
+      // the ring + status + controls). In the vertical list the page scrolls, so
+      // the card sizes to its content instead.
+      child: _maybeScroll(
+        scrollable: scrollable,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2574,56 +2636,147 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// REMOTE VIEW: session-wide Pause All / Resume All / Stop All for a foreign
   /// WiFi run, routed through the cloud broker + backend.
-  Widget _buildRemoteAllControls(
+  /// Session-wide control card shown at the TOP of a live session: a device
+  /// summary + Pause All / Resume All (toggles on status) + Stop All. Works for
+  /// both local runs (drives the engine, whose state listener syncs pause/
+  /// resume/stop to the backend so the web + other devices reflect it) and the
+  /// web-synced remote view (routes through the cloud broker). [deviceCount] is
+  /// the number of devices currently shown.
+  Widget _buildTopControlCard(
     SessionStatus status,
-    List<active_session.ActiveSession> sessions,
+    SessionEngine ctrl,
+    List<active_session.ActiveSession> liveSessions,
+    int deviceCount,
   ) {
-    active_session.ActiveSession? s;
-    for (final x in sessions) {
-      if (x.id == widget.backendSessionId) {
-        s = x;
-        break;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? ThemeConstants.surface : Colors.white;
+    final paused = status == SessionStatus.paused;
+    final isWifi = widget.transport == 'wifi';
+
+    // Remote (web-started) sessions route through the cloud broker; resolve the
+    // live session to act on. If it's gone from the feed, hide the controls.
+    active_session.ActiveSession? remoteSession;
+    if (widget.remoteView) {
+      for (final x in liveSessions) {
+        if (x.id == widget.backendSessionId) {
+          remoteSession = x;
+          break;
+        }
+      }
+      if (remoteSession == null) return const SizedBox.shrink();
+    }
+    final wifiRemote =
+        widget.remoteView ? ref.read(wifiRemoteControlProvider) : null;
+
+    void onPauseResume() {
+      if (widget.remoteView) {
+        if (paused) {
+          wifiRemote!.resume(remoteSession!);
+        } else {
+          wifiRemote!.pause(remoteSession!);
+        }
+      } else {
+        if (paused) {
+          ctrl.resume();
+        } else {
+          ctrl.pause();
+        }
       }
     }
-    if (s == null) return const SizedBox.shrink();
-    final session = s;
-    final remote = ref.read(wifiRemoteControlProvider);
-    final paused = status == SessionStatus.paused;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
+
+    void onStopAll() {
+      if (widget.remoteView) {
+        wifiRemote!.stop(remoteSession!);
+      } else {
+        ctrl.stop();
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ThemeConstants.borderLight),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: SizedBox(
-              height: 48,
-              child: ElevatedButton.icon(
-                onPressed: () =>
-                    paused ? remote.resume(session) : remote.pause(session),
-                icon: Icon(
-                  paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                ),
-                label: Text(paused ? 'Resume All' : 'Pause All'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.accent,
-                  foregroundColor: ThemeConstants.textPrimary,
+          Row(
+            children: [
+              Icon(
+                isWifi ? Icons.wifi_rounded : Icons.bluetooth_rounded,
+                size: 18,
+                color: ThemeConstants.accent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$deviceCount ${isWifi ? 'WiFi' : 'Bluetooth'} '
+                  'device${deviceCount == 1 ? '' : 's'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: ThemeConstants.textPrimary,
+                  ),
                 ),
               ),
-            ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _statusColor(status).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  _statusLabel(status),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: _statusColor(status),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: SizedBox(
-              height: 48,
-              child: ElevatedButton.icon(
-                onPressed: () => remote.stop(session),
-                icon: const Icon(Icons.stop_rounded),
-                label: const Text('Stop All'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.error,
-                  foregroundColor: ThemeConstants.textPrimary,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: onPauseResume,
+                    icon: Icon(
+                      paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                    ),
+                    label: Text(paused ? 'Resume All' : 'Pause All'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ThemeConstants.accent,
+                      foregroundColor: ThemeConstants.textPrimary,
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: onStopAll,
+                    icon: const Icon(Icons.stop_rounded),
+                    label: const Text('Stop All'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ThemeConstants.error,
+                      foregroundColor: ThemeConstants.textPrimary,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

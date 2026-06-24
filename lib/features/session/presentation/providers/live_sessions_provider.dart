@@ -30,6 +30,13 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
   Timer? _pollTimer;
   String? _orgId;
 
+  /// Consecutive failed active-fetches. After a couple in a row we drop any
+  /// cached sessions (web parity: the web clears its list whenever the fetch
+  /// fails) so a device can't stay "in use" forever when the `/sessions/active`
+  /// poll starts failing (e.g. 401) — while still tolerating a single transient
+  /// blip so a genuinely-live run doesn't flicker on the 1s poll.
+  int _consecutiveFetchFailures = 0;
+
   /// Backend session ids this phone started (it owns the live engine). Used to
   /// flag sessions `isOwn` so the UI can gate control (own / foreign-WiFi /
   /// foreign-BLE). Survives refetches.
@@ -58,6 +65,7 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     _socket?.dispose();
     _socket = null;
     _orgId = null;
+    _consecutiveFetchFailures = 0;
     if (clearOwned) _ownedSessionIds.clear();
     if (mounted) state = const [];
   }
@@ -81,12 +89,13 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       final dio = _ref.read(nodeDioProvider);
       final resp =
           await dio.get<Map<String, dynamic>>(ApiEndpoints.sessionsActive(orgId));
-      final data = resp.data;
-      if (data == null) return;
-      final sessions = data['sessions'] as List<dynamic>?;
-      if (sessions == null) return;
+      _consecutiveFetchFailures = 0;
+      // Treat a missing/odd payload as "no active sessions" (web parity: the web
+      // replaces its list with whatever the fetch returns), NOT as a reason to
+      // keep stale sessions around.
+      final sessions = resp.data?['sessions'] as List<dynamic>?;
       final mapped = <ActiveSession>[];
-      for (final raw in sessions) {
+      for (final raw in (sessions ?? const <dynamic>[])) {
         if (raw is! Map) continue;
         final s = _mapSession(raw.cast<String, dynamic>());
         if (s != null) mapped.add(s);
@@ -97,6 +106,16 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       if (mounted) state = mapped;
     } catch (e) {
       appLogger.d('LiveSessions: active fetch failed: $e');
+      _consecutiveFetchFailures++;
+      // The web clears its session list on any failed fetch. Mirror that intent
+      // here, but only after a couple of consecutive failures so a single
+      // transient blip doesn't flicker a genuinely-live run on the 1s poll —
+      // otherwise stale sessions keep devices wrongly marked "In use".
+      if (_consecutiveFetchFailures >= 2 && state.isNotEmpty && mounted) {
+        appLogger.w('LiveSessions: clearing stale sessions after '
+            '$_consecutiveFetchFailures consecutive fetch failures');
+        state = const [];
+      }
     }
   }
 

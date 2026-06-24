@@ -18,6 +18,7 @@ class PreferencesService {
   static const _lastOrgIdKey = 'last_organization_id';
   static const _autoConnectEnabledKey = 'auto_connect_enabled';
   static const _recentProtocolIdsKey = 'recent_protocol_ids';
+  static const _sessionDevicesVerticalKey = 'session_devices_vertical';
 
   final SharedPreferences _prefs;
 
@@ -68,4 +69,11 @@ class PreferencesService {
       _prefs.getStringList(_recentProtocolIdsKey) ?? const [];
   Future<void> setRecentProtocolIds(List<String> ids) =>
       _prefs.setStringList(_recentProtocolIdsKey, ids);
+
+  // Session screen device layout: vertical list (all cards in one scroll, true)
+  // vs horizontal pager (swipe + dots, false). Defaults to vertical.
+  bool get sessionDevicesVertical =>
+      _prefs.getBool(_sessionDevicesVerticalKey) ?? true;
+  Future<void> setSessionDevicesVertical(bool vertical) =>
+      _prefs.setBool(_sessionDevicesVerticalKey, vertical);
 }

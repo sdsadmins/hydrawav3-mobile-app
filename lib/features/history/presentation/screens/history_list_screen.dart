@@ -305,16 +305,39 @@ class _ActiveSessionCard extends ConsumerWidget {
   final bool canOpenLive;
   const _ActiveSessionCard({required this.session, required this.canOpenLive});
 
+  /// Effective per-device status for the card. Prefers the backend per-device
+  /// status (live feed), falls back to the session status, and treats a device
+  /// whose backend countdown has reached 0 as completed even if the still-
+  /// running session hasn't flipped that device's status yet.
+  SessionStatus _effectiveDeviceStatus(int index) {
+    final id = session.deviceIds[index];
+    final live = index < session.liveDevices.length
+        ? session.liveDevices[index]
+        : null;
+    final raw = live?.status ?? session.deviceStatuses[id] ?? session.status;
+    final remaining = live?.remainingSeconds;
+    if (raw == SessionStatus.running && remaining != null && remaining <= 0) {
+      return SessionStatus.completed;
+    }
+    return raw;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // session.status is the ActiveSession SessionStatus enum — compare against
     // that, not session_model's (the cross-enum compare was always false, so the
     // card always read 'Running').
-    final status =
-        session.status == SessionStatus.paused ? 'Paused' : 'Running';
-    final perDeviceStatuses = session.deviceIds
-        .map((id) => session.deviceStatuses[id] ?? session.status)
-        .toList();
+    final effectiveDeviceStatuses = [
+      for (var i = 0; i < session.deviceIds.length; i++)
+        _effectiveDeviceStatus(i),
+    ];
+    // Once every device has finished, the card's main badge should read
+    // Completed too, instead of the stale session-level "Running".
+    final allCompleted = effectiveDeviceStatuses.isNotEmpty &&
+        effectiveDeviceStatuses.every((s) => s == SessionStatus.completed);
+    final status = allCompleted
+        ? 'Completed'
+        : (session.status == SessionStatus.paused ? 'Paused' : 'Running');
 
     // Control gating (parity with web):
     //   • own run        → tap to open the live screen (full control).
@@ -468,21 +491,25 @@ class _ActiveSessionCard extends ConsumerWidget {
               children: List.generate(session.deviceIds.length, (index) {
                 final id = session.deviceIds[index];
                 final name = session.deviceNames[id] ?? 'Device ${index + 1}';
-                final deviceStatus = perDeviceStatuses[index];
-                final isPaused = deviceStatus == SessionStatus.paused;
-                final isRunning = deviceStatus == SessionStatus.running;
-                final statusColor = isPaused
-                    ? ThemeConstants.warning
-                    : (isRunning
-                        ? ThemeConstants.success
-                        : ThemeConstants.textTertiary);
-                final statusLabel =
-                    isPaused ? 'Paused' : (isRunning ? 'Running' : 'Idle');
-
                 final live = index < session.liveDevices.length
                     ? session.liveDevices[index]
                     : null;
                 final remaining = live?.remainingSeconds;
+                final deviceStatus = _effectiveDeviceStatus(index);
+                final statusColor = switch (deviceStatus) {
+                  SessionStatus.paused => ThemeConstants.warning,
+                  SessionStatus.running => ThemeConstants.success,
+                  SessionStatus.completed => ThemeConstants.success,
+                  SessionStatus.stopped => ThemeConstants.textTertiary,
+                  SessionStatus.idle => ThemeConstants.textTertiary,
+                };
+                final statusLabel = switch (deviceStatus) {
+                  SessionStatus.paused => 'Paused',
+                  SessionStatus.running => 'Running',
+                  SessionStatus.completed => 'Completed',
+                  SessionStatus.stopped => 'Stopped',
+                  SessionStatus.idle => 'Idle',
+                };
 
                 return Padding(
                   padding: EdgeInsets.only(

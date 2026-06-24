@@ -25,6 +25,7 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../session/domain/session_model.dart';
+import '../../../session/domain/active_session_model.dart' as live;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
@@ -1234,10 +1235,27 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     // sessions) covers web/other phones. Matched by id (WiFi = macAddress).
     final busyDeviceIds =
         ref.read(activeSessionsProvider.notifier).getBusyDevices().toSet();
-    final inUseDeviceIds = <String>{
-      ...busyDeviceIds,
-      for (final s in ref.watch(liveSessionsProvider)) ...s.deviceIds,
-    };
+    // "In use" = devices actively RUNNING/PAUSED right now. The local busy set
+    // covers this phone's runs; the org-wide feed covers web/other phones. Gate
+    // the feed by the PER-DEVICE backend status: a multi-device session stays
+    // RUNNING while one device finishes, and a stopped/stale session can linger
+    // in the feed — without this check both kept a freed device wrongly "In use".
+    final liveInUseDeviceIds = <String>{};
+    for (final s in ref.watch(liveSessionsProvider)) {
+      if (s.liveDevices.isNotEmpty) {
+        for (final d in s.liveDevices) {
+          if (d.status == live.SessionStatus.running ||
+              d.status == live.SessionStatus.paused) {
+            liveInUseDeviceIds.add(d.deviceId);
+          }
+        }
+      } else if (s.status == live.SessionStatus.running ||
+          s.status == live.SessionStatus.paused) {
+        // Feed carried no per-device breakdown — fall back to session status.
+        liveInUseDeviceIds.addAll(s.deviceIds);
+      }
+    }
+    final inUseDeviceIds = <String>{...busyDeviceIds, ...liveInUseDeviceIds};
     // Plan's max concurrent devices (0/null = unlimited). Devices already
     // running org-wide consume slots, so a new run can add at most
     // (deviceLimit - alreadyRunning) more — web parity.
