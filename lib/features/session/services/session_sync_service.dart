@@ -228,6 +228,62 @@ class SessionSyncService {
       _post(ApiEndpoints.sessionStop, backendSessionId,
           {'macAddress': macAddress});
 
+  // ─────────── firmware-reported per-device lifecycle (rs:stop/pause/play) ───────────
+  // Mirror a FIRMWARE-reported run-state change for ONE device to the backend,
+  // the way the web does. The backend pairs a device by macAddress OR deviceName
+  // OR slotId, BUT: (a) a BLE device has no macAddress server-side (it registered
+  // by bluetoothId + deviceName), and (b) RESUME matches with AND-logic, so a
+  // non-matching macAddress would FAIL the match. The only field that matches
+  // across stop/pause/resume for a BLE device is the registered deviceName — so
+  // we resolve it (the SAME mapping used at session start) and send only that
+  // (+ slotId when known).
+
+  /// Registered-name identity body for [localMac] (BLE-safe; deviceName + slotId).
+  Future<Map<String, dynamic>> _deviceIdentityBody(
+    String localMac, {
+    String? slotId,
+  }) async {
+    final names = await _resolveRegisteredNames([localMac]);
+    final deviceName = names[localMac.trim().toUpperCase()] ?? localMac;
+    return {
+      'deviceName': deviceName,
+      if (slotId != null && slotId.isNotEmpty) 'slotId': slotId,
+    };
+  }
+
+  Future<void> stopServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac, slotId: slotId);
+    await _post(ApiEndpoints.sessionStop, backendSessionId, {
+      ...body,
+      'stopAll': false,
+    });
+  }
+
+  Future<void> pauseServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac, slotId: slotId);
+    await _post(ApiEndpoints.sessionPause, backendSessionId, body);
+  }
+
+  Future<void> resumeServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac, slotId: slotId);
+    await _post(ApiEndpoints.sessionResume, backendSessionId, body);
+  }
+
   Future<void> _post(
     String Function(String, String) endpoint,
     String backendSessionId,

@@ -142,32 +142,27 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        /// 🔥 TOP BAR — "Home" (left) + logo (CENTER) + token badge (right).
-                        /// Stack keeps the logo dead-center; the Row places Home
-                        /// on the left and the badge (natural width) on the right.
-                        Stack(
-                          alignment: Alignment.center,
+                        /// 🔥 TOP BAR — full-width logo on its own row, then a
+                        /// row below it with "Home" (left) + token badge (right).
+                        const _HomeLogo(),
+                        const SizedBox(height: 2),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            const _HomeLogo(),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Home',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: ThemeConstants.textPrimary,
-                                  ),
-                                ),
-                                const Spacer(),
-                                // Token chip — tap for the full plan/usage
-                                // breakdown (web parity).
-                                const TokenBalanceBadge(),
-                              ],
+                            Text(
+                              'Home',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: ThemeConstants.textPrimary,
+                              ),
                             ),
+                            const Spacer(),
+                            // Token chip — tap for the full plan/usage
+                            // breakdown (web parity).
+                            const TokenBalanceBadge(),
                           ],
                         ),
 
@@ -931,15 +926,26 @@ class _HomeLogo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    // Both logos are SVGs sharing the SAME viewBox, so one width renders an
-    // identical size in either theme. Dark uses the white variant (which keeps
-    // the tan accent); light uses the black variant.
-    return SvgPicture.asset(
-      isDark
-          ? 'assets/images/Hydrawav3_White_Logo.svg'
-          : 'assets/images/Hydrawav3_Black_Logo.svg',
-      width: 200,
-      fit: BoxFit.contain,
+    // Both logos are SVGs sharing the SAME viewBox (643.8 x 226.2 — tall relative
+    // to the single-line wordmark, so it carries a lot of top/bottom whitespace).
+    // Render full-width via BoxFit.fitWidth, then crop the empty bands above/below
+    // with ClipRect + Align(heightFactor) so the logo isn't surrounded by big
+    // vertical margins. Tune [_logoHeightFactor] (→1.0 = no crop, less = tighter).
+    const double logoHeightFactor = 0.62;
+    return ClipRect(
+      child: Align(
+        alignment: Alignment.center,
+        heightFactor: logoHeightFactor,
+        child: SizedBox(
+          width: double.infinity,
+          child: SvgPicture.asset(
+            isDark
+                ? 'assets/images/Hydrawav3_White_Logo.svg'
+                : 'assets/images/Hydrawav3_Black_Logo.svg',
+            fit: BoxFit.fitWidth,
+          ),
+        ),
+      ),
     );
   }
 }

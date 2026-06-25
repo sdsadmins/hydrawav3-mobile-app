@@ -1476,12 +1476,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final currentSession = _findTrackedSession(activeSessions);
 
     final timer = engine.timer;
-    // Prefer the live engine status when the engine for this session is
-    // actually running/paused, so a stale tracked status can't strand the
-    // Stop/Pause/Resume controls after re-entering a live (WiFi) session.
-    final engineLive = engine.status == SessionStatus.running ||
-        engine.status == SessionStatus.paused;
-    final status = engineLive
+    // The local engine is authoritative for an own run in ANY non-idle state —
+    // running, paused, AND a just-reached terminal (stopped/completed). Only
+    // fall back to the tracked/backend session status when the engine hasn't
+    // taken over yet (idle), e.g. right after re-entering a live (WiFi) session.
+    //
+    // Including the terminal case is what fixes the device-pressed-stop glitch:
+    // a firmware `rs:stop` flips the engine to stopped immediately, but the
+    // org-wide feed still reports the device "running" for up to a minute — so
+    // without this the Stop/Pause controls would snap back to enabled until the
+    // feed caught up. Trusting the engine's terminal state keeps them disabled.
+    final engineAuthoritative = engine.status != SessionStatus.idle;
+    final status = engineAuthoritative
         ? engine.status
         : (currentSession == null
             ? engine.status

@@ -15,6 +15,7 @@ import '../../ble/services/ble_connector.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
+import 'session_sync_service.dart';
 import '../data/session_repository.dart';
 import '../domain/session_model.dart';
 
@@ -619,12 +620,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         if (current == SessionStatus.running) {
           appLogger.i('Session: device $deviceId reported rs=pause → pausing that device');
           unawaited(pauseDevice(deviceId));
+          // Web parity: mirror the per-device pause to the backend too.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
         }
         break;
       case 'play':
         if (current == SessionStatus.paused) {
           appLogger.i('Session: device $deviceId reported rs=play → resuming that device');
           unawaited(resumeDevice(deviceId));
+          // Web parity: mirror the per-device resume to the backend too.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
         }
         break;
       case 'stop':
@@ -638,8 +643,45 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           // disconnected device. force-stop registers it regardless and
           // suppresses the auto-reconnect so it doesn't come back.
           _forceDeviceStopped(deviceId);
+          // Web parity: also drive the BACKEND stop for just this device
+          // (stopAll:false) so the server ends/deducts it and every other
+          // client's live feed reconciles — not only our local state.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
         }
         break;
+    }
+  }
+
+  /// Mirror a firmware-reported per-device run-state change (`rs:stop` /
+  /// `rs:pause` / `rs:play`) to the backend, the way the web does: POST the
+  /// matching /sessions/:id/{stop|pause|resume} for JUST this device so the
+  /// server updates/deducts only it and broadcasts to every other client's live
+  /// feed — not only our local state. No-op when this run has no backend session
+  /// (an offline / own-only run), where the local change is already the whole
+  /// story. Never throws into the notify stream.
+  Future<void> _mirrorDeviceLifecycleToBackend(
+    String deviceId,
+    String action,
+  ) async {
+    final backendId = _ref.read(normalServerSessionIdProvider(sessionId));
+    if (backendId == null || backendId.isEmpty) return;
+    final sync = _ref.read(sessionSyncServiceProvider);
+    try {
+      switch (action) {
+        case 'stop':
+          await sync.stopServerSessionDeviceByIdentity(backendId, deviceId);
+          break;
+        case 'pause':
+          await sync.pauseServerSessionDeviceByIdentity(backendId, deviceId);
+          break;
+        case 'resume':
+          await sync.resumeServerSessionDeviceByIdentity(backendId, deviceId);
+          break;
+      }
+      appLogger.i(
+          'Session: mirrored rs=$action for $deviceId → backend session $backendId');
+    } catch (e) {
+      appLogger.e('Session: backend $action mirror failed for $deviceId: $e');
     }
   }
 
