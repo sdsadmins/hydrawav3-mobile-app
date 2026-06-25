@@ -2310,8 +2310,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     // Prefer the backend timer (single source of truth → matches the web). Fall
     // back to the local engine timer only until the backend value is available.
-    final useBackendTimer =
-        backendRemainingSeconds != null && backendRemainingSeconds >= 0;
+    //
+    // EXCEPTION — Protocol Plus devices: the backend resets each device's clock
+    // (deviceStartTime / totalElapsedSeconds → 0) on every sub-protocol switch
+    // while keeping totalDurationSeconds at the WHOLE-sequence total, so its
+    // `remainingSeconds` JUMPS back up to the full sequence length at each
+    // switch (the "timer restarts from the start" bug). The local engine instead
+    // runs one continuous per-device stopwatch against the whole-sequence
+    // totalDuration and never resets it across switches, so use it here to get a
+    // smooth, monotonic countdown over the entire Protocol Plus run.
+    final useBackendTimer = !isProtocolPlusDevice &&
+        backendRemainingSeconds != null &&
+        backendRemainingSeconds >= 0;
     final displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)
         : timer.remaining;

@@ -407,7 +407,10 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                       ),
                       const SizedBox(height: 10),
                       TextField(
-                        autofocus: true,
+                        // Don't pop the keyboard on open — let the user tap the
+                        // field first (they often just browse / use the goal
+                        // filter + recents without searching).
+                        autofocus: false,
                         onChanged: (value) =>
                             setSheetState(() => query = value.trim()),
                         style: TextStyle(
@@ -545,11 +548,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 8),
-                                // Horizontal strip of protocol-style cards (same
-                                // look as the protocol list below), not goal
-                                // capsules.
+                                // Compact horizontal strip of rounded "pill"
+                                // tags — name + time only (no description), so a
+                                // few recents fit at a glance.
                                 SizedBox(
-                                  height: 116,
+                                  height: 44,
                                   child: ListView.separated(
                                     scrollDirection: Axis.horizontal,
                                     itemCount: recentOptions.length,
@@ -557,19 +560,16 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         const SizedBox(width: 8),
                                     itemBuilder: (_, i) {
                                       final protocol = recentOptions[i];
-                                      return SizedBox(
-                                        width: 300,
-                                        child: _recentProtocolCard(
-                                          protocol,
-                                          selected: protocol.id == currentId,
-                                          onTap: () {
-                                            ref
-                                                .read(recentProtocolIdsProvider
-                                                    .notifier)
-                                                .recordUsed(protocol.id);
-                                            Navigator.of(ctx).pop(protocol.id);
-                                          },
-                                        ),
+                                      return _recentProtocolCard(
+                                        protocol,
+                                        selected: protocol.id == currentId,
+                                        onTap: () {
+                                          ref
+                                              .read(recentProtocolIdsProvider
+                                                  .notifier)
+                                              .recordUsed(protocol.id);
+                                          Navigator.of(ctx).pop(protocol.id);
+                                        },
                                       );
                                     },
                                   ),
@@ -602,21 +602,16 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                             final list = query.isEmpty
                                 ? [...filteredProtocols]
                                 : filteredProtocols.where((protocol) {
+                                    // Search by protocol title only (not the
+                                    // description or goal name).
                                     final lowerQuery = query.toLowerCase();
                                     return protocol.templateName
-                                            .toLowerCase()
-                                            .contains(lowerQuery) ||
-                                        protocol.description
-                                            .toLowerCase()
-                                            .contains(lowerQuery) ||
-                                        (protocol.goalTagName ?? '')
-                                            .toLowerCase()
-                                            .contains(lowerQuery);
+                                        .toLowerCase()
+                                        .contains(lowerQuery);
                                   }).toList();
 
-                            list.sort((a, b) => a.templateName
-                                .toLowerCase()
-                                .compareTo(b.templateName.toLowerCase()));
+                            list.sort((a, b) =>
+                                naturalCompare(a.templateName, b.templateName));
 
                             if (list.isEmpty) {
                               return Center(
@@ -776,97 +771,81 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     );
   }
 
-  /// A "Recently used" entry rendered with the SAME card styling as the main
-  /// protocol list (icon, name, description, "goal - duration" meta) instead of
-  /// the old goal-tag capsule.
+  /// A "Recently used" entry rendered as a compact rounded pill ("gola tag"):
+  /// protocol name + total time only — no description or goal meta — so several
+  /// fit in the horizontal strip at a glance.
   Widget _recentProtocolCard(
     ProtocolSelectionOption protocol, {
     required bool selected,
     required VoidCallback onTap,
   }) {
     final locked = !protocol.active;
-    final meta = [
-      if (protocol.goalTagName?.isNotEmpty ?? false) protocol.goalTagName!,
-      if (protocol.totalDuration != null) protocol.totalDuration!.formatted,
-    ].join(' - ');
+    final time = protocol.totalDuration?.formatted;
 
     return Opacity(
       opacity: locked ? 0.55 : 1,
       child: InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: locked ? null : onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: selected
-              ? ThemeConstants.accent.withValues(alpha: 0.14)
-              : ThemeConstants.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+        borderRadius: BorderRadius.circular(999),
+        onTap: locked ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            color: selected
+                ? ThemeConstants.accent.withValues(alpha: 0.14)
+                : ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? ThemeConstants.accent : ThemeConstants.border,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                locked
+                    ? Icons.lock_outline_rounded
+                    : selected
+                        ? Icons.check_circle_rounded
+                        : Icons.science_outlined,
+                size: 15,
+                color:
+                    selected ? ThemeConstants.accent : ThemeConstants.textTertiary,
+              ),
+              const SizedBox(width: 8),
+              // Cap the name so a long title doesn't make one pill huge.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 160),
+                child: Text(
+                  protocol.templateName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: ThemeConstants.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (time != null) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.timer_outlined,
+                  size: 13,
+                  color: ThemeConstants.textTertiary,
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  time,
+                  style: TextStyle(
+                    color: ThemeConstants.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
-        child: Row(
-          children: [
-            Icon(
-              locked
-                  ? Icons.lock_outline_rounded
-                  : selected
-                      ? Icons.check_circle_rounded
-                      : Icons.science_outlined,
-              size: 18,
-              color: selected
-                  ? ThemeConstants.accent
-                  : ThemeConstants.textTertiary,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    protocol.templateName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: ThemeConstants.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  if (protocol.description.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        protocol.description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: ThemeConstants.textSecondary,
-                          fontSize: 12,
-                          height: 1.25,
-                        ),
-                      ),
-                    ),
-                  if (meta.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        meta,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: ThemeConstants.textSecondary,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
       ),
     );
   }
@@ -2342,7 +2321,10 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                   Expanded(
                     flex: 4,
                     child: Opacity(
-                      opacity: isRunning ? 0.5 : 1,
+                      // Keep the Use toggle fully interactive even while the
+                      // device is in a live session — only the rest of the card
+                      // (protocol / Advanced) stays locked; Use + Disconnect work.
+                      opacity: 1,
                       child: Container(
                       height: 34,
                       padding: const EdgeInsets.only(left: 8, right: 2),
@@ -2394,7 +2376,8 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 activeColor: ThemeConstants.accent,
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
-                                onChanged: isRunning ? null : onToggleInUse,
+                                // Use stays toggleable even during a live session.
+                                onChanged: onToggleInUse,
                               ),
                             ),
                           ),

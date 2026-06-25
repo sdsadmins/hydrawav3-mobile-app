@@ -16,6 +16,7 @@ import '../../../session/services/session_engine.dart';
 import '../../domain/protocol_model.dart';
 import '../../domain/protocol_plus_model.dart';
 import '../providers/protocol_provider.dart';
+import '../providers/protocol_plus_detail_provider.dart';
 
 /// Lists Protocol Plus templates for an already-selected device + transport.
 /// Tapping one starts protocol[0] locally (the normal run) and then registers
@@ -239,7 +240,7 @@ class _ProtocolPlusListScreenState
   }
 }
 
-class _ProtocolPlusCard extends StatelessWidget {
+class _ProtocolPlusCard extends ConsumerWidget {
   final ProtocolPlus template;
   final VoidCallback? onTap;
 
@@ -253,7 +254,24 @@ class _ProtocolPlusCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Total cycles + sessions across the whole sequence, derived from the
+    // populated sub-protocols. Available once the detail fetch resolves; the
+    // chips are simply omitted until then (or if the payload isn't populated).
+    final detail = ref.watch(protocolPlusDetailProvider(template.id)).asData?.value;
+    int? totalCycles;
+    int? totalSessions;
+    if (detail != null && detail.protocols.isNotEmpty) {
+      var cycles = 0;
+      var sessions = 0;
+      for (final p in detail.protocols) {
+        cycles += p.cycles.length;
+        sessions += p.sessions;
+      }
+      totalCycles = cycles;
+      totalSessions = sessions;
+    }
+
     return Material(
       color: ThemeConstants.surface,
       borderRadius: BorderRadius.circular(14),
@@ -292,17 +310,28 @@ class _ProtocolPlusCard extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 10),
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
                   _Chip(
                     icon: Icons.layers_outlined,
                     label: '${template.protocolCount} protocols',
                   ),
-                  const SizedBox(width: 8),
                   _Chip(
                     icon: Icons.timer_outlined,
                     label: _formatDuration(template.totalDuration),
                   ),
+                  if (totalCycles != null)
+                    _Chip(
+                      icon: Icons.repeat_rounded,
+                      label: '$totalCycles cycles',
+                    ),
+                  if (totalSessions != null)
+                    _Chip(
+                      icon: Icons.play_circle_outline_rounded,
+                      label: '$totalSessions sessions',
+                    ),
                 ],
               ),
             ],

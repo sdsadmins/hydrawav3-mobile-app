@@ -25,7 +25,9 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../domain/protocol_model.dart';
+import '../../domain/protocol_plus_model.dart';
 import '../providers/protocol_provider.dart';
+import '../providers/protocol_plus_detail_provider.dart';
 
 class ProtocolDetailScreen extends ConsumerStatefulWidget {
   final String protocolId;
@@ -127,6 +129,169 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
     _seededProtocolId = p.id;
   }
 
+  /// The "Protocols in this Plus" section: lists each sub-protocol in run order
+  /// with its own cycles / sessions / duration. [detail] is null until the
+  /// populated sequence loads (shows a placeholder); if the payload carries ids
+  /// only, it falls back to a simple count.
+  Widget _buildPlusProtocols(ProtocolPlus? detail) {
+    Widget shell(Widget child) => Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: ThemeConstants.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: ThemeConstants.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.layers_rounded,
+                      size: 18, color: ThemeConstants.accent),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Protocols in this Plus',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: ThemeConstants.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              child,
+            ],
+          ),
+        );
+
+    if (detail == null) {
+      return shell(
+        Row(
+          children: [
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Loading sequence…',
+              style: TextStyle(
+                fontSize: 13,
+                color: ThemeConstants.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final subs = detail.protocols;
+    if (subs.isEmpty) {
+      return shell(
+        Text(
+          '${detail.protocolCount} protocol(s) in this sequence.',
+          style: TextStyle(
+            fontSize: 13,
+            color: ThemeConstants.textSecondary,
+          ),
+        ),
+      );
+    }
+
+    return shell(
+      Column(
+        children: [
+          for (var i = 0; i < subs.length; i++) ...[
+            if (i > 0) const SizedBox(height: 10),
+            _subProtocolTile(i + 1, subs[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// One row in the Protocol Plus sequence: order badge + name + compact
+  /// cycles / sessions / duration figures.
+  Widget _subProtocolTile(int order, Protocol sub) {
+    Widget metric(IconData icon, String text) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: ThemeConstants.textTertiary),
+            const SizedBox(width: 3),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                color: ThemeConstants.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        );
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ThemeConstants.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: ThemeConstants.borderLight),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: ThemeConstants.accent.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              '$order',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: ThemeConstants.accent,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sub.templateName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    metric(Icons.repeat_rounded, '${sub.cycles.length} cycles'),
+                    metric(Icons.play_circle_outline_rounded,
+                        '${sub.sessions} sessions'),
+                    metric(Icons.timer_outlined, sub.totalDuration.formatted),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(protocolDetailProvider(widget.protocolId));
@@ -172,6 +337,15 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               _activeSettingsDeviceId = selectedTargetIds.first;
             }
           }
+          // A Protocol Plus has no cycles of its own; fetch its populated
+          // sequence so we can show the SUMMED cycles/sessions and the list of
+          // protocols inside it.
+          final isPlus = p.isProtocolPlus;
+          final plusDetail = isPlus
+              ? ref.watch(protocolPlusDetailProvider(p.id)).asData?.value
+              : null;
+          final plusTotals =
+              plusDetail != null ? protocolPlusTotals(plusDetail) : null;
           return ListView(
             physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.all(16),
@@ -199,21 +373,37 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
               const SizedBox(height: 16),
               AnimatedEntrance(
                   index: 1,
-                  child: Row(children: [
+                  child: Wrap(spacing: 8, runSpacing: 8, children: [
                     StatChip(
                         icon: Icons.timer_outlined,
                         value: p.totalDuration.formatted),
-                    const SizedBox(width: 8),
+                    if (isPlus && plusDetail != null)
+                      StatChip(
+                          icon: Icons.layers_outlined,
+                          value: '${plusDetail.protocolCount}',
+                          label: 'protocols'),
+                    // For a Plus these are summed across the sequence (null until
+                    // the detail loads); a normal protocol uses its own counts.
                     StatChip(
                         icon: Icons.repeat_rounded,
-                        value: '${p.cycles.length}',
+                        value: isPlus
+                            ? '${plusTotals?.cycles ?? '…'}'
+                            : '${p.cycles.length}',
                         label: 'cycles'),
-                    const SizedBox(width: 8),
                     StatChip(
                         icon: Icons.play_circle_outline_rounded,
-                        value: '${p.sessions}',
+                        value: isPlus
+                            ? '${plusTotals?.sessions ?? '…'}'
+                            : '${p.sessions}',
                         label: 'sessions'),
                   ])),
+              if (isPlus) ...[
+                const SizedBox(height: 20),
+                AnimatedEntrance(
+                  index: 2,
+                  child: _buildPlusProtocols(plusDetail),
+                ),
+              ],
               const SizedBox(height: 24),
               // AnimatedEntrance(
               //   index: 2,

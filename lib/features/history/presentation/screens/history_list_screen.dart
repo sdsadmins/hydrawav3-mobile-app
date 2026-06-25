@@ -322,6 +322,27 @@ class _ActiveSessionCard extends ConsumerWidget {
     return raw;
   }
 
+  /// Per-device countdown to display. Normal/foreign runs use the backend
+  /// `remainingSeconds` verbatim. For an OWN Protocol Plus run the backend
+  /// resets each device's clock on every sub-protocol switch (its
+  /// `remainingSeconds` jumps back up to the whole-sequence total), so derive a
+  /// continuous countdown from the non-resetting whole-sequence total
+  /// ([LiveDeviceState.totalDurationSeconds]) and the run's start instead —
+  /// matching the continuous timer on the live session screen.
+  int? _displayRemainingSeconds({
+    required LiveDeviceState? live,
+    required bool isPlusOwnRun,
+    required DateTime plusStart,
+  }) {
+    final backend = live?.remainingSeconds;
+    if (!isPlusOwnRun) return backend;
+    final total = live?.totalDurationSeconds ?? 0;
+    if (total <= 0) return backend;
+    final elapsed = DateTime.now().difference(plusStart).inSeconds;
+    final remaining = total - elapsed;
+    return remaining < 0 ? 0 : remaining;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // session.status is the ActiveSession SessionStatus enum — compare against
@@ -358,6 +379,20 @@ class _ActiveSessionCard extends ConsumerWidget {
       }
     }
     final canOpen = session.isOwn && canOpenLive && localSession != null;
+
+    // Protocol Plus countdown fix (parity with the live session screen): the
+    // backend resets each device's clock on every sub-protocol switch while
+    // keeping totalDurationSeconds at the WHOLE-sequence total, so its
+    // `remainingSeconds` jumps back up to the full length at each switch. For an
+    // OWN Plus run, derive a continuous countdown from the (non-resetting)
+    // whole-sequence total and the run's start instead. Plus bindings live on
+    // the resolved local session (own run) but may also be on this feed item.
+    final plusBindings =
+        (localSession?.protocolPlusBindings.isNotEmpty ?? false)
+            ? localSession!.protocolPlusBindings
+            : session.protocolPlusBindings;
+    final isPlusOwnRun = session.isOwn && plusBindings.isNotEmpty;
+    final plusStart = localSession?.createdAt ?? session.createdAt;
 
     return GradientCard(
       onTap: () {
@@ -494,7 +529,11 @@ class _ActiveSessionCard extends ConsumerWidget {
                 final live = index < session.liveDevices.length
                     ? session.liveDevices[index]
                     : null;
-                final remaining = live?.remainingSeconds;
+                final remaining = _displayRemainingSeconds(
+                  live: live,
+                  isPlusOwnRun: isPlusOwnRun,
+                  plusStart: plusStart,
+                );
                 final deviceStatus = _effectiveDeviceStatus(index);
                 final statusColor = switch (deviceStatus) {
                   SessionStatus.paused => ThemeConstants.warning,

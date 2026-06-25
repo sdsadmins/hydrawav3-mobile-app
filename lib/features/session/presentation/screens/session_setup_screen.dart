@@ -244,7 +244,9 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               ),
                               const SizedBox(height: 10),
                               TextField(
-                                autofocus: true,
+                                // Don't pop the keyboard on open — let the user
+                                // tap the field first.
+                                autofocus: false,
                                 onChanged: (v) =>
                                     setSheetState(() => query = v.trim()),
                                 style: TextStyle(
@@ -365,28 +367,18 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                     ),
                                   ),
                                   data: (filteredProtocols) {
+                                    // Search by protocol title only (not the
+                                    // description or goal name).
                                     final list = query.trim().isEmpty
                                         ? [...filteredProtocols]
                                         : filteredProtocols
-                                            .where((p) =>
-                                                p.templateName
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()) ||
-                                                p.description
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()) ||
-                                                (p.goalTagName ?? '')
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()))
+                                            .where((p) => p.templateName
+                                                .toLowerCase()
+                                                .contains(query.toLowerCase()))
                                             .toList();
 
-                                    list.sort((a, b) => a.templateName
-                                        .toLowerCase()
-                                        .compareTo(
-                                            b.templateName.toLowerCase()));
+                                    list.sort((a, b) => naturalCompare(
+                                        a.templateName, b.templateName));
 
                                     if (list.isEmpty) {
                                       return Center(
