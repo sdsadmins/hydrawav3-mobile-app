@@ -9,6 +9,7 @@ import '../../../core/network/connectivity_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/local_db.dart';
 import '../../../core/utils/logger.dart';
+import '../../intake/domain/intake_models.dart';
 import '../domain/session_model.dart';
 
 final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
@@ -69,6 +70,11 @@ class SessionRepository {
       discomfortBefore: Value(record.discomfortBefore),
       discomfortAfter: Value(record.discomfortAfter),
       notes: Value(record.notes),
+      clientType: Value(record.clientType),
+      clientId: Value(record.clientId),
+      intakeJson: Value(
+        record.intake == null ? null : jsonEncode(record.intake!.toJson()),
+      ),
       synced: Value(record.synced),
       completedAt: Value(record.completedAt),
     ));
@@ -90,6 +96,15 @@ class SessionRepository {
 
     for (final session in unsynced) {
       try {
+        GuidedAssessmentData? intake;
+        if (session.intakeJson != null && session.intakeJson!.isNotEmpty) {
+          try {
+            intake = GuidedAssessmentData.fromJson(
+                jsonDecode(session.intakeJson!) as Map<String, dynamic>);
+          } catch (_) {
+            intake = null;
+          }
+        }
         final record = SessionRecord(
           id: session.id,
           protocolId: session.protocolId,
@@ -101,6 +116,9 @@ class SessionRepository {
           discomfortBefore: session.discomfortBefore,
           discomfortAfter: session.discomfortAfter,
           notes: session.notes,
+          clientType: session.clientType,
+          clientId: session.clientId,
+          intake: intake,
           createdAt: session.completedAt,
           updatedAt: session.completedAt,
           completedAt: session.completedAt,

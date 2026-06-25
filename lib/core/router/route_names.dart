@@ -25,6 +25,11 @@ class RouteNames {
   static const String session = 'session';
   static const String sessionSetup = 'session-setup';
 
+  // AI report
+  static const String aiReport = 'ai-report';
+  static const String aiReports = 'ai-reports';
+  static const String aiReportClients = 'ai-report-clients';
+
   // Device sub-routes
   static const String deviceRegister = 'device-register';
   static const String deviceDetail = 'device-detail';
@@ -66,6 +71,9 @@ class RoutePaths {
   static const String protocolPlus = '/protocol-plus';
   static const String session = '/session';
   static const String sessionSetup = '/session-setup';
+  static const String aiReport = '/ai-report';
+  static const String aiReports = '/ai-reports';
+  static const String aiReportClients = '/ai-report-clients';
   static const String deviceRegister = '/devices/register';
   static const String deviceDetail = '/devices/:id';
   static const String sessionDetail = '/history/:id';

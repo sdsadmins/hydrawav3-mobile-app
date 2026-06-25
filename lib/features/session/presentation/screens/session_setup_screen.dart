@@ -7,6 +7,10 @@ import '../../../../core/storage/local_db.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../clients/presentation/widgets/client_selection_section.dart';
+import '../../../intake/presentation/providers/guided_assessment_provider.dart';
+import '../../../intake/presentation/widgets/guided_assessment_wizard.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
@@ -552,6 +556,13 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                     16 + bottomInset + bottomBarHeight + 12,
                   ),
                   children: [
+                    // Client / Guest selector (web parity).
+                    const ClientSelectionSection(),
+                    // Guided Assessment vs Quick Start.
+                    const _SessionTypeCards(),
+                    // The guided wizard appears only in Guided mode.
+                    if (ref.watch(sessionTypeProvider) == SessionType.guided)
+                      const GuidedAssessmentWizard(),
                     Text(
                       'Configure each device individually',
                       style: TextStyle(
@@ -823,6 +834,26 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                       onPressed: _starting || !allSelected
                           ? null
                           : () async {
+                              // In Client mode a client must be selected so the
+                              // intake syncs with a clientId (backend requires
+                              // it when clientType != 'guest').
+                              final clientMode =
+                                  ref.read(sessionClientModeProvider);
+                              final selectedClient =
+                                  ref.read(selectedClientProvider);
+                              if (clientMode == ClientMode.client &&
+                                  selectedClient == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text(
+                                      'Select a client or switch to Guest before starting.',
+                                    ),
+                                    backgroundColor: ThemeConstants.error,
+                                  ),
+                                );
+                                return;
+                              }
+
                               final currentSelectedDeviceIds = widget.deviceIds
                                   .where((id) => _runDeviceIds.contains(id))
                                   .toList();
@@ -885,12 +916,24 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                     ),
                                 ];
 
+                                // Thread Client/Guest + Guided Assessment so the
+                                // synced intake carries clientId + real fields.
+                                final sessionType =
+                                    ref.read(sessionTypeProvider);
+                                final intake = sessionType ==
+                                        SessionType.guided
+                                    ? ref.read(guidedAssessmentProvider)
+                                    : null;
                                 await launchSession(
                                   ref,
                                   context,
                                   selections: selections,
                                   transport: widget.transport,
                                   delayedDeviceId: effectiveDelayedDeviceId,
+                                  clientId: clientMode == ClientMode.client
+                                      ? selectedClient?.id
+                                      : null,
+                                  intake: intake,
                                 );
                               } catch (e) {
                                 if (mounted) {
@@ -1110,6 +1153,99 @@ class _GoalFilterChip extends StatelessWidget {
             fontSize: 12,
             fontWeight: FontWeight.w700,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Guided Assessment vs Quick Start chooser (web parity).
+class _SessionTypeCards extends ConsumerWidget {
+  const _SessionTypeCards();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final type = ref.watch(sessionTypeProvider);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Row(
+        children: [
+          Expanded(
+            child: _card(
+              context,
+              active: type == SessionType.guided,
+              icon: Icons.auto_awesome_rounded,
+              title: 'Guided Assessment',
+              subtitle: 'AI intake & report',
+              onTap: () => ref.read(sessionTypeProvider.notifier).state =
+                  SessionType.guided,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _card(
+              context,
+              active: type == SessionType.quick,
+              icon: Icons.bolt_rounded,
+              title: 'Quick Start',
+              subtitle: 'Skip the intake',
+              onTap: () => ref.read(sessionTypeProvider.notifier).state =
+                  SessionType.quick,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _card(
+    BuildContext context, {
+    required bool active,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: active
+              ? ThemeConstants.accent.withValues(alpha: 0.14)
+              : ThemeConstants.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: active ? ThemeConstants.accent : ThemeConstants.border,
+            width: active ? 1.6 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon,
+                color: active
+                    ? ThemeConstants.accent
+                    : ThemeConstants.textSecondary),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: TextStyle(
+                color: ThemeConstants.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: ThemeConstants.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ),
       ),
     );

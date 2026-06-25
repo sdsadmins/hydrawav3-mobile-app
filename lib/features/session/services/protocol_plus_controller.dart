@@ -14,6 +14,7 @@ import '../../../core/router/route_names.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/utils/logger.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../intake/domain/intake_models.dart';
 import '../../ble/domain/ble_device_model.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../devices/presentation/providers/wifi_devices_provider.dart';
@@ -1113,6 +1114,8 @@ Future<void> launchSession(
   required List<SessionDeviceSelection> selections,
   required String transport,
   String? delayedDeviceId,
+  String? clientId,
+  GuidedAssessmentData? intake,
 }) async {
   if (selections.isEmpty) return;
   final controller = ref.read(protocolPlusControllerProvider);
@@ -1178,6 +1181,9 @@ Future<void> launchSession(
 
     sessionId = const Uuid().v4();
     final engine = ref.read(sessionEngineFamilyProvider(sessionId).notifier);
+    // Thread the Client/Guest + Guided Assessment context so the intake POSTed
+    // on session capture carries clientType/clientId and the guided fields.
+    engine.setClientContext(clientId: clientId, intake: intake);
     final commonProtocol = protocolByDevice[deviceIds.first]!;
     final commonAdvanced = advancedByDevice[deviceIds.first]!;
     final effectiveDelayedDeviceId =

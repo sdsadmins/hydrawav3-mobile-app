@@ -54,6 +54,16 @@ class ApiEndpoints {
   static String clientById(String clientId) =>
       '/clients/clientDetails/$clientId';
 
+  // AI reports (Node Nest — parity with web `actions/action.ts` + `hydrawav3-api.ts`).
+  // Two-phase queued generation: POST analyze -> poll status -> POST ai-reports.
+  // NOTE: distinct from `aiAnalyze`/`aiChat` below (those are the old Next.js routes).
+  static const String aiReportAnalyze = 'ai/analyze';
+  static String aiReportAnalyzeStatus(String id) => 'ai/analyze/$id';
+  static const String aiReports = 'ai-reports';
+  static const String aiReportsRecent = 'ai-reports/recent';
+  static const String aiReportsAll = 'ai-reports/all';
+  static String aiReportById(String id) => 'ai-reports/$id';
+
   // Session music ("Atmosphere") tracks
   static const String musics = '/musics';
 
@@ -72,6 +82,9 @@ class ApiEndpoints {
   // Body Parts & Muscles
   static const String bodyParts = '/body-part';
   static const String muscles = '/muscle';
+
+  // ROM body parts (for the Range of Motion intake step; parity with web getRoms).
+  static const String roms = 'roms';
 
   // Placement Cards
   static const String placementCards = '/placement-cards';

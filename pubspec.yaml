@@ -54,6 +54,9 @@ dependencies:
   # Social Sharing
   share_plus: ^10.1.3
 
+  # AI report PDF (pure-Dart build; shared via share_plus / saved via file_picker)
+  pdf: ^3.11.1
+
   # Connectivity
   connectivity_plus: ^6.1.1
 

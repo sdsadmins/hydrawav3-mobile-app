@@ -1,3 +1,5 @@
+import '../../intake/domain/intake_models.dart';
+
 enum SessionStatus { idle, running, paused, stopped, completed }
 
 /// How this session was started (BLE vs WiFi/MQTT).
@@ -20,6 +22,13 @@ class SessionRecord {
   final int? discomfortAfter;
   final String? notes;
   final String clientType;
+
+  /// Backend client id when [clientType] == 'client' (null for guest).
+  final String? clientId;
+
+  /// Guided Assessment intake captured for this session (null for Quick Start).
+  final GuidedAssessmentData? intake;
+
   final String? createdBy;
   final String? updatedBy;
   final DateTime createdAt;
@@ -39,6 +48,8 @@ class SessionRecord {
     this.discomfortAfter,
     this.notes,
     this.clientType = 'guest',
+    this.clientId,
+    this.intake,
     this.createdBy,
     this.updatedBy,
     required this.createdAt,
@@ -68,22 +79,39 @@ class SessionRecord {
       });
     }
 
-    return {
+    final body = <String, dynamic>{
       'clientType': clientType,
+      if (clientId != null && clientId!.isNotEmpty) 'clientId': clientId,
       'protocols': protocolEntries,
-      if (discomfortBefore != null || discomfortAfter != null)
-        'discomfortAreas': [
-          {
-            'discompfortbodyPart': 'General',
-            'side': 'Both',
-            'discomfortBefore': discomfortBefore ?? 0,
-            'discomfortAfter': discomfortAfter ?? 0,
-            'temporalDuration': 'Less than 6 weeks',
-            'behavior': 'Comes and Goes',
-          }
-        ],
-      if (notes != null && notes!.isNotEmpty) 'sessionNotes': notes,
     };
+
+    // Guided Assessment intake (real ROM / activities / posture / areas).
+    final intakeFields = intake?.toIntakeFields();
+    if (intakeFields != null) body.addAll(intakeFields);
+
+    // Fall back to a synthetic discomfort area only when the guided intake did
+    // not supply real areas (e.g. Quick Start) but pre/post pain was recorded.
+    final hasGuidedAreas = body['discomfortAreas'] != null;
+    if (!hasGuidedAreas &&
+        (discomfortBefore != null || discomfortAfter != null)) {
+      body['discomfortAreas'] = [
+        {
+          'discompfortbodyPart': 'General',
+          'side': 'Both',
+          'discomfortBefore': discomfortBefore ?? 0,
+          'discomfortAfter': discomfortAfter ?? 0,
+          'temporalDuration': 'Less than 6 weeks',
+          'behavior': 'Comes and Goes',
+        }
+      ];
+    }
+
+    // Session-level notes (separate from the intake's missingRemark).
+    if (notes != null && notes!.isNotEmpty && body['sessionNotes'] == null) {
+      body['sessionNotes'] = notes;
+    }
+
+    return body;
   }
 }
 

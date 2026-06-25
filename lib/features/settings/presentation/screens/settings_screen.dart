@@ -664,6 +664,9 @@ class SettingsScreen extends ConsumerWidget {
                 AnimatedEntrance(
                     index: 3,
                     child: _SettingsGroup(title: 'GENERAL', items: [
+                      _Item(Icons.assignment_outlined, 'Client AI Reports',
+                          onTap: () =>
+                              context.push(RoutePaths.aiReportClients)),
                       // Coming soon — hidden for now
                       // _Item(Icons.notifications_outlined, 'Notifications',
                       //     trailing: _comingSoonBadge()),

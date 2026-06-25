@@ -13,6 +13,7 @@ import '../../../core/utils/logger.dart';
 import '../../auth/presentation/providers/auth_provider.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../intake/domain/intake_models.dart';
 import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
 import '../data/session_repository.dart';
@@ -330,6 +331,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
   bool _historyCaptured = false; // Save session to history only once on start
+
+  /// Client/guest context for this session, set from the setup screen via
+  /// [setClientContext]. Threads into the `POST /intake` body (and AI report).
+  String? _clientId;
+  GuidedAssessmentData? _intake;
+
+  /// Set the client/guest + guided-assessment context for this session. Called
+  /// before [start] from the launcher; defaults keep behaviour unchanged
+  /// (guest, no intake) when not provided.
+  void setClientContext({String? clientId, GuidedAssessmentData? intake}) {
+    _clientId = clientId;
+    _intake = intake;
+  }
 
   /// True for a server-driven Protocol Plus run. While true, the engine must
   /// NOT auto-STOP a device or mark it "completed" when a single protocol's
@@ -1598,14 +1612,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _historyCaptured = true;
     try {
       final userId = _ref.read(authStateProvider).user?.id;
+      // clientType / clientId / intake come from the context set on the engine
+      // by the launcher (setClientContext) — guest when none was provided.
       final record = getSessionRecord(
         sessionId: sessionId,
-        clientType: 'guest',
         createdBy: userId,
         updatedBy: userId,
         discomfortBefore: 6,
         discomfortAfter: 2,
-        notes: 'Guest session started from mobile app',
+        notes: 'Session started from mobile app',
       );
       if (record == null) {
         _historyCaptured = false;
@@ -2186,7 +2201,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     int? discomfortBefore,
     int? discomfortAfter,
     String? notes,
-    String clientType = 'guest',
+    String? clientType,
+    String? clientId,
+    GuidedAssessmentData? intake,
     String? createdBy,
     String? updatedBy,
     DateTime? createdAt,
@@ -2202,6 +2219,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           durationSeconds: entry.value.totalDurationSeconds,
         ),
     };
+    // Resolve client/guest context: explicit args win, else the context set on
+    // the engine from the setup screen. clientType is derived from clientId.
+    final resolvedClientId = clientId ?? _clientId;
+    final resolvedIntake = intake ?? _intake;
+    final resolvedClientType =
+        clientType ?? (resolvedClientId != null ? 'client' : 'guest');
     return SessionRecord(
       id: sessionId ?? const Uuid().v4(),
       protocolId: state.protocol!.id,
@@ -2213,7 +2236,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       discomfortBefore: discomfortBefore,
       discomfortAfter: discomfortAfter,
       notes: notes,
-      clientType: clientType,
+      clientType: resolvedClientType,
+      clientId: resolvedClientId,
+      intake: resolvedIntake,
       createdBy: createdBy,
       updatedBy: updatedBy,
       createdAt: recordedAt,

@@ -1179,16 +1179,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final now = DateTime.now();
     final sessionEngine =
         ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    // clientType / clientId / intake come from the engine context set by the
+    // launcher (setClientContext) — guest when none was provided.
     final record = sessionEngine.getSessionRecord(
       sessionId: sessionId,
-      clientType: 'guest',
       createdBy: userId,
       updatedBy: userId,
       createdAt: now,
       updatedAt: now,
       discomfortBefore: 6,
       discomfortAfter: 2,
-      notes: 'Guest session started from mobile app',
+      notes: 'Session started from mobile app',
     );
 
     if (record == null) {

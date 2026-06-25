@@ -29,6 +29,9 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/screens/subscription_screen.dart';
 import '../../features/presets/presentation/screens/preset_management_screen.dart';
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
+import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
+import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
+import '../../features/clients/presentation/screens/clients_list_screen.dart';
 import '../constants/theme_constants.dart';
 import 'route_names.dart';
 import '../../features/auth/presentation/screens/select_organization_page.dart';
@@ -283,6 +286,32 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: RoutePaths.chat,
           name: RouteNames.chat,
           builder: (c, s) => const ChatScreen()),
+      GoRoute(
+        path: RoutePaths.aiReport,
+        name: RouteNames.aiReport,
+        builder: (c, s) {
+          final extra = s.extra;
+          final report = extra is Map<String, dynamic> ? extra : null;
+          return AiReportScreen(report: report);
+        },
+      ),
+      GoRoute(
+        path: RoutePaths.aiReports,
+        name: RouteNames.aiReports,
+        builder: (c, s) {
+          final extra = s.extra;
+          final m = extra is Map<String, dynamic> ? extra : const {};
+          return AiReportsListScreen(
+            clientId: m['clientId'] as String?,
+            title: m['title'] as String?,
+          );
+        },
+      ),
+      GoRoute(
+        path: RoutePaths.aiReportClients,
+        name: RouteNames.aiReportClients,
+        builder: (c, s) => const ClientsListScreen(),
+      ),
     ],
   );
 });

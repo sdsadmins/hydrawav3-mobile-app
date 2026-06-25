@@ -1139,6 +1139,26 @@ class $LocalSessionsTable extends LocalSessions
   late final GeneratedColumn<String> notes = GeneratedColumn<String>(
       'notes', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _clientTypeMeta =
+      const VerificationMeta('clientType');
+  @override
+  late final GeneratedColumn<String> clientType = GeneratedColumn<String>(
+      'client_type', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('guest'));
+  static const VerificationMeta _clientIdMeta =
+      const VerificationMeta('clientId');
+  @override
+  late final GeneratedColumn<String> clientId = GeneratedColumn<String>(
+      'client_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _intakeJsonMeta =
+      const VerificationMeta('intakeJson');
+  @override
+  late final GeneratedColumn<String> intakeJson = GeneratedColumn<String>(
+      'intake_json', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _syncedMeta = const VerificationMeta('synced');
   @override
   late final GeneratedColumn<bool> synced = GeneratedColumn<bool>(
@@ -1167,6 +1187,9 @@ class $LocalSessionsTable extends LocalSessions
         discomfortBefore,
         discomfortAfter,
         notes,
+        clientType,
+        clientId,
+        intakeJson,
         synced,
         completedAt
       ];
@@ -1239,6 +1262,22 @@ class $LocalSessionsTable extends LocalSessions
       context.handle(
           _notesMeta, notes.isAcceptableOrUnknown(data['notes']!, _notesMeta));
     }
+    if (data.containsKey('client_type')) {
+      context.handle(
+          _clientTypeMeta,
+          clientType.isAcceptableOrUnknown(
+              data['client_type']!, _clientTypeMeta));
+    }
+    if (data.containsKey('client_id')) {
+      context.handle(_clientIdMeta,
+          clientId.isAcceptableOrUnknown(data['client_id']!, _clientIdMeta));
+    }
+    if (data.containsKey('intake_json')) {
+      context.handle(
+          _intakeJsonMeta,
+          intakeJson.isAcceptableOrUnknown(
+              data['intake_json']!, _intakeJsonMeta));
+    }
     if (data.containsKey('synced')) {
       context.handle(_syncedMeta,
           synced.isAcceptableOrUnknown(data['synced']!, _syncedMeta));
@@ -1276,6 +1315,12 @@ class $LocalSessionsTable extends LocalSessions
           .read(DriftSqlType.int, data['${effectivePrefix}discomfort_after']),
       notes: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}notes']),
+      clientType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}client_type'])!,
+      clientId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}client_id']),
+      intakeJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}intake_json']),
       synced: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}synced'])!,
       completedAt: attachedDatabase.typeMapping
@@ -1299,6 +1344,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
   final int? discomfortBefore;
   final int? discomfortAfter;
   final String? notes;
+  final String clientType;
+  final String? clientId;
+  final String? intakeJson;
   final bool synced;
   final DateTime completedAt;
   const LocalSession(
@@ -1311,6 +1359,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
       this.discomfortBefore,
       this.discomfortAfter,
       this.notes,
+      required this.clientType,
+      this.clientId,
+      this.intakeJson,
       required this.synced,
       required this.completedAt});
   @override
@@ -1330,6 +1381,13 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
     }
     if (!nullToAbsent || notes != null) {
       map['notes'] = Variable<String>(notes);
+    }
+    map['client_type'] = Variable<String>(clientType);
+    if (!nullToAbsent || clientId != null) {
+      map['client_id'] = Variable<String>(clientId);
+    }
+    if (!nullToAbsent || intakeJson != null) {
+      map['intake_json'] = Variable<String>(intakeJson);
     }
     map['synced'] = Variable<bool>(synced);
     map['completed_at'] = Variable<DateTime>(completedAt);
@@ -1352,6 +1410,13 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
           : Value(discomfortAfter),
       notes:
           notes == null && nullToAbsent ? const Value.absent() : Value(notes),
+      clientType: Value(clientType),
+      clientId: clientId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(clientId),
+      intakeJson: intakeJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(intakeJson),
       synced: Value(synced),
       completedAt: Value(completedAt),
     );
@@ -1370,6 +1435,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
       discomfortBefore: serializer.fromJson<int?>(json['discomfortBefore']),
       discomfortAfter: serializer.fromJson<int?>(json['discomfortAfter']),
       notes: serializer.fromJson<String?>(json['notes']),
+      clientType: serializer.fromJson<String>(json['clientType']),
+      clientId: serializer.fromJson<String?>(json['clientId']),
+      intakeJson: serializer.fromJson<String?>(json['intakeJson']),
       synced: serializer.fromJson<bool>(json['synced']),
       completedAt: serializer.fromJson<DateTime>(json['completedAt']),
     );
@@ -1387,6 +1455,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
       'discomfortBefore': serializer.toJson<int?>(discomfortBefore),
       'discomfortAfter': serializer.toJson<int?>(discomfortAfter),
       'notes': serializer.toJson<String?>(notes),
+      'clientType': serializer.toJson<String>(clientType),
+      'clientId': serializer.toJson<String?>(clientId),
+      'intakeJson': serializer.toJson<String?>(intakeJson),
       'synced': serializer.toJson<bool>(synced),
       'completedAt': serializer.toJson<DateTime>(completedAt),
     };
@@ -1402,6 +1473,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
           Value<int?> discomfortBefore = const Value.absent(),
           Value<int?> discomfortAfter = const Value.absent(),
           Value<String?> notes = const Value.absent(),
+          String? clientType,
+          Value<String?> clientId = const Value.absent(),
+          Value<String?> intakeJson = const Value.absent(),
           bool? synced,
           DateTime? completedAt}) =>
       LocalSession(
@@ -1418,6 +1492,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
             ? discomfortAfter.value
             : this.discomfortAfter,
         notes: notes.present ? notes.value : this.notes,
+        clientType: clientType ?? this.clientType,
+        clientId: clientId.present ? clientId.value : this.clientId,
+        intakeJson: intakeJson.present ? intakeJson.value : this.intakeJson,
         synced: synced ?? this.synced,
         completedAt: completedAt ?? this.completedAt,
       );
@@ -1443,6 +1520,11 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
           ? data.discomfortAfter.value
           : this.discomfortAfter,
       notes: data.notes.present ? data.notes.value : this.notes,
+      clientType:
+          data.clientType.present ? data.clientType.value : this.clientType,
+      clientId: data.clientId.present ? data.clientId.value : this.clientId,
+      intakeJson:
+          data.intakeJson.present ? data.intakeJson.value : this.intakeJson,
       synced: data.synced.present ? data.synced.value : this.synced,
       completedAt:
           data.completedAt.present ? data.completedAt.value : this.completedAt,
@@ -1461,6 +1543,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
           ..write('discomfortBefore: $discomfortBefore, ')
           ..write('discomfortAfter: $discomfortAfter, ')
           ..write('notes: $notes, ')
+          ..write('clientType: $clientType, ')
+          ..write('clientId: $clientId, ')
+          ..write('intakeJson: $intakeJson, ')
           ..write('synced: $synced, ')
           ..write('completedAt: $completedAt')
           ..write(')'))
@@ -1478,6 +1563,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
       discomfortBefore,
       discomfortAfter,
       notes,
+      clientType,
+      clientId,
+      intakeJson,
       synced,
       completedAt);
   @override
@@ -1493,6 +1581,9 @@ class LocalSession extends DataClass implements Insertable<LocalSession> {
           other.discomfortBefore == this.discomfortBefore &&
           other.discomfortAfter == this.discomfortAfter &&
           other.notes == this.notes &&
+          other.clientType == this.clientType &&
+          other.clientId == this.clientId &&
+          other.intakeJson == this.intakeJson &&
           other.synced == this.synced &&
           other.completedAt == this.completedAt);
 }
@@ -1507,6 +1598,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
   final Value<int?> discomfortBefore;
   final Value<int?> discomfortAfter;
   final Value<String?> notes;
+  final Value<String> clientType;
+  final Value<String?> clientId;
+  final Value<String?> intakeJson;
   final Value<bool> synced;
   final Value<DateTime> completedAt;
   final Value<int> rowid;
@@ -1520,6 +1614,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
     this.discomfortBefore = const Value.absent(),
     this.discomfortAfter = const Value.absent(),
     this.notes = const Value.absent(),
+    this.clientType = const Value.absent(),
+    this.clientId = const Value.absent(),
+    this.intakeJson = const Value.absent(),
     this.synced = const Value.absent(),
     this.completedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1534,6 +1631,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
     this.discomfortBefore = const Value.absent(),
     this.discomfortAfter = const Value.absent(),
     this.notes = const Value.absent(),
+    this.clientType = const Value.absent(),
+    this.clientId = const Value.absent(),
+    this.intakeJson = const Value.absent(),
     this.synced = const Value.absent(),
     this.completedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1553,6 +1653,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
     Expression<int>? discomfortBefore,
     Expression<int>? discomfortAfter,
     Expression<String>? notes,
+    Expression<String>? clientType,
+    Expression<String>? clientId,
+    Expression<String>? intakeJson,
     Expression<bool>? synced,
     Expression<DateTime>? completedAt,
     Expression<int>? rowid,
@@ -1567,6 +1670,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
       if (discomfortBefore != null) 'discomfort_before': discomfortBefore,
       if (discomfortAfter != null) 'discomfort_after': discomfortAfter,
       if (notes != null) 'notes': notes,
+      if (clientType != null) 'client_type': clientType,
+      if (clientId != null) 'client_id': clientId,
+      if (intakeJson != null) 'intake_json': intakeJson,
       if (synced != null) 'synced': synced,
       if (completedAt != null) 'completed_at': completedAt,
       if (rowid != null) 'rowid': rowid,
@@ -1583,6 +1689,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
       Value<int?>? discomfortBefore,
       Value<int?>? discomfortAfter,
       Value<String?>? notes,
+      Value<String>? clientType,
+      Value<String?>? clientId,
+      Value<String?>? intakeJson,
       Value<bool>? synced,
       Value<DateTime>? completedAt,
       Value<int>? rowid}) {
@@ -1596,6 +1705,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
       discomfortBefore: discomfortBefore ?? this.discomfortBefore,
       discomfortAfter: discomfortAfter ?? this.discomfortAfter,
       notes: notes ?? this.notes,
+      clientType: clientType ?? this.clientType,
+      clientId: clientId ?? this.clientId,
+      intakeJson: intakeJson ?? this.intakeJson,
       synced: synced ?? this.synced,
       completedAt: completedAt ?? this.completedAt,
       rowid: rowid ?? this.rowid,
@@ -1632,6 +1744,15 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
     if (notes.present) {
       map['notes'] = Variable<String>(notes.value);
     }
+    if (clientType.present) {
+      map['client_type'] = Variable<String>(clientType.value);
+    }
+    if (clientId.present) {
+      map['client_id'] = Variable<String>(clientId.value);
+    }
+    if (intakeJson.present) {
+      map['intake_json'] = Variable<String>(intakeJson.value);
+    }
     if (synced.present) {
       map['synced'] = Variable<bool>(synced.value);
     }
@@ -1656,6 +1777,9 @@ class LocalSessionsCompanion extends UpdateCompanion<LocalSession> {
           ..write('discomfortBefore: $discomfortBefore, ')
           ..write('discomfortAfter: $discomfortAfter, ')
           ..write('notes: $notes, ')
+          ..write('clientType: $clientType, ')
+          ..write('clientId: $clientId, ')
+          ..write('intakeJson: $intakeJson, ')
           ..write('synced: $synced, ')
           ..write('completedAt: $completedAt, ')
           ..write('rowid: $rowid')
@@ -2950,6 +3074,9 @@ typedef $$LocalSessionsTableCreateCompanionBuilder = LocalSessionsCompanion
   Value<int?> discomfortBefore,
   Value<int?> discomfortAfter,
   Value<String?> notes,
+  Value<String> clientType,
+  Value<String?> clientId,
+  Value<String?> intakeJson,
   Value<bool> synced,
   Value<DateTime> completedAt,
   Value<int> rowid,
@@ -2965,6 +3092,9 @@ typedef $$LocalSessionsTableUpdateCompanionBuilder = LocalSessionsCompanion
   Value<int?> discomfortBefore,
   Value<int?> discomfortAfter,
   Value<String?> notes,
+  Value<String> clientType,
+  Value<String?> clientId,
+  Value<String?> intakeJson,
   Value<bool> synced,
   Value<DateTime> completedAt,
   Value<int> rowid,
@@ -3009,6 +3139,15 @@ class $$LocalSessionsTableFilterComposer
 
   ColumnFilters<String> get notes => $composableBuilder(
       column: $table.notes, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get clientType => $composableBuilder(
+      column: $table.clientType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get clientId => $composableBuilder(
+      column: $table.clientId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get intakeJson => $composableBuilder(
+      column: $table.intakeJson, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<bool> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnFilters(column));
@@ -3058,6 +3197,15 @@ class $$LocalSessionsTableOrderingComposer
   ColumnOrderings<String> get notes => $composableBuilder(
       column: $table.notes, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get clientType => $composableBuilder(
+      column: $table.clientType, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get clientId => $composableBuilder(
+      column: $table.clientId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get intakeJson => $composableBuilder(
+      column: $table.intakeJson, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<bool> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnOrderings(column));
 
@@ -3101,6 +3249,15 @@ class $$LocalSessionsTableAnnotationComposer
   GeneratedColumn<String> get notes =>
       $composableBuilder(column: $table.notes, builder: (column) => column);
 
+  GeneratedColumn<String> get clientType => $composableBuilder(
+      column: $table.clientType, builder: (column) => column);
+
+  GeneratedColumn<String> get clientId =>
+      $composableBuilder(column: $table.clientId, builder: (column) => column);
+
+  GeneratedColumn<String> get intakeJson => $composableBuilder(
+      column: $table.intakeJson, builder: (column) => column);
+
   GeneratedColumn<bool> get synced =>
       $composableBuilder(column: $table.synced, builder: (column) => column);
 
@@ -3143,6 +3300,9 @@ class $$LocalSessionsTableTableManager extends RootTableManager<
             Value<int?> discomfortBefore = const Value.absent(),
             Value<int?> discomfortAfter = const Value.absent(),
             Value<String?> notes = const Value.absent(),
+            Value<String> clientType = const Value.absent(),
+            Value<String?> clientId = const Value.absent(),
+            Value<String?> intakeJson = const Value.absent(),
             Value<bool> synced = const Value.absent(),
             Value<DateTime> completedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -3157,6 +3317,9 @@ class $$LocalSessionsTableTableManager extends RootTableManager<
             discomfortBefore: discomfortBefore,
             discomfortAfter: discomfortAfter,
             notes: notes,
+            clientType: clientType,
+            clientId: clientId,
+            intakeJson: intakeJson,
             synced: synced,
             completedAt: completedAt,
             rowid: rowid,
@@ -3171,6 +3334,9 @@ class $$LocalSessionsTableTableManager extends RootTableManager<
             Value<int?> discomfortBefore = const Value.absent(),
             Value<int?> discomfortAfter = const Value.absent(),
             Value<String?> notes = const Value.absent(),
+            Value<String> clientType = const Value.absent(),
+            Value<String?> clientId = const Value.absent(),
+            Value<String?> intakeJson = const Value.absent(),
             Value<bool> synced = const Value.absent(),
             Value<DateTime> completedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -3185,6 +3351,9 @@ class $$LocalSessionsTableTableManager extends RootTableManager<
             discomfortBefore: discomfortBefore,
             discomfortAfter: discomfortAfter,
             notes: notes,
+            clientType: clientType,
+            clientId: clientId,
+            intakeJson: intakeJson,
             synced: synced,
             completedAt: completedAt,
             rowid: rowid,

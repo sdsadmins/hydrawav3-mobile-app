@@ -49,6 +49,13 @@ class LocalSessions extends Table {
   IntColumn get discomfortBefore => integer().nullable()();
   IntColumn get discomfortAfter => integer().nullable()();
   TextColumn get notes => text().nullable()();
+  // Client/guest context (parity with web sync). 'guest' | 'client'.
+  TextColumn get clientType =>
+      text().withDefault(const Constant('guest'))();
+  TextColumn get clientId => text().nullable()();
+  // JSON-encoded GuidedAssessmentData so offline sessions re-sync the full
+  // intake (ROM / activities / posture / areas), not just protocols.
+  TextColumn get intakeJson => text().nullable()();
   BoolColumn get synced => boolean().withDefault(const Constant(false))();
   DateTimeColumn get completedAt =>
       dateTime().withDefault(currentDateAndTime)();
@@ -93,7 +100,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'hydrawav3'));
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -103,6 +110,11 @@ class AppDatabase extends _$AppDatabase {
         onUpgrade: (m, from, to) async {
           if (from < 2) {
             await m.addColumn(cachedProtocols, cachedProtocols.deviceId);
+          }
+          if (from < 3) {
+            await m.addColumn(localSessions, localSessions.clientType);
+            await m.addColumn(localSessions, localSessions.clientId);
+            await m.addColumn(localSessions, localSessions.intakeJson);
           }
         },
       );

@@ -24,6 +24,12 @@ import '../../../devices/domain/device_model.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../clients/presentation/widgets/client_selection_section.dart';
+import '../../../intake/presentation/providers/guided_assessment_provider.dart';
+import '../../../intake/presentation/widgets/guided_assessment_panel.dart';
+import '../../../intake/presentation/widgets/session_type_cards.dart';
+import '../../../ai_report/presentation/widgets/ai_report_status_banner.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/domain/active_session_model.dart' as live;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
@@ -980,6 +986,22 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required List<String> runIds,
     required SessionTransport transport,
   }) async {
+    // In Client mode a client must be selected so the intake syncs with a
+    // clientId (the backend requires it when clientType != 'guest').
+    final clientMode = ref.read(sessionClientModeProvider);
+    final selectedClient = ref.read(selectedClientProvider);
+    if (clientMode == ClientMode.client && selectedClient == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Select a client or switch to Guest before starting.',
+          ),
+          backgroundColor: ThemeConstants.error,
+        ),
+      );
+      return;
+    }
+
     final busyDevices =
         ref.read(activeSessionsProvider.notifier).getBusyDevices();
     final conflictingDevices =
@@ -1052,12 +1074,20 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
           ),
       ];
 
+      // Thread Client/Guest + Guided Assessment so the synced intake carries
+      // clientId + the real guided fields (web parity).
+      final sessionType = ref.read(sessionTypeProvider);
+      final intake = sessionType == SessionType.guided
+          ? ref.read(guidedAssessmentProvider)
+          : null;
       await launchSession(
         ref,
         context,
         selections: selections,
         transport: transport == SessionTransport.wifi ? 'wifi' : 'ble',
         delayedDeviceId: effectiveDelayedDeviceId,
+        clientId: clientMode == ClientMode.client ? selectedClient?.id : null,
+        intake: intake,
       );
     } catch (e) {
       if (mounted) {
@@ -1070,6 +1100,21 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         setState(() => _starting = false);
       }
     }
+  }
+
+  /// Client/Guest selector + Guided Assessment vs Quick Start + the guided
+  /// wizard (shown only in Guided mode). Rendered above the Start button so the
+  /// practitioner chooses the client and fills the intake before starting.
+  Widget _buildClientGuestSection() {
+    final isGuided = ref.watch(sessionTypeProvider) == SessionType.guided;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const ClientSelectionSection(),
+        const SessionTypeCards(),
+        if (isGuided) const GuidedAssessmentPanel(),
+      ],
+    );
   }
 
   Widget _buildStartSessionButton({
@@ -1268,16 +1313,28 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final deviceLimitReached = deviceLimit != null &&
         deviceLimit > 0 &&
         (inUseDeviceIds.length + newlySelectedCount) >= deviceLimit;
+    // In Guided Assessment mode, Start stays disabled until the required intake
+    // fields are filled (same set the AI report needs).
+    final isGuided = ref.watch(sessionTypeProvider) == SessionType.guided;
+    final guidedReady =
+        !isGuided || ref.watch(guidedAssessmentProvider).canGenerateReport;
     final canStart = runIds.isNotEmpty &&
         runIds.every((id) =>
             _protocolIdByDeviceId.containsKey(id) &&
-            _settingsByDeviceId.containsKey(id));
+            _settingsByDeviceId.containsKey(id)) &&
+        guidedReady;
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      body: CustomScrollView(
-        physics: const ClampingScrollPhysics(),
-        slivers: [
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            const AiReportStatusBanner(),
+            Expanded(
+              child: CustomScrollView(
+                physics: const ClampingScrollPhysics(),
+                slivers: [
           SliverToBoxAdapter(
             child: SafeArea(
               bottom: false,
@@ -1622,10 +1679,16 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 sliver: SliverToBoxAdapter(
-                  child: _buildStartSessionButton(
-                    runIds: runIds,
-                    transport: target.transport,
-                    canStart: canStart,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildClientGuestSection(),
+                      _buildStartSessionButton(
+                        runIds: runIds,
+                        transport: target.transport,
+                        canStart: canStart,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1803,6 +1866,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                       }),
                       const SizedBox(height: 16),
                       if (connectedDevices.isNotEmpty) ...[
+                        _buildClientGuestSection(),
                         _buildStartSessionButton(
                           runIds: runIds,
                           transport: target.transport,
@@ -2027,6 +2091,10 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             ),
           ),
         ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
