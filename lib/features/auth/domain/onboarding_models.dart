@@ -1,12 +1,16 @@
 // Models for the native practitioner onboarding ("Create account") flow.
-// Mirrors the web's 4-step form and its exact submit payload.
+// Mirrors the web's 4-step form AND its exact 4-call submit sequence:
+//   1) POST  {node}/practitioners/onboarding   — create account (no auth) → userId + token
+//   2) POST  {primary}/admin/organizations     — create org (raw token)   → orgId
+//   3) POST  {primary-api}/certificates/upload — per cert with a file (raw token, optional)
+//   4) PUT   {primary}/admin/user/accounts/{userId} — link org via addOrganisations (raw token)
+// See onboarding_remote_source.dart for the calls and onboarding_provider.submit().
 
 /// Step 1 — practitioner personal details.
 ///
-/// NOTE: [username] and [password] are collected for parity with the web form
-/// but are intentionally NOT sent in the submit payload — the onboarding
-/// endpoint creates a practitioner *application* and does not provision login
-/// credentials here. Do not "fix" this by adding them to [buildDataJson].
+/// NOTE: [username] and [password] ARE sent on the create call (web parity — the
+/// onboarding endpoint provisions the account + returns the token used to
+/// authorize the org-create and account-link calls).
 class PractitionerForm {
   final String firstName;
   final String lastName;
@@ -20,6 +24,7 @@ class PractitionerForm {
   final String state;
   final String zip;
   final String country;
+  final String dateOfBirth; // yyyy-MM-dd
 
   const PractitionerForm({
     this.firstName = '',
@@ -34,6 +39,7 @@ class PractitionerForm {
     this.state = '',
     this.zip = '',
     this.country = '',
+    this.dateOfBirth = '',
   });
 
   String get fullName => '$firstName $lastName'.trim();
@@ -51,6 +57,7 @@ class PractitionerForm {
     String? state,
     String? zip,
     String? country,
+    String? dateOfBirth,
   }) {
     return PractitionerForm(
       firstName: firstName ?? this.firstName,
@@ -65,6 +72,7 @@ class PractitionerForm {
       state: state ?? this.state,
       zip: zip ?? this.zip,
       country: country ?? this.country,
+      dateOfBirth: dateOfBirth ?? this.dateOfBirth,
     );
   }
 }
@@ -113,38 +121,69 @@ const List<String> businessAgeOptions = <String>[
   '5+ Years',
 ];
 
-/// Build the exact `data` JSON object the onboarding endpoint expects. Uses the
-/// first business as the primary clinic and reuses the practitioner's city /
-/// country for the clinic (matches the web).
-Map<String, dynamic> buildOnboardingDataJson({
-  required PractitionerForm form,
-  required OnboardingBusiness primaryBusiness,
-  required List<OnboardingCertification> certifications,
-}) {
+/// Call 1 — body for `POST {node}/practitioners/onboarding` (create account).
+/// Exact web shape (web `createPractitioner`): username + password + dateOfBirth
+/// are sent; `licenses` is empty at create (cert files are uploaded separately in
+/// call 3). No `groupIds` / `clinic*` fields — the org is created in call 2.
+Map<String, dynamic> buildCreatePractitionerJson(PractitionerForm form) {
   return {
     'fullName': form.fullName,
     'email': form.email,
+    'password': form.password,
     'practitionerType': form.title,
     'address': form.address,
     'city': form.city,
     'country': form.country,
+    'userName': form.username,
     'phone': form.phone,
-    'clinicName': primaryBusiness.name,
-    'clinicAge': primaryBusiness.businessAge,
-    'clinicAddress': primaryBusiness.address,
-    'clinicCity': form.city,
-    'clinicCountry': form.country,
-    'businessPhone': primaryBusiness.contactNumber,
-    'website': '',
-    'groupIds': [278],
-    'licenses': certifications
-        .map((c) => {
-              'licenseType': c.name,
-              'licenseNumber': '',
-              'expirationDate': c.expirationDate,
-              'stateIssued': c.issuingOrganization,
-            })
-        .toList(),
+    'state': form.state,
+    'zip': form.zip,
+    'dateOfBirth': form.dateOfBirth,
+    'licenses': const <Map<String, dynamic>>[],
     'euaAccepted': true,
+  };
+}
+
+/// Call 2 — body for `POST {primary}/admin/organizations` (create the business).
+/// Web `createOrganization` shape: `{ name, mail, address, age, phone }`.
+Map<String, dynamic> buildOrganizationJson(OnboardingBusiness primaryBusiness) {
+  return {
+    'name': primaryBusiness.name,
+    'mail': primaryBusiness.email,
+    'address': primaryBusiness.address,
+    'age': primaryBusiness.businessAge,
+    'phone': primaryBusiness.contactNumber,
+  };
+}
+
+/// Call 4 — body for `PUT {primary}/admin/user/accounts/{userId}` (link the org
+/// to the practitioner). Web `updateUserAccount` shape; [orgId] goes into
+/// `addOrganisations` so the new account is attached to its organization.
+Map<String, dynamic> buildAccountUpdateJson(
+  PractitionerForm form,
+  Object orgId,
+) {
+  return {
+    'firstName': form.firstName,
+    'lastName': form.lastName,
+    'userName': form.username,
+    'mail': form.email,
+    'phone': form.phone,
+    'dateOfBirth': form.dateOfBirth,
+    'gender': 'unknown',
+    'nationality': 'unknown',
+    'maritalStatus': 'unknown',
+    'title': form.title,
+    'address': form.address,
+    'address2': 'unknown',
+    'city': form.city,
+    'state': form.state,
+    'zip': form.zip,
+    'country': form.country,
+    'isEnabled': true,
+    'isAccountNonLocked': true,
+    'expirationDateAccount': null,
+    'addOrganisations': [orgId],
+    'removeOrganisations': const <Object>[],
   };
 }

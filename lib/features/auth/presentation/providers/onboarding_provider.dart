@@ -103,6 +103,7 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     req('state', f.state);
     req('zip', f.zip);
     req('country', f.country);
+    req('dateOfBirth', f.dateOfBirth);
 
     if (f.password.isEmpty) {
       errors['password'] = 'Required';
@@ -201,18 +202,36 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     state = state.copyWith(isSubmitting: true, error: null);
     try {
       final remote = _ref.read(onboardingRemoteSourceProvider);
-      final adminToken = await remote.fetchAdminToken();
-      final data = buildOnboardingDataJson(
-        form: state.form,
-        primaryBusiness: state.businesses.first,
-        certifications: state.certifications,
+      final form = state.form;
+
+      // 1) Create the practitioner account → userId + token (authorizes 2–4).
+      final created =
+          await remote.createPractitioner(buildCreatePractitionerJson(form));
+
+      // 2) Create the business / organization from the first business.
+      final orgId = await remote.createOrganization(
+        buildOrganizationJson(state.businesses.first),
+        created.token,
       );
-      await remote.submitOnboarding(
-        data: data,
-        adminToken: adminToken,
-        businessLogoPath: state.businessLogoPath,
-        certifications: state.certifications,
+
+      // 3) Upload certificate documents (optional, best-effort — web parity).
+      for (final cert in state.certifications) {
+        await remote.uploadCertificate(
+          userId: created.userId,
+          cert: cert,
+          token: created.token,
+        );
+      }
+
+      // 4) Link the organization to the practitioner account. The web sends
+      // `addOrganisations: [Number(orgId)]`, so pass a numeric id when possible.
+      final Object orgIdValue = int.tryParse(orgId) ?? orgId;
+      await remote.updateUserAccount(
+        created.userId,
+        buildAccountUpdateJson(form, orgIdValue),
+        created.token,
       );
+
       state = state.copyWith(isSubmitting: false, submitted: true);
     } on ServerException catch (e) {
       state = state.copyWith(isSubmitting: false, error: e.message);

@@ -42,6 +42,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _state = TextEditingController();
   final _zip = TextEditingController();
   final _country = TextEditingController();
+  String? _dob; // yyyy-MM-dd (date of birth)
   bool _obscurePassword = true;
 
   // Step 2 — certification draft.
@@ -83,6 +84,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         state: _state.text.trim(),
         zip: _zip.text.trim(),
         country: _country.text.trim(),
+        dateOfBirth: _dob ?? '',
       );
 
   void _onPrimary() {
@@ -422,6 +424,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: _field(_country, 'Country',
                   req: true, hint: 'USA', err: s.step1Errors['country'])),
         ]),
+        _dateField('Date of Birth', _dob,
+            (v) => setState(() => _dob = v), req: true),
+        if (s.step1Errors['dateOfBirth'] != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(s.step1Errors['dateOfBirth']!,
+                style: TextStyle(fontSize: 12, color: ThemeConstants.error)),
+          ),
       ],
     );
   }
@@ -812,11 +822,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _dateField(String label, String? value, ValueChanged<String> onPicked) {
+  Widget _dateField(String label, String? value, ValueChanged<String> onPicked,
+      {bool req = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(label, false),
+        _label(label, req),
         const SizedBox(height: 6),
         InkWell(
           borderRadius: BorderRadius.circular(12),
@@ -1023,9 +1034,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Future<void> _launch(String url) async {
+    // Open INSIDE the app (SFSafariViewController on iOS / Custom Tab on
+    // Android), not the external/default browser — App Store Guideline 4.
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
     }
   }
 }
@@ -1123,8 +1136,9 @@ class _OnboardingLogo extends StatelessWidget {
   }
 }
 
-/// Shown after a successful submit — no auto-login (the endpoint returns no
-/// user session), so we route back to sign in.
+/// Shown after a successful submit. The web-parity flow creates the account +
+/// organization and links them; we don't auto-login here, so the practitioner
+/// signs in with the username/password they just set.
 class _SuccessView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -1149,7 +1163,7 @@ class _SuccessView extends StatelessWidget {
                     size: 40, color: ThemeConstants.success),
               ),
               const SizedBox(height: 22),
-              Text('Application submitted',
+              Text('Account created',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontSize: 20,
@@ -1157,8 +1171,8 @@ class _SuccessView extends StatelessWidget {
                       color: ThemeConstants.textPrimary)),
               const SizedBox(height: 8),
               Text(
-                'Thanks! We\'ll review your details and set up your account. '
-                'You\'ll be able to sign in once it\'s approved.',
+                'Your account and business are set up. '
+                'Sign in with your username and password to get started.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 14,
@@ -1167,7 +1181,7 @@ class _SuccessView extends StatelessWidget {
               ),
               const SizedBox(height: 28),
               HwButton(
-                label: 'Back to sign in',
+                label: 'Sign in',
                 width: double.infinity,
                 onPressed: () => context.go(RoutePaths.login),
               ),

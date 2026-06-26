@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/network/dio_client.dart';
+import '../../../payments/data/payment_repository.dart';
 import '../providers/auth_provider.dart';
 
 final organizationProvider =
@@ -138,6 +139,14 @@ class _SelectOrganizationPageState
                                           org['name'] ??
                                               'Organization', // ✅ PASS NAME
                                         );
+
+                                    // Provision the org's free plan + starter
+                                    // tokens (web parity) so the token balance
+                                    // shows for first-time / newly onboarded
+                                    // accounts. Best-effort — never blocks nav.
+                                    await ref
+                                        .read(paymentRepositoryProvider)
+                                        .ensureFreePlan(orgId);
 
                                     if (mounted) {
                                       context.go(RoutePaths.protocols);

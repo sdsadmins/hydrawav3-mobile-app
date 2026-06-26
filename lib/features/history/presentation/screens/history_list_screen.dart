@@ -465,7 +465,12 @@ class _ActiveSessionCard extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      session.protocolName,
+                      // Protocol Plus run: show the sequence/template name
+                      // (e.g. "1. Deep-Tension Recovery"), not the current
+                      // sub-protocol. Falls back to the protocol name otherwise.
+                      session.protocolPlusName.isNotEmpty
+                          ? session.protocolPlusName
+                          : session.protocolName,
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
