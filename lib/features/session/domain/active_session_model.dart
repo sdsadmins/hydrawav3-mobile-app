@@ -27,6 +27,17 @@ class ActiveSession {
   /// those are foreign and may be read-only (BLE) or remote-controllable (WiFi).
   final bool isOwn;
 
+  /// Protocol Plus info taken straight from the backend feed
+  /// (`protocolPlusIsActive` + the `protocolPlus` object). Lets ANY client show
+  /// the sequence tracker for a Plus run — even one it didn't launch — instead
+  /// of relying solely on the in-memory engine (web parity). [protocolPlusActive]
+  /// is the backend flag, [protocolPlusName] the template name, [protocolPlusSequence]
+  /// the ordered sub-protocol names, [protocolPlusDelaySeconds] the break delay.
+  final bool protocolPlusActive;
+  final String protocolPlusName;
+  final List<String> protocolPlusSequence;
+  final int protocolPlusDelaySeconds;
+
   const ActiveSession({
     required this.id,
     required this.protocolId,
@@ -42,6 +53,10 @@ class ActiveSession {
     this.protocolPlusBindings = const [],
     this.liveDevices = const [],
     this.isOwn = true,
+    this.protocolPlusActive = false,
+    this.protocolPlusName = '',
+    this.protocolPlusSequence = const [],
+    this.protocolPlusDelaySeconds = 0,
   });
 
   ActiveSession copyWith({
@@ -59,6 +74,10 @@ class ActiveSession {
     List<Map<String, String>>? protocolPlusBindings,
     List<LiveDeviceState>? liveDevices,
     bool? isOwn,
+    bool? protocolPlusActive,
+    String? protocolPlusName,
+    List<String>? protocolPlusSequence,
+    int? protocolPlusDelaySeconds,
   }) {
     return ActiveSession(
       id: id ?? this.id,
@@ -75,6 +94,11 @@ class ActiveSession {
       protocolPlusBindings: protocolPlusBindings ?? this.protocolPlusBindings,
       liveDevices: liveDevices ?? this.liveDevices,
       isOwn: isOwn ?? this.isOwn,
+      protocolPlusActive: protocolPlusActive ?? this.protocolPlusActive,
+      protocolPlusName: protocolPlusName ?? this.protocolPlusName,
+      protocolPlusSequence: protocolPlusSequence ?? this.protocolPlusSequence,
+      protocolPlusDelaySeconds:
+          protocolPlusDelaySeconds ?? this.protocolPlusDelaySeconds,
     );
   }
 
@@ -142,6 +166,10 @@ class ActiveSession {
         protocolPlusBindings,
         liveDevices,
         isOwn,
+        protocolPlusActive,
+        protocolPlusName,
+        protocolPlusSequence,
+        protocolPlusDelaySeconds,
       ];
 }
 

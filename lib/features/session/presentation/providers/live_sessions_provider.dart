@@ -305,6 +305,23 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         ? (liveDevices.first.protocol ?? 'Protocol')
         : (json['clientName']?.toString() ?? 'Session');
 
+    // Protocol Plus: the backend marks a stacked-sequence run with
+    // `protocolPlusIsActive` + a `protocolPlus` object carrying the ordered
+    // sub-protocol names and the inter-protocol delay. Parse it so any client
+    // can render the sequence tracker for a Plus run (web parity), not only the
+    // one that launched it.
+    final pp = json['protocolPlus'];
+    final ppActive = json['protocolPlusIsActive'] == true;
+    final ppName =
+        (pp is Map ? pp['template_name']?.toString() : null)?.trim() ?? '';
+    final ppSequence = (pp is Map && pp['protocolName'] is List)
+        ? (pp['protocolName'] as List)
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList()
+        : <String>[];
+    final ppDelay = (pp is Map ? (pp['delay'] as num?)?.toInt() : null) ?? 0;
+
     return ActiveSession(
       id: sessionId,
       protocolId: '',
@@ -317,6 +334,10 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       deviceNames: deviceNames,
       liveDevices: liveDevices,
       isOwn: _ownedSessionIds.contains(sessionId),
+      protocolPlusActive: ppActive,
+      protocolPlusName: ppName,
+      protocolPlusSequence: ppSequence,
+      protocolPlusDelaySeconds: ppDelay,
     );
   }
 

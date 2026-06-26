@@ -93,6 +93,10 @@ class DeviceTelemetry {
     // version (parses numeric), medium, run state, user mode, and the p1/p2 pad
     // objects (surfaced via sun/moon instead).
     'fw', 'm', 'rs', 'lm', 'p1', 'p2', 'pe', 'pw', 'l', 'v',
+    // Hidden readout chips (per product): temperature (tp), current (c),
+    // voltage (av), and the unidentified td/tl — excluded so they don't render
+    // on the device card.
+    'tp', 'c', 'av', 'td', 'tl',
   };
 
   /// Numeric "extra" readings (temperature/voltage/current/cycle progress/…)

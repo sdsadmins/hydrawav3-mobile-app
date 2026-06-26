@@ -188,6 +188,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// 1s poll, which would fight a local pause during the backend round-trip.
   active_session.SessionStatus? _lastRemoteStatus;
 
+  /// When the LOCAL user last drove a session pause/resume. During the backend
+  /// round-trip the live feed flaps (per-device `dev.status` and session-level
+  /// status disagree, and the device can briefly drop from a frame), so the
+  /// reconciled `remote` oscillates between the old and new value. Without this
+  /// guard each flap is treated as a fresh remote command and reverses the
+  /// user's own button — pause, resume, pause… for a few seconds until the
+  /// backend settles. While this window is open we ignore any backend status
+  /// that contradicts the local engine; genuine remote actions still apply once
+  /// the backend agrees with us or the window elapses.
+  DateTime? _localLifecycleActionAt;
+
+  /// How long a local pause/resume "wins" over a contradicting backend echo.
+  static const Duration _localLifecycleSettleWindow = Duration(seconds: 6);
+
   /// Last reconcile log signature, to log transitions without per-second spam.
   String? _lastReconcileSig;
 
@@ -627,9 +641,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (backendId == null || backendId.isEmpty || prevS == nextS) return;
     final sync = ref.read(sessionSyncServiceProvider);
     if (prevS == SessionStatus.running && nextS == SessionStatus.paused) {
+      // Local pause/resume wins over its own in-flight backend echo (see
+      // [_localLifecycleActionAt]); stamp it so the reconciler doesn't flap.
+      _localLifecycleActionAt = DateTime.now();
       unawaited(sync.pauseServerSession(backendId));
     } else if (prevS == SessionStatus.paused &&
         nextS == SessionStatus.running) {
+      _localLifecycleActionAt = DateTime.now();
       unawaited(sync.resumeServerSession(backendId));
     }
   }
@@ -688,6 +706,30 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // local pause isn't undone by the poll still reporting the old status during
     // the backend round-trip. applyRemoteLifecycle is a no-op if already there.
     if (_lastRemoteStatus == remote) return;
+
+    // Local action wins during its settle window: while a just-issued local
+    // pause/resume is still propagating, the feed flaps between the old and new
+    // status (per-device vs session-level disagree). Ignore any backend value
+    // that contradicts the local engine — and crucially do NOT advance
+    // _lastRemoteStatus, so the matching value keeps short-circuiting above and
+    // the contradicting value never edge-triggers an engine action. Genuine
+    // remote changes still apply once the window elapses.
+    final localAction = _localLifecycleActionAt;
+    final localActive = localStatus == SessionStatus.running ||
+        localStatus == SessionStatus.paused;
+    if (localAction != null && localActive) {
+      if (DateTime.now().difference(localAction) < _localLifecycleSettleWindow) {
+        if (remote != _toActiveStatus(localStatus)) {
+          appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote '
+              'while local=$localStatus settles');
+          return;
+        }
+      } else {
+        // Window elapsed — drop the guard so later remote changes are honoured.
+        _localLifecycleActionAt = null;
+      }
+    }
+
     _lastRemoteStatus = remote;
     if (remote == active_session.SessionStatus.paused &&
         localStatus == SessionStatus.running) {
@@ -1102,6 +1144,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     for (final s in sessions) {
       for (final d in s.liveDevices) {
         if (candidates.contains(_normalizeMac(d.deviceId))) return d;
+      }
+    }
+    return null;
+  }
+
+  /// The backend session containing [localId] that the feed flagged as a
+  /// Protocol Plus run (has a parsed sub-protocol sequence). Used to render the
+  /// sequence tracker from the feed when the local engine has no Plus state
+  /// (web parity — any client shows a Plus run as Plus, not just the launcher).
+  active_session.ActiveSession? _findBackendPlusSession(
+    List<active_session.ActiveSession> sessions,
+    String localId,
+  ) {
+    final candidates = _normalizedMacVariants(localId);
+    for (final s in sessions) {
+      if (s.protocolPlusSequence.isEmpty) continue;
+      for (final d in s.liveDevices) {
+        if (candidates.contains(_normalizeMac(d.deviceId))) return s;
       }
     }
     return null;
@@ -1546,9 +1606,36 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           engine.protocolByDevice[id]?.templateName ??
               protocol?.templateName ??
               '';
-      final deviceSequence =
-          engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
       final backendDev = _findBackendLiveDevice(liveSessions, id);
+
+      // Prefer the local engine's Plus state (it also drives the live break
+      // countdown). Fall back to the BACKEND FEED's Protocol Plus info when the
+      // engine has none — so a Plus run this client didn't launch (remote view /
+      // re-opened / feed-only) still renders the sequence tracker (web parity).
+      var deviceSequence =
+          engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
+      var plusName = engine.protocolPlusNameByDevice[id] ?? '';
+      var plusIndex = engine.protocolPlusIndexByDevice[id] ?? 0;
+      var plusDelay = engine.protocolPlusDelayByDevice[id] ?? 0;
+      var plusOnBreak = engine.protocolPlusOnBreakByDevice[id] ?? false;
+      var plusBreakRemaining =
+          engine.protocolPlusBreakRemainingByDevice[id] ?? 0;
+      if (deviceSequence.isEmpty) {
+        final ppSession = _findBackendPlusSession(liveSessions, id);
+        if (ppSession != null) {
+          deviceSequence = ppSession.protocolPlusSequence;
+          plusName = ppSession.protocolPlusName;
+          plusDelay = ppSession.protocolPlusDelaySeconds;
+          // Active sub-protocol = the device's current backend `protocol` name
+          // matched against the sequence (web parity); break state isn't derived
+          // from the feed (no live break countdown without the local engine).
+          final active = backendDev?.protocol;
+          final idx = active == null ? -1 : deviceSequence.indexOf(active);
+          plusIndex = idx >= 0 ? idx : 0;
+          plusOnBreak = false;
+          plusBreakRemaining = 0;
+        }
+      }
       return _buildDeviceSessionCard(
         id: id,
         label: _deviceLabel(id),
@@ -1567,11 +1654,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ctrl: ctrl,
         isProtocolPlusDevice: deviceSequence.isNotEmpty,
         plusSequence: deviceSequence,
-        plusName: engine.protocolPlusNameByDevice[id] ?? '',
-        plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
-        plusDelaySeconds: engine.protocolPlusDelayByDevice[id] ?? 0,
-        plusOnBreak: engine.protocolPlusOnBreakByDevice[id] ?? false,
-        plusBreakRemaining: engine.protocolPlusBreakRemainingByDevice[id] ?? 0,
+        plusName: plusName,
+        plusIndex: plusIndex,
+        plusDelaySeconds: plusDelay,
+        plusOnBreak: plusOnBreak,
+        plusBreakRemaining: plusBreakRemaining,
         scrollable: scrollable,
       );
     }
@@ -2314,19 +2401,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final isFault = telemetry?.isFault ?? false;
     final isWarning = telemetry?.isWarning ?? false;
 
-    // Prefer the backend timer (single source of truth → matches the web). Fall
-    // back to the local engine timer only until the backend value is available.
-    //
-    // EXCEPTION — Protocol Plus devices: the backend resets each device's clock
-    // (deviceStartTime / totalElapsedSeconds → 0) on every sub-protocol switch
-    // while keeping totalDurationSeconds at the WHOLE-sequence total, so its
-    // `remainingSeconds` JUMPS back up to the full sequence length at each
-    // switch (the "timer restarts from the start" bug). The local engine instead
-    // runs one continuous per-device stopwatch against the whole-sequence
-    // totalDuration and never resets it across switches, so use it here to get a
-    // smooth, monotonic countdown over the entire Protocol Plus run.
-    final useBackendTimer = !isProtocolPlusDevice &&
-        backendRemainingSeconds != null &&
+    // Backend timer is the single source of truth (matches the web): the web
+    // renders the feed's per-device remainingSeconds/totalSeconds verbatim and
+    // has no special Protocol Plus path. The backend now runs ONE continuous
+    // whole-sequence clock for Plus too — deviceStartTime is set once at session
+    // start and is no longer reset on a sub-protocol switch — so its
+    // `remainingSeconds` is already a smooth, monotonic countdown over the entire
+    // sequence (the old "timer restarts on each switch" bug is fixed server-side).
+    // So trust the backend for Plus devices as well; fall back to the local
+    // engine timer only until the first backend value arrives. The break banner /
+    // sequence tracker continue to use the local engine state.
+    final useBackendTimer = backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
     final displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)

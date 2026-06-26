@@ -81,6 +81,10 @@ class ApiEndpoints {
   static String createCheckoutSession(String orgId) =>
       '/payments/create-checkout-session/$orgId';
   static String currentPlan(String orgId) => '/payments/current-plan/$orgId';
+  // Provision the org's free plan + starter tokens (web parity: `freeplanCheckout`
+  // on org selection). Without this a newly created org has no plan, so the token
+  // balance badge stays empty for first-time / newly onboarded accounts.
+  static String freePlan(String orgId) => '/payments/free-plan/$orgId';
   static const String paymentUser = '/payments/user';
   static const String products = '/products';
 
