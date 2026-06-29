@@ -558,8 +558,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // reconciles this against the session status.
     final rs = json['rs'];
     if (rs is String && rs.trim().isNotEmpty) {
-      appLogger.i(
-          '🔎 rs-frame from $deviceId: rs=$rs (keys=${json.keys.toList()})');
+      appLogger
+          .i('🔎 rs-frame from $deviceId: rs=$rs (keys=${json.keys.toList()})');
       _reconcileDeviceRunState(deviceId, rs);
     }
 
@@ -584,7 +584,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void _reconcileDeviceRunState(String incomingId, String rs) {
     if (!_isActive) return;
     if (state.transport != SessionTransport.ble) {
-      appLogger.i('🔎 rs-reconcile skip: transport=${state.transport} (not BLE)');
+      appLogger
+          .i('🔎 rs-reconcile skip: transport=${state.transport} (not BLE)');
       return; // BLE only
     }
 
@@ -614,7 +615,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return; // dedupe
     }
     _lastRsByDevice[deviceId] = normalized;
-    appLogger.i('🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
+    appLogger.i(
+        '🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
 
     final current = state.deviceStatuses[deviceId];
     if (current == null) return;
@@ -622,7 +624,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     switch (normalized) {
       case 'pause':
         if (current == SessionStatus.running) {
-          appLogger.i('Session: device $deviceId reported rs=pause → pausing that device');
+          appLogger.i(
+              'Session: device $deviceId reported rs=pause → pausing that device');
           unawaited(pauseDevice(deviceId));
           // Web parity: mirror the per-device pause to the backend too.
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
@@ -630,7 +633,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         break;
       case 'play':
         if (current == SessionStatus.paused) {
-          appLogger.i('Session: device $deviceId reported rs=play → resuming that device');
+          appLogger.i(
+              'Session: device $deviceId reported rs=play → resuming that device');
           unawaited(resumeDevice(deviceId));
           // Web parity: mirror the per-device resume to the backend too.
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
@@ -734,8 +738,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   static const Set<String> _telemetryKeys = {
-    'sun', 'moon', 'pad', 'w', 'faultReason', 'fr', 'faultValue', 'fv',
-    'telemetryState', 's',
+    'sun',
+    'moon',
+    'pad',
+    'w',
+    'faultReason',
+    'fr',
+    'faultValue',
+    'fv',
+    'telemetryState',
+    's',
   };
 
   bool _looksLikeTelemetry(Map<String, dynamic> json) =>
@@ -898,20 +910,18 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             advancedSettings,
             applyStartDelay: false,
           )
-        : selectedDeviceIds
-            .map((id) {
-              final deviceProtocol = resolvedProtocolByDevice[id]!;
-              final deviceSettings = settingsByDevice[id] ?? advancedSettings;
-              return _computeEffectiveTotalDurationSeconds(
-                deviceProtocol,
-                deviceSettings,
-                applyStartDelay: _shouldApplyStartDelay(
-                  transportId: id,
-                  advancedSettings: deviceSettings,
-                ),
-              );
-            })
-            .reduce((a, b) => a > b ? a : b);
+        : selectedDeviceIds.map((id) {
+            final deviceProtocol = resolvedProtocolByDevice[id]!;
+            final deviceSettings = settingsByDevice[id] ?? advancedSettings;
+            return _computeEffectiveTotalDurationSeconds(
+              deviceProtocol,
+              deviceSettings,
+              applyStartDelay: _shouldApplyStartDelay(
+                transportId: id,
+                advancedSettings: deviceSettings,
+              ),
+            );
+          }).reduce((a, b) => a > b ? a : b);
     appLogger
         .i('  Total Duration: ${computedTotalDurationSeconds}s (computed)');
     appLogger.i(
@@ -1371,8 +1381,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // break flag for the device. The next break begins when this elapses.
     _plusSegmentEndByDevice[mac] = _deviceElapsed(mac) +
         Duration(seconds: _plusProtocolDurationSeconds(newProtocol));
-    final clearedOnBreak = Map<String, bool>.from(state.protocolPlusOnBreakByDevice)
-      ..[mac] = false;
+    final clearedOnBreak =
+        Map<String, bool>.from(state.protocolPlusOnBreakByDevice)
+          ..[mac] = false;
     final clearedBreakRemaining =
         Map<String, int>.from(state.protocolPlusBreakRemainingByDevice)
           ..[mac] = 0;
@@ -1600,7 +1611,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       timer: state.timer.copyWith(totalDuration: total),
       deviceTimers: devTimers,
     );
-    appLogger.i('Session: total duration overridden to ${seconds}s (protocol+)');
+    appLogger
+        .i('Session: total duration overridden to ${seconds}s (protocol+)');
   }
 
   void _beginRuntimeTimer() {
@@ -2240,14 +2252,35 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     if (state.protocol == null) return null;
     final recordedAt = createdAt ?? DateTime.now();
-    final protocolByDeviceId =
-        <String, ({String name, int durationSeconds})>{
-      for (final entry in state.protocolByDevice.entries)
-        entry.key: (
-          name: entry.value.templateName,
-          durationSeconds: entry.value.totalDurationSeconds,
-        ),
-    };
+    final protocolByDeviceId = <String, ({String name, int durationSeconds})>{};
+    for (final entry in state.protocolByDevice.entries) {
+      final deviceId = entry.key;
+      final proto = entry.value;
+      // If this device is running a Protocol Plus sequence, prefer the
+      // protocol-plus template name and the per-device total duration (the
+      // server-driven whole-sequence length), otherwise use the local
+      // sub-protocol name/duration.
+      final isPlusDevice = _plusDeviceIds().contains(deviceId) ||
+          state.protocolPlusNameByDevice.containsKey(deviceId);
+      if (isPlusDevice) {
+        final plusName = state.protocolPlusNameByDevice[deviceId] ??
+            state.protocolPlusName ??
+            proto.templateName;
+        final devTimer = state.deviceTimers[deviceId];
+        final plusDuration = devTimer != null
+            ? devTimer.totalDuration.inSeconds
+            : proto.totalDurationSeconds;
+        protocolByDeviceId[deviceId] = (
+          name: plusName,
+          durationSeconds: plusDuration,
+        );
+      } else {
+        protocolByDeviceId[deviceId] = (
+          name: proto.templateName,
+          durationSeconds: proto.totalDurationSeconds,
+        );
+      }
+    }
     return SessionRecord(
       id: sessionId ?? const Uuid().v4(),
       protocolId: state.protocol!.id,
