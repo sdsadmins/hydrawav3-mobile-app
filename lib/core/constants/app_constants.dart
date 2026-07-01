@@ -37,9 +37,13 @@ class AppConstants {
   static const String termsUrl = 'https://www.hydrawav3.com/terms';
 
   // Version and Release Notes
-  static const String appVersion = '1.0.2';
-  static const String buildNumber = '10';
+  static const String appVersion = '1.0.3';
+  static const String buildNumber = '3';
   static const String releaseNotes = '''
+Version 1.0.3
+- Your plan details now correctly show remaining session minutes
+- Advanced settings: hot & cold intensity now matches the web app
+- Various bug fixes and stability improvements
 Version 1.0.2
 - Account sign-up now opens securely inside the app
 - The app now opens in light theme by default

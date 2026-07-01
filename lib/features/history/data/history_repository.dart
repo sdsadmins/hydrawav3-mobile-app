@@ -4,6 +4,7 @@ import '../../../core/network/connectivity_service.dart';
 import '../../../core/storage/local_db.dart';
 import '../domain/session_history_model.dart';
 import 'history_remote_source.dart';
+import '../../auth/presentation/providers/auth_provider.dart';
 
 final historyRepositoryProvider = Provider<HistoryRepository>((ref) {
   return HistoryRepository(
@@ -16,7 +17,16 @@ final historyRepositoryProvider = Provider<HistoryRepository>((ref) {
 /// All saved sessions fetched from the backend database (`GET /intake/all`).
 final allSessionsProvider =
     FutureProvider.autoDispose<List<SessionHistoryItem>>((ref) async {
-  return ref.read(historyRepositoryProvider).getAllSessions();
+  final auth = ref.read(authStateProvider);
+  final userId = auth.user?.id;
+  final all = await ref.read(historyRepositoryProvider).getAllSessions();
+  // If no logged-in user id, return everything (fallback).
+  if (userId == null || userId.isEmpty) return all;
+  // Only show sessions that were created by this user (createdBy may be numeric
+  // in the backend, so compare via string form).
+  return all
+      .where((s) => s.createdBy != null && s.createdBy == userId)
+      .toList();
 });
 
 class HistoryRepository {

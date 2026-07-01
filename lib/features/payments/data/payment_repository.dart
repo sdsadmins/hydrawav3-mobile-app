@@ -27,6 +27,20 @@ class PaymentRepository {
     }
   }
 
+  /// Provision the org's free plan + starter tokens (web parity:
+  /// `freeplanCheckout` is called on org selection). Best-effort — returns false
+  /// on failure instead of throwing, so org selection is never blocked and an
+  /// org that already has a plan (the call may 4xx) is fine. Once this succeeds,
+  /// `/payments/current-plan` reports `remainingTokens` for the token badge.
+  Future<bool> ensureFreePlan(String orgId) async {
+    try {
+      await _dio.post(ApiEndpoints.freePlan(orgId), data: const {});
+      return true;
+    } on DioException {
+      return false;
+    }
+  }
+
   Future<SubscriptionPlan> getCurrentPlan(String orgId) async {
     try {
       final response = await _dio.get(ApiEndpoints.currentPlan(orgId));

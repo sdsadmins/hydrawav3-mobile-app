@@ -97,11 +97,19 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   }
 
   AdvancedSettings _advancedDefaultsFromProtocol(Protocol p) {
-    final first = p.cycles.isNotEmpty ? p.cycles.first : null;
-    final hotLevel =
-        _nearestLevel(first?.hotPwm.toInt() ?? 70, _hotPwmToLevel, 5);
-    final coldLevel =
-        _nearestLevel(first?.coldPwm.toInt() ?? 190, _coldPwmToLevel, 5);
+    // Web parity: seed the Hot/Cold intensity from the HIGHEST hot/cold PWM
+    // across ALL cycles (not just Cycle 1). See the web comment "Use the
+    // highest hot/cold PWM across all cycles (not just Cycle 1)." Seeding from
+    // the first cycle alone under-reported the level for protocols whose peak
+    // cycle isn't the first.
+    int maxPwm(int Function(dynamic c) sel, int fallback) => p.cycles.isEmpty
+        ? fallback
+        : p.cycles.map(sel).reduce((a, b) => a > b ? a : b);
+
+    final hotLevel = _nearestLevel(
+        maxPwm((c) => c.hotPwm.toInt(), 70), _hotPwmToLevel, 5);
+    final coldLevel = _nearestLevel(
+        maxPwm((c) => c.coldPwm.toInt(), 190), _coldPwmToLevel, 5);
 
     return AdvancedSettings(
       lights: true,
@@ -248,7 +256,9 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                               ),
                               const SizedBox(height: 10),
                               TextField(
-                                autofocus: true,
+                                // Don't pop the keyboard on open — let the user
+                                // tap the field first.
+                                autofocus: false,
                                 onChanged: (v) =>
                                     setSheetState(() => query = v.trim()),
                                 style: TextStyle(
@@ -369,28 +379,18 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                     ),
                                   ),
                                   data: (filteredProtocols) {
+                                    // Search by protocol title only (not the
+                                    // description or goal name).
                                     final list = query.trim().isEmpty
                                         ? [...filteredProtocols]
                                         : filteredProtocols
-                                            .where((p) =>
-                                                p.templateName
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()) ||
-                                                p.description
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()) ||
-                                                (p.goalTagName ?? '')
-                                                    .toLowerCase()
-                                                    .contains(
-                                                        query.toLowerCase()))
+                                            .where((p) => p.templateName
+                                                .toLowerCase()
+                                                .contains(query.toLowerCase()))
                                             .toList();
 
-                                    list.sort((a, b) => a.templateName
-                                        .toLowerCase()
-                                        .compareTo(
-                                            b.templateName.toLowerCase()));
+                                    list.sort((a, b) => naturalCompare(
+                                        a.templateName, b.templateName));
 
                                     if (list.isEmpty) {
                                       return Center(

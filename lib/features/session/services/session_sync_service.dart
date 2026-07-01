@@ -5,6 +5,7 @@ import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/utils/logger.dart';
+import '../../ble/data/ble_repository.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../devices/presentation/providers/wifi_devices_provider.dart';
 
@@ -132,13 +133,21 @@ class SessionSyncService {
       final devicePayload = devices.map((d) {
         // BLE registers by the firmware-reported bluetoothId; Wi-Fi by mac.
         var serverDeviceId = d.localMac;
+        String? connectedName;
         if (transport == 'ble') {
-          final fwId =
-              _ref.read(bleConnectorProvider).getFirmwareSessionId(d.localMac);
+          final connector = _ref.read(bleConnectorProvider);
+          final fwId = connector.getFirmwareSessionId(d.localMac);
           if (fwId != null && fwId.isNotEmpty) serverDeviceId = fwId;
+          // The live "Connected to <name>" advertised name — the most direct
+          // human name for a BLE device, used when neither the org registry nor
+          // the paired list resolved one.
+          connectedName = connector.getConnectedDeviceName(d.localMac);
         }
-        final deviceName =
-            nameByDevice[d.localMac.trim().toUpperCase()] ?? d.localMac;
+        // Send the device's NAME (never the raw mac/bluetoothId): registered
+        // name → live connected name → mac as last resort.
+        final deviceName = nameByDevice[d.localMac.trim().toUpperCase()] ??
+            connectedName ??
+            d.localMac;
         return {
           'deviceName': deviceName,
           if (transport == 'ble')
@@ -228,6 +237,78 @@ class SessionSyncService {
       _post(ApiEndpoints.sessionStop, backendSessionId,
           {'macAddress': macAddress});
 
+  // ─────────── firmware-reported per-device lifecycle (rs:stop/pause/play) ───────────
+  // Mirror a FIRMWARE-reported run-state change for ONE device to the backend,
+  // the way the web does. The backend pairs a device by macAddress OR deviceName
+  // OR slotId, BUT: (a) a BLE device has no macAddress server-side (it registered
+  // by bluetoothId + deviceName), and (b) RESUME matches with AND-logic, so a
+  // non-matching macAddress would FAIL the match. The only field that matches
+  // across stop/pause/resume for a BLE device is the registered deviceName — so
+  // we resolve it (the SAME mapping used at session start) and send only that
+  // (+ slotId when known).
+
+  /// Registered-name identity body for [localMac] (BLE-safe; deviceName + slotId).
+  /// When [deviceName] is given (e.g. the registered name from the org-wide live
+  /// feed for a FOREIGN device this phone never paired), it's used verbatim and
+  /// no local lookup is attempted — that's the only way to target a foreign BLE
+  /// device, which isn't in this phone's local registry.
+  Future<Map<String, dynamic>> _deviceIdentityBody(
+    String localMac, {
+    String? slotId,
+    String? deviceName,
+  }) async {
+    final String resolved;
+    if (deviceName != null && deviceName.isNotEmpty) {
+      resolved = deviceName;
+    } else {
+      final names = await _resolveRegisteredNames([localMac]);
+      resolved = names[localMac.trim().toUpperCase()] ?? localMac;
+    }
+    return {
+      'deviceName': resolved,
+      if (slotId != null && slotId.isNotEmpty) 'slotId': slotId,
+    };
+  }
+
+  Future<void> stopServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+    String? deviceName,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac,
+        slotId: slotId, deviceName: deviceName);
+    await _post(ApiEndpoints.sessionStop, backendSessionId, {
+      ...body,
+      'stopAll': false,
+    });
+  }
+
+  Future<void> pauseServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+    String? deviceName,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac,
+        slotId: slotId, deviceName: deviceName);
+    await _post(ApiEndpoints.sessionPause, backendSessionId, body);
+  }
+
+  Future<void> resumeServerSessionDeviceByIdentity(
+    String backendSessionId,
+    String localMac, {
+    String? slotId,
+    String? deviceName,
+  }) async {
+    if (backendSessionId.isEmpty || localMac.isEmpty) return;
+    final body = await _deviceIdentityBody(localMac,
+        slotId: slotId, deviceName: deviceName);
+    await _post(ApiEndpoints.sessionResume, backendSessionId, body);
+  }
+
   Future<void> _post(
     String Function(String, String) endpoint,
     String backendSessionId,
@@ -283,29 +364,45 @@ class SessionSyncService {
       return parts.join(':');
     }
 
+    // Friendly names are the name the device was CONNECTED/registered with, and
+    // come from BOTH sources (one per transport): the org WiFi/cloud registry
+    // AND this phone's locally-paired BLE devices. The WiFi org provider
+    // deliberately excludes BLE, so without the paired list a BLE device's name
+    // would wrongly fall back to its raw mac/bluetoothId.
+    final nameByMac = <String, String>{};
     try {
       final registered = await _ref.read(wifiDevicesByOrgProvider.future);
-      final nameByMac = <String, String>{
-        for (final d in registered)
-          if (d.name.trim().isNotEmpty) norm(d.macAddress): d.name,
-      };
-      for (final deviceId in deviceIds) {
-        final id = norm(deviceId);
-        final candidates = <String>[id];
-        final plusOne = adjacentMac(id, 1);
-        if (plusOne != null) candidates.add(plusOne);
-        final minusOne = adjacentMac(id, -1);
-        if (minusOne != null) candidates.add(minusOne);
-        for (final c in candidates) {
-          final name = nameByMac[c];
-          if (name != null) {
-            nameByDevice[id] = name;
-            break;
-          }
+      for (final d in registered) {
+        if (d.name.trim().isNotEmpty) nameByMac[norm(d.macAddress)] = d.name;
+      }
+    } catch (e) {
+      appLogger.w('SessionSync: could not load WiFi device names: $e');
+    }
+    try {
+      final paired = await _ref.read(bleRepositoryProvider).getPairedDevices();
+      for (final p in paired) {
+        if (p.name.trim().isNotEmpty) {
+          nameByMac.putIfAbsent(norm(p.macAddress), () => p.name);
         }
       }
     } catch (e) {
-      appLogger.w('SessionSync: could not resolve device names: $e');
+      appLogger.w('SessionSync: could not load paired BLE device names: $e');
+    }
+
+    for (final deviceId in deviceIds) {
+      final id = norm(deviceId);
+      final candidates = <String>[id];
+      final plusOne = adjacentMac(id, 1);
+      if (plusOne != null) candidates.add(plusOne);
+      final minusOne = adjacentMac(id, -1);
+      if (minusOne != null) candidates.add(minusOne);
+      for (final c in candidates) {
+        final name = nameByMac[c];
+        if (name != null) {
+          nameByDevice[id] = name;
+          break;
+        }
+      }
     }
     return nameByDevice;
   }

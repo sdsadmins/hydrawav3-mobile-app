@@ -188,6 +188,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// 1s poll, which would fight a local pause during the backend round-trip.
   active_session.SessionStatus? _lastRemoteStatus;
 
+  /// When the LOCAL user last drove a session pause/resume. During the backend
+  /// round-trip the live feed flaps (per-device `dev.status` and session-level
+  /// status disagree, and the device can briefly drop from a frame), so the
+  /// reconciled `remote` oscillates between the old and new value. Without this
+  /// guard each flap is treated as a fresh remote command and reverses the
+  /// user's own button — pause, resume, pause… for a few seconds until the
+  /// backend settles. While this window is open we ignore any backend status
+  /// that contradicts the local engine; genuine remote actions still apply once
+  /// the backend agrees with us or the window elapses.
+  DateTime? _localLifecycleActionAt;
+
+  /// How long a local pause/resume "wins" over a contradicting backend echo.
+  static const Duration _localLifecycleSettleWindow = Duration(seconds: 6);
+
   /// Last reconcile log signature, to log transitions without per-second spam.
   String? _lastReconcileSig;
 
@@ -195,9 +209,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// for a normal run (Protocol Plus runs are reconciled by their controller).
   ProviderSubscription<List<active_session.ActiveSession>>? _liveSessionsSub;
 
-  String _deviceLabel(String id) {
+  /// Human-readable label for a device. Prefers a LOCALLY-known name (paired
+  /// BLE / org WiFi), then the backend live-feed's registered [fallbackName]
+  /// (the only source for a FOREIGN BLE session — we aren't bonded to its
+  /// devices, so they're not in the local paired map), and only shows the raw
+  /// id as a last resort.
+  String _deviceLabel(String id, {String? fallbackName}) {
     final key = _normalizeMac(id);
-    return _deviceLabelById[key] ?? id;
+    final local = _deviceLabelById[key];
+    if (local != null && local.isNotEmpty) return local;
+    if (fallbackName != null && fallbackName.isNotEmpty) return fallbackName;
+    return id;
   }
 
   @override
@@ -627,9 +649,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (backendId == null || backendId.isEmpty || prevS == nextS) return;
     final sync = ref.read(sessionSyncServiceProvider);
     if (prevS == SessionStatus.running && nextS == SessionStatus.paused) {
+      // Local pause/resume wins over its own in-flight backend echo (see
+      // [_localLifecycleActionAt]); stamp it so the reconciler doesn't flap.
+      _localLifecycleActionAt = DateTime.now();
       unawaited(sync.pauseServerSession(backendId));
     } else if (prevS == SessionStatus.paused &&
         nextS == SessionStatus.running) {
+      _localLifecycleActionAt = DateTime.now();
       unawaited(sync.resumeServerSession(backendId));
     }
   }
@@ -688,6 +714,30 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // local pause isn't undone by the poll still reporting the old status during
     // the backend round-trip. applyRemoteLifecycle is a no-op if already there.
     if (_lastRemoteStatus == remote) return;
+
+    // Local action wins during its settle window: while a just-issued local
+    // pause/resume is still propagating, the feed flaps between the old and new
+    // status (per-device vs session-level disagree). Ignore any backend value
+    // that contradicts the local engine — and crucially do NOT advance
+    // _lastRemoteStatus, so the matching value keeps short-circuiting above and
+    // the contradicting value never edge-triggers an engine action. Genuine
+    // remote changes still apply once the window elapses.
+    final localAction = _localLifecycleActionAt;
+    final localActive = localStatus == SessionStatus.running ||
+        localStatus == SessionStatus.paused;
+    if (localAction != null && localActive) {
+      if (DateTime.now().difference(localAction) < _localLifecycleSettleWindow) {
+        if (remote != _toActiveStatus(localStatus)) {
+          appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote '
+              'while local=$localStatus settles');
+          return;
+        }
+      } else {
+        // Window elapsed — drop the guard so later remote changes are honoured.
+        _localLifecycleActionAt = null;
+      }
+    }
+
     _lastRemoteStatus = remote;
     if (remote == active_session.SessionStatus.paused &&
         localStatus == SessionStatus.running) {
@@ -1107,6 +1157,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return null;
   }
 
+  /// The backend session containing [localId] that the feed flagged as a
+  /// Protocol Plus run (has a parsed sub-protocol sequence). Used to render the
+  /// sequence tracker from the feed when the local engine has no Plus state
+  /// (web parity — any client shows a Plus run as Plus, not just the launcher).
+  active_session.ActiveSession? _findBackendPlusSession(
+    List<active_session.ActiveSession> sessions,
+    String localId,
+  ) {
+    final candidates = _normalizedMacVariants(localId);
+    for (final s in sessions) {
+      if (s.protocolPlusSequence.isEmpty) continue;
+      for (final d in s.liveDevices) {
+        if (candidates.contains(_normalizeMac(d.deviceId))) return s;
+      }
+    }
+    return null;
+  }
+
   static Set<String> _normalizedMacVariants(String raw) {
     final norm = _normalizeMac(raw); // hex-only, lowercase
     final variants = <String>{norm};
@@ -1477,17 +1545,32 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final currentSession = _findTrackedSession(activeSessions);
 
     final timer = engine.timer;
-    // Prefer the live engine status when the engine for this session is
-    // actually running/paused, so a stale tracked status can't strand the
-    // Stop/Pause/Resume controls after re-entering a live (WiFi) session.
-    final engineLive = engine.status == SessionStatus.running ||
-        engine.status == SessionStatus.paused;
-    final status = engineLive
+    // The local engine is authoritative for an own run in ANY non-idle state —
+    // running, paused, AND a just-reached terminal (stopped/completed). Only
+    // fall back to the tracked/backend session status when the engine hasn't
+    // taken over yet (idle), e.g. right after re-entering a live (WiFi) session.
+    //
+    // Including the terminal case is what fixes the device-pressed-stop glitch:
+    // a firmware `rs:stop` flips the engine to stopped immediately, but the
+    // org-wide feed still reports the device "running" for up to a minute — so
+    // without this the Stop/Pause controls would snap back to enabled until the
+    // feed caught up. Trusting the engine's terminal state keeps them disabled.
+    final engineAuthoritative = engine.status != SessionStatus.idle;
+    final status = engineAuthoritative
         ? engine.status
         : (currentSession == null
             ? engine.status
             : _toSessionStatus(currentSession.status));
     final ctrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    // The session-wide control card (Pause All / Stop All) shows while a run is
+    // live. For a remote/foreign view it also stays after the run has
+    // completed/stopped, so the user can still send Stop All to the backend and
+    // clear the session from the live feed (it can't be auto-cleared).
+    final showTopControl = status == SessionStatus.running ||
+        status == SessionStatus.paused ||
+        (widget.remoteView &&
+            (status == SessionStatus.completed ||
+                status == SessionStatus.stopped));
     final protocol = engine.protocol;
     // During timed pause gaps the engine sets currentCycleIndex to -1, but
     // the pads still reflect the active protocol cycle — use lastVisualCycleIndex.
@@ -1541,12 +1624,41 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           engine.protocolByDevice[id]?.templateName ??
               protocol?.templateName ??
               '';
-      final deviceSequence =
-          engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
       final backendDev = _findBackendLiveDevice(liveSessions, id);
+
+      // Prefer the local engine's Plus state (it also drives the live break
+      // countdown). Fall back to the BACKEND FEED's Protocol Plus info when the
+      // engine has none — so a Plus run this client didn't launch (remote view /
+      // re-opened / feed-only) still renders the sequence tracker (web parity).
+      var deviceSequence =
+          engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
+      var plusName = engine.protocolPlusNameByDevice[id] ?? '';
+      var plusIndex = engine.protocolPlusIndexByDevice[id] ?? 0;
+      var plusDelay = engine.protocolPlusDelayByDevice[id] ?? 0;
+      var plusOnBreak = engine.protocolPlusOnBreakByDevice[id] ?? false;
+      var plusBreakRemaining =
+          engine.protocolPlusBreakRemainingByDevice[id] ?? 0;
+      if (deviceSequence.isEmpty) {
+        final ppSession = _findBackendPlusSession(liveSessions, id);
+        if (ppSession != null) {
+          deviceSequence = ppSession.protocolPlusSequence;
+          plusName = ppSession.protocolPlusName;
+          plusDelay = ppSession.protocolPlusDelaySeconds;
+          // Active sub-protocol = the device's current backend `protocol` name
+          // matched against the sequence (web parity); break state isn't derived
+          // from the feed (no live break countdown without the local engine).
+          final active = backendDev?.protocol;
+          final idx = active == null ? -1 : deviceSequence.indexOf(active);
+          plusIndex = idx >= 0 ? idx : 0;
+          plusOnBreak = false;
+          plusBreakRemaining = 0;
+        }
+      }
       return _buildDeviceSessionCard(
         id: id,
-        label: _deviceLabel(id),
+        // Foreign BLE devices aren't in the local paired map — fall back to the
+        // backend feed's registered name instead of the raw bluetooth id.
+        label: _deviceLabel(id, fallbackName: backendDev?.deviceName),
         protocolName: perDeviceProtocolName,
         timer: deviceTimer,
         status: deviceStatus,
@@ -1562,11 +1674,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ctrl: ctrl,
         isProtocolPlusDevice: deviceSequence.isNotEmpty,
         plusSequence: deviceSequence,
-        plusName: engine.protocolPlusNameByDevice[id] ?? '',
-        plusIndex: engine.protocolPlusIndexByDevice[id] ?? 0,
-        plusDelaySeconds: engine.protocolPlusDelayByDevice[id] ?? 0,
-        plusOnBreak: engine.protocolPlusOnBreakByDevice[id] ?? false,
-        plusBreakRemaining: engine.protocolPlusBreakRemainingByDevice[id] ?? 0,
+        plusName: plusName,
+        plusIndex: plusIndex,
+        plusDelaySeconds: plusDelay,
+        plusOnBreak: plusOnBreak,
+        plusBreakRemaining: plusBreakRemaining,
         scrollable: scrollable,
       );
     }
@@ -1654,11 +1766,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             if (status == SessionStatus.idle) ...[
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
-            ] else if (orderedDeviceIds.isNotEmpty) ...[
+            ] else if (orderedDeviceIds.isNotEmpty || showTopControl) ...[
               // Session-wide control card (device summary + Pause/Resume All +
-              // Stop All) pinned above the per-device cards while the run is live.
-              if (status == SessionStatus.running ||
-                  status == SessionStatus.paused)
+              // Stop All) pinned above the per-device cards. Shown while the run
+              // is live, and (for a remote/foreign view) also once it has
+              // completed/stopped so the user can still Stop All to clear it.
+              if (showTopControl)
                 _buildTopControlCard(
                     status, ctrl, liveSessions, orderedDeviceIds.length),
               if (verticalLayout) ...[
@@ -2309,10 +2422,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final isFault = telemetry?.isFault ?? false;
     final isWarning = telemetry?.isWarning ?? false;
 
-    // Prefer the backend timer (single source of truth → matches the web). Fall
-    // back to the local engine timer only until the backend value is available.
-    final useBackendTimer =
-        backendRemainingSeconds != null && backendRemainingSeconds >= 0;
+    // Backend timer is the single source of truth (matches the web): the web
+    // renders the feed's per-device remainingSeconds/totalSeconds verbatim and
+    // has no special Protocol Plus path. The backend now runs ONE continuous
+    // whole-sequence clock for Plus too — deviceStartTime is set once at session
+    // start and is no longer reset on a sub-protocol switch — so its
+    // `remainingSeconds` is already a smooth, monotonic countdown over the entire
+    // sequence (the old "timer restarts on each switch" bug is fixed server-side).
+    // So trust the backend for Plus devices as well; fall back to the local
+    // engine timer only until the first backend value arrives. The break banner /
+    // sequence tracker continue to use the local engine state.
+    final useBackendTimer = backendRemainingSeconds != null &&
+        backendRemainingSeconds >= 0;
     final displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)
         : timer.remaining;
@@ -2512,24 +2633,67 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
       if (remoteSession == null) return const SizedBox.shrink();
     }
-    final wifiRemote = remote ? ref.read(wifiRemoteControlProvider) : null;
-    void pauseFn() => remote
-        ? wifiRemote!.pauseDevice(remoteSession!, deviceId)
-        : ctrl.pauseDevice(deviceId);
-    void resumeFn() => remote
-        ? wifiRemote!.resumeDevice(remoteSession!, deviceId)
-        : ctrl.resumeDevice(deviceId);
-    void stopFn() => remote
-        ? wifiRemote!.stopDevice(remoteSession!, deviceId)
-        : ctrl.stopDevice(deviceId);
+    // A foreign BLE device can't be reached over the WiFi broker (no server-side
+    // macAddress, no local bond), so per-device control routes through the
+    // backend BY REGISTERED NAME — taken from the live feed, NOT the raw
+    // bluetooth id. WiFi remote keeps using the broker.
+    final isBleRemote = remote && widget.transport != 'wifi';
+    active_session.LiveDeviceState? feedDev;
+    if (remote) {
+      for (final d in remoteSession!.liveDevices) {
+        if (d.deviceId == deviceId) {
+          feedDev = d;
+          break;
+        }
+      }
+    }
+    final wifiRemote =
+        (remote && !isBleRemote) ? ref.read(wifiRemoteControlProvider) : null;
+    final sync = ref.read(sessionSyncServiceProvider);
+    final backendId = widget.backendSessionId ?? '';
 
-    // While a BLE device's link is down during a live run, its pause/stop/resume
-    // commands can't reach it — keep the buttons visible but DISABLED (greyed).
-    // Reconnect happens silently in the background; no extra UI/label. WiFi is
-    // unaffected (commands go over MQTT, no live BLE link needed).
+    void pauseFn() {
+      if (!remote) {
+        ctrl.pauseDevice(deviceId);
+      } else if (isBleRemote) {
+        unawaited(sync.pauseServerSessionDeviceByIdentity(backendId, deviceId,
+            deviceName: feedDev?.deviceName, slotId: feedDev?.slotId));
+      } else {
+        wifiRemote!.pauseDevice(remoteSession!, deviceId);
+      }
+    }
+
+    void resumeFn() {
+      if (!remote) {
+        ctrl.resumeDevice(deviceId);
+      } else if (isBleRemote) {
+        unawaited(sync.resumeServerSessionDeviceByIdentity(backendId, deviceId,
+            deviceName: feedDev?.deviceName, slotId: feedDev?.slotId));
+      } else {
+        wifiRemote!.resumeDevice(remoteSession!, deviceId);
+      }
+    }
+
+    void stopFn() {
+      if (!remote) {
+        ctrl.stopDevice(deviceId);
+      } else if (isBleRemote) {
+        unawaited(sync.stopServerSessionDeviceByIdentity(backendId, deviceId,
+            deviceName: feedDev?.deviceName, slotId: feedDev?.slotId));
+      } else {
+        wifiRemote!.stopDevice(remoteSession!, deviceId);
+      }
+    }
+
+    // While an OWN BLE device's link is down during a live run, its commands
+    // can't reach it — keep the buttons visible but DISABLED (greyed); reconnect
+    // happens silently. This gate is irrelevant for a REMOTE/foreign view (we
+    // drive the backend, not a local BLE link) and for WiFi (commands go over
+    // MQTT), so it applies only to an own BLE run.
     final isLive =
         status == SessionStatus.running || status == SessionStatus.paused;
-    final disconnected = widget.transport == 'ble' &&
+    final disconnected = !remote &&
+        widget.transport == 'ble' &&
         isLive &&
         ref.watch(bleDeviceStatusProvider(deviceId)) !=
             BleConnectionStatus.connected;
@@ -2653,6 +2817,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final cardColor = isDark ? ThemeConstants.surface : Colors.white;
     final paused = status == SessionStatus.paused;
     final isWifi = widget.transport == 'wifi';
+    // Pause/Resume only makes sense while the run is still live; once it has
+    // completed/stopped the session can only be cleared via Stop All.
+    final canPause =
+        status == SessionStatus.running || status == SessionStatus.paused;
 
     // Remote (web-started) sessions route through the cloud broker; resolve the
     // live session to act on. If it's gone from the feed, hide the controls.
@@ -2666,30 +2834,48 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
       if (remoteSession == null) return const SizedBox.shrink();
     }
-    final wifiRemote =
-        widget.remoteView ? ref.read(wifiRemoteControlProvider) : null;
+    // A foreign BLE session can't be reached over the WiFi broker (we aren't
+    // bonded to its pads), so drive the backend session state directly: the
+    // web + other clients reconcile, and on Stop All the backend drops the
+    // session from the live feed (clearing the card). WiFi remote keeps using
+    // the broker, which also writes the backend state.
+    final isBleRemote = widget.remoteView && !isWifi;
+    final wifiRemote = (widget.remoteView && isWifi)
+        ? ref.read(wifiRemoteControlProvider)
+        : null;
+    final sync = ref.read(sessionSyncServiceProvider);
+    final backendId = widget.backendSessionId;
 
     void onPauseResume() {
-      if (widget.remoteView) {
-        if (paused) {
-          wifiRemote!.resume(remoteSession!);
-        } else {
-          wifiRemote!.pause(remoteSession!);
-        }
-      } else {
+      if (!widget.remoteView) {
         if (paused) {
           ctrl.resume();
         } else {
           ctrl.pause();
         }
+        return;
+      }
+      if (isBleRemote) {
+        if (backendId == null) return;
+        unawaited(paused
+            ? sync.resumeServerSession(backendId)
+            : sync.pauseServerSession(backendId));
+      } else if (paused) {
+        wifiRemote!.resume(remoteSession!);
+      } else {
+        wifiRemote!.pause(remoteSession!);
       }
     }
 
     void onStopAll() {
-      if (widget.remoteView) {
-        wifiRemote!.stop(remoteSession!);
-      } else {
+      if (!widget.remoteView) {
         ctrl.stop();
+        return;
+      }
+      if (isBleRemote) {
+        if (backendId != null) unawaited(sync.stopServerSession(backendId));
+      } else {
+        wifiRemote!.stop(remoteSession!);
       }
     }
 
@@ -2750,7 +2936,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 child: SizedBox(
                   height: 48,
                   child: ElevatedButton.icon(
-                    onPressed: onPauseResume,
+                    onPressed: canPause ? onPauseResume : null,
                     icon: Icon(
                       paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
                     ),

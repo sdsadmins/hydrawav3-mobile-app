@@ -41,20 +41,26 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     });
   }
 
-  bool _isLiveStatus(SessionStatus status) {
-    return status == SessionStatus.running || status == SessionStatus.paused;
+  /// A session stays on the Live tab as long as it's still present in the
+  /// backend live feed and hasn't been stopped — that includes the fully-paused
+  /// case AND the completed case. Completed sessions are intentionally kept
+  /// (not auto-cleared) so the user can still open them and hit Stop All to send
+  /// the backend stop and remove them from the feed. They only disappear once
+  /// the backend drops them (after Stop All).
+  bool _isVisibleStatus(SessionStatus status) {
+    return status == SessionStatus.running ||
+        status == SessionStatus.paused ||
+        status == SessionStatus.completed;
   }
 
-  /// Keep sessions visible while at least one device is still live,
-  /// including the fully-paused case where no device is currently running.
   bool _isVisibleActiveSession(ActiveSession session) {
-    if (_isLiveStatus(session.status)) {
+    if (_isVisibleStatus(session.status)) {
       return true;
     }
     for (final deviceId in session.deviceIds) {
       final deviceStatus =
           session.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (_isLiveStatus(deviceStatus)) {
+      if (_isVisibleStatus(deviceStatus)) {
         return true;
       }
     }
@@ -322,6 +328,27 @@ class _ActiveSessionCard extends ConsumerWidget {
     return raw;
   }
 
+  /// Per-device countdown to display. Normal/foreign runs use the backend
+  /// `remainingSeconds` verbatim. For an OWN Protocol Plus run the backend
+  /// resets each device's clock on every sub-protocol switch (its
+  /// `remainingSeconds` jumps back up to the whole-sequence total), so derive a
+  /// continuous countdown from the non-resetting whole-sequence total
+  /// ([LiveDeviceState.totalDurationSeconds]) and the run's start instead —
+  /// matching the continuous timer on the live session screen.
+  int? _displayRemainingSeconds({
+    required LiveDeviceState? live,
+    required bool isPlusOwnRun,
+    required DateTime plusStart,
+  }) {
+    final backend = live?.remainingSeconds;
+    if (!isPlusOwnRun) return backend;
+    final total = live?.totalDurationSeconds ?? 0;
+    if (total <= 0) return backend;
+    final elapsed = DateTime.now().difference(plusStart).inSeconds;
+    final remaining = total - elapsed;
+    return remaining < 0 ? 0 : remaining;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // session.status is the ActiveSession SessionStatus enum — compare against
@@ -359,6 +386,20 @@ class _ActiveSessionCard extends ConsumerWidget {
     }
     final canOpen = session.isOwn && canOpenLive && localSession != null;
 
+    // Protocol Plus countdown fix (parity with the live session screen): the
+    // backend resets each device's clock on every sub-protocol switch while
+    // keeping totalDurationSeconds at the WHOLE-sequence total, so its
+    // `remainingSeconds` jumps back up to the full length at each switch. For an
+    // OWN Plus run, derive a continuous countdown from the (non-resetting)
+    // whole-sequence total and the run's start instead. Plus bindings live on
+    // the resolved local session (own run) but may also be on this feed item.
+    final plusBindings =
+        (localSession?.protocolPlusBindings.isNotEmpty ?? false)
+            ? localSession!.protocolPlusBindings
+            : session.protocolPlusBindings;
+    final isPlusOwnRun = session.isOwn && plusBindings.isNotEmpty;
+    final plusStart = localSession?.createdAt ?? session.createdAt;
+
     return GradientCard(
       onTap: () {
         // Own run → open the local live screen against the real engine.
@@ -387,22 +428,25 @@ class _ActiveSessionCard extends ConsumerWidget {
           );
           return;
         }
-        // Foreign WiFi run → open the live REMOTE VIEW (no local engine, no
-        // restart; display + control come from the backend feed).
-        if (canRemoteControl) {
-          context.pushNamed(
-            RouteNames.session,
-            extra: {
-              'remoteView': true,
-              'backendSessionId': session.id,
-              'sessionId': session.id,
-              'protocolId': '',
-              'deviceIds': session.deviceIds,
-              'transport': session.transport,
-              'skipEngineBootstrap': true,
-            },
-          );
-        }
+        // Every other case opens the live REMOTE VIEW (no local engine, no
+        // restart; display comes from the backend feed). This covers foreign
+        // WiFi (full broker control), foreign BLE (Pause All / Stop All routed
+        // through the backend — we can't reach the pads, but we can stop &
+        // clear the session), and an own run whose local engine is already
+        // gone (e.g. completed). The session-wide Pause All / Stop All live on
+        // that screen's top control card.
+        context.pushNamed(
+          RouteNames.session,
+          extra: {
+            'remoteView': true,
+            'backendSessionId': session.id,
+            'sessionId': session.id,
+            'protocolId': '',
+            'deviceIds': session.deviceIds,
+            'transport': session.transport,
+            'skipEngineBootstrap': true,
+          },
+        );
       },
       padding: const EdgeInsets.all(16),
       showShadow: false,
@@ -430,7 +474,12 @@ class _ActiveSessionCard extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      session.protocolName,
+                      // Protocol Plus run: show the sequence/template name
+                      // (e.g. "1. Deep-Tension Recovery"), not the current
+                      // sub-protocol. Falls back to the protocol name otherwise.
+                      session.protocolPlusName.isNotEmpty
+                          ? session.protocolPlusName
+                          : session.protocolName,
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
@@ -494,7 +543,11 @@ class _ActiveSessionCard extends ConsumerWidget {
                 final live = index < session.liveDevices.length
                     ? session.liveDevices[index]
                     : null;
-                final remaining = live?.remainingSeconds;
+                final remaining = _displayRemainingSeconds(
+                  live: live,
+                  isPlusOwnRun: isPlusOwnRun,
+                  plusStart: plusStart,
+                );
                 final deviceStatus = _effectiveDeviceStatus(index);
                 final statusColor = switch (deviceStatus) {
                   SessionStatus.paused => ThemeConstants.warning,
@@ -583,9 +636,7 @@ class _ActiveSessionCard extends ConsumerWidget {
             Row(
               children: [
                 Icon(
-                  canRemoteControl
-                      ? Icons.touch_app_outlined
-                      : Icons.visibility_outlined,
+                  Icons.touch_app_outlined,
                   size: 14,
                   color: ThemeConstants.textTertiary,
                 ),
@@ -593,7 +644,7 @@ class _ActiveSessionCard extends ConsumerWidget {
                 Text(
                   canRemoteControl
                       ? 'Tap to open & control'
-                      : 'View only (BLE session on another device)',
+                      : 'Tap to open & stop (BLE on another device)',
                   style: TextStyle(
                     fontSize: 11,
                     color: ThemeConstants.textTertiary,

@@ -19,6 +19,7 @@ import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import '../../domain/protocol_model.dart';
 import '../providers/protocol_provider.dart';
+import '../providers/protocol_plus_detail_provider.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../payments/presentation/providers/token_balance_provider.dart';
 import '../../../payments/presentation/widgets/token_balance_badge.dart';
@@ -141,32 +142,27 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        /// 🔥 TOP BAR — "Home" (left) + logo (CENTER) + token badge (right).
-                        /// Stack keeps the logo dead-center; the Row places Home
-                        /// on the left and the badge (natural width) on the right.
-                        Stack(
-                          alignment: Alignment.center,
+                        /// 🔥 TOP BAR — full-width logo on its own row, then a
+                        /// row below it with "Home" (left) + token badge (right).
+                        const _HomeLogo(),
+                        const SizedBox(height: 2),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            const _HomeLogo(),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Home',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: ThemeConstants.textPrimary,
-                                  ),
-                                ),
-                                const Spacer(),
-                                // Token chip — tap for the full plan/usage
-                                // breakdown (web parity).
-                                const TokenBalanceBadge(),
-                              ],
+                            Text(
+                              'Home',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: ThemeConstants.textPrimary,
+                              ),
                             ),
+                            const Spacer(),
+                            // Token chip — tap for the full plan/usage
+                            // breakdown (web parity).
+                            const TokenBalanceBadge(),
                           ],
                         ),
 
@@ -333,9 +329,8 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                         .where((protocol) =>
                             filteredProtocolIds.contains(protocol.id))
                         .toList()
-                      ..sort((a, b) => a.templateName
-                          .toLowerCase()
-                          .compareTo(b.templateName.toLowerCase()));
+                      ..sort((a, b) =>
+                          naturalCompare(a.templateName, b.templateName));
 
                     if (visibleProtocols.isEmpty) {
                       return const SliverFillRemaining(
@@ -351,10 +346,9 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
                 );
               }
 
-              final sortedProtocols = [...protocols]..sort((a, b) => a
-                  .templateName
-                  .toLowerCase()
-                  .compareTo(b.templateName.toLowerCase()));
+              final sortedProtocols = [...protocols]
+                ..sort((a, b) =>
+                    naturalCompare(a.templateName, b.templateName));
 
               return _ProtocolList(protocols: sortedProtocols);
             },
@@ -932,26 +926,37 @@ class _HomeLogo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    // Both logos are SVGs sharing the SAME viewBox, so one width renders an
-    // identical size in either theme. Dark uses the white variant (which keeps
-    // the tan accent); light uses the black variant.
-    return SvgPicture.asset(
-      isDark
-          ? 'assets/images/Hydrawav3_White_Logo.svg'
-          : 'assets/images/Hydrawav3_Black_Logo.svg',
-      width: 200,
-      fit: BoxFit.contain,
+    // Both logos are SVGs sharing the SAME viewBox (643.8 x 226.2 — tall relative
+    // to the single-line wordmark, so it carries a lot of top/bottom whitespace).
+    // Render full-width via BoxFit.fitWidth, then crop the empty bands above/below
+    // with ClipRect + Align(heightFactor) so the logo isn't surrounded by big
+    // vertical margins. Tune [_logoHeightFactor] (→1.0 = no crop, less = tighter).
+    const double logoHeightFactor = 0.62;
+    return ClipRect(
+      child: Align(
+        alignment: Alignment.center,
+        heightFactor: logoHeightFactor,
+        child: SizedBox(
+          width: double.infinity,
+          child: SvgPicture.asset(
+            isDark
+                ? 'assets/images/Hydrawav3_White_Logo.svg'
+                : 'assets/images/Hydrawav3_Black_Logo.svg',
+            fit: BoxFit.fitWidth,
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _ProtocolCard extends StatelessWidget {
+class _ProtocolCard extends ConsumerWidget {
   final Protocol protocol;
 
   const _ProtocolCard({required this.protocol});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cardColor = Theme.of(context).brightness == Brightness.dark
         ? ThemeConstants.surface
         : Colors.white;
@@ -959,6 +964,25 @@ class _ProtocolCard extends StatelessWidget {
     // Plan gating (web parity): a protocol not included in the org's plan is
     // shown disabled (greyed + a lock) and can't be opened.
     final locked = !protocol.active;
+
+    // A Protocol Plus entry has no cycles of its own and the backend defaults
+    // its sessions to 1 — both wrong for the card. Pull the populated sequence
+    // and show the SUMMED cycles/sessions across its sub-protocols instead.
+    final isPlus = protocol.isProtocolPlus;
+    var cyclesCount = protocol.cycles.length;
+    var sessionsCount = protocol.sessions;
+    var countsReady = !isPlus;
+    if (isPlus) {
+      final detail = ref.watch(protocolPlusDetailProvider(protocol.id)).asData?.value;
+      if (detail != null) {
+        final totals = protocolPlusTotals(detail);
+        if (totals.cycles != null) {
+          cyclesCount = totals.cycles!;
+          sessionsCount = totals.sessions!;
+          countsReady = true;
+        }
+      }
+    }
 
     return Opacity(
       opacity: locked ? 0.55 : 1,
@@ -984,7 +1008,9 @@ class _ProtocolCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const GlowIconBox(icon: Icons.science_rounded),
+                GlowIconBox(
+                  icon: isPlus ? Icons.layers_rounded : Icons.science_rounded,
+                ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
@@ -998,6 +1024,7 @@ class _ProtocolCard extends StatelessWidget {
                     ),
                   ),
                 ),
+                const SizedBox(width: 8),
                 Icon(
                   locked
                       ? Icons.lock_outline_rounded
@@ -1007,25 +1034,43 @@ class _ProtocolCard extends StatelessWidget {
                 ),
               ],
             ),
+            // Full description shown on the list card too (not just the detail
+            // screen), so users can tell protocols apart without opening each.
+            if (protocol.description.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                protocol.description,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.25,
+                  color: ThemeConstants.textSecondary,
+                ),
+              ),
+            ],
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               StatChip(
                 icon: Icons.timer_outlined,
                 value: protocol.totalDuration.formatted,
               ),
-              const SizedBox(width: 8),
-              StatChip(
-                icon: Icons.repeat_rounded,
-                value: '${protocol.cycles.length}',
-                label: 'cycles',
-              ),
-              const SizedBox(width: 8),
-              StatChip(
-                icon: Icons.play_circle_outline_rounded,
-                value: '${protocol.sessions}',
-                label: 'sess',
-              ),
+              // For a Plus entry these are the summed totals across the
+              // sequence; hidden until the detail resolves so we never flash a
+              // wrong "0 cycles / 1 sess".
+              if (countsReady) ...[
+                StatChip(
+                  icon: Icons.repeat_rounded,
+                  value: '$cyclesCount',
+                  label: 'cycles',
+                ),
+                StatChip(
+                  icon: Icons.play_circle_outline_rounded,
+                  value: '$sessionsCount',
+                  label: 'sess',
+                ),
+              ],
             ],
           ),
           ],

@@ -15,6 +15,7 @@ import '../../../core/storage/secure_storage.dart';
 import '../../../core/utils/logger.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../intake/domain/intake_models.dart';
+import '../../ble/data/ble_repository.dart';
 import '../../ble/domain/ble_device_model.dart';
 import '../../ble/services/ble_connector.dart';
 import '../../devices/presentation/providers/wifi_devices_provider.dart';
@@ -472,9 +473,10 @@ class ProtocolPlusController {
       // BLE registers by the firmware-reported bluetoothId (captured over BLE
       // after connect), not the phone-local id; Wi-Fi uses the macAddress.
       var serverDeviceId = plan.deviceId;
+      String? connectedName;
       if (transport == 'ble') {
-        final fwId =
-            _ref.read(bleConnectorProvider).getFirmwareSessionId(plan.deviceId);
+        final connector = _ref.read(bleConnectorProvider);
+        final fwId = connector.getFirmwareSessionId(plan.deviceId);
         if (fwId != null && fwId.isNotEmpty) {
           serverDeviceId = fwId;
         } else {
@@ -483,9 +485,15 @@ class ProtocolPlusController {
             'using local id',
           );
         }
+        // Live "Connected to <name>" advertised name — used when neither the
+        // org registry nor the paired list resolved a name.
+        connectedName = connector.getConnectedDeviceName(plan.deviceId);
       }
-      final deviceName =
-          nameByDevice[plan.deviceId.trim().toUpperCase()] ?? plan.deviceId;
+      // Send the device's NAME (never the raw mac/bluetoothId): registered name
+      // → live connected name → mac as last resort.
+      final deviceName = nameByDevice[plan.deviceId.trim().toUpperCase()] ??
+          connectedName ??
+          plan.deviceId;
       try {
         final result = await startProtocolPlus(
           protocolPlusId: plan.plusId,
@@ -562,29 +570,45 @@ class ProtocolPlusController {
       return parts.join(':');
     }
 
+    // Friendly names are the name the device was CONNECTED/registered with, from
+    // BOTH sources (one per transport): the org WiFi/cloud registry AND this
+    // phone's locally-paired BLE devices. The WiFi org provider deliberately
+    // excludes BLE, so without the paired list a BLE device's name would wrongly
+    // fall back to its raw mac/bluetoothId.
+    final nameByMac = <String, String>{};
     try {
       final registered = await _ref.read(wifiDevicesByOrgProvider.future);
-      final nameByMac = <String, String>{
-        for (final d in registered)
-          if (d.name.trim().isNotEmpty) norm(d.macAddress): d.name,
-      };
-      for (final deviceId in deviceIds) {
-        final id = norm(deviceId);
-        final candidates = <String>[id];
-        final plusOne = adjacentMac(id, 1);
-        if (plusOne != null) candidates.add(plusOne);
-        final minusOne = adjacentMac(id, -1);
-        if (minusOne != null) candidates.add(minusOne);
-        for (final c in candidates) {
-          final name = nameByMac[c];
-          if (name != null) {
-            nameByDevice[id] = name;
-            break;
-          }
+      for (final d in registered) {
+        if (d.name.trim().isNotEmpty) nameByMac[norm(d.macAddress)] = d.name;
+      }
+    } catch (e) {
+      appLogger.w('ProtocolPlus: could not load WiFi device names: $e');
+    }
+    try {
+      final paired = await _ref.read(bleRepositoryProvider).getPairedDevices();
+      for (final p in paired) {
+        if (p.name.trim().isNotEmpty) {
+          nameByMac.putIfAbsent(norm(p.macAddress), () => p.name);
         }
       }
     } catch (e) {
-      appLogger.w('ProtocolPlus: could not resolve device names: $e');
+      appLogger.w('ProtocolPlus: could not load paired BLE device names: $e');
+    }
+
+    for (final deviceId in deviceIds) {
+      final id = norm(deviceId);
+      final candidates = <String>[id];
+      final plusOne = adjacentMac(id, 1);
+      if (plusOne != null) candidates.add(plusOne);
+      final minusOne = adjacentMac(id, -1);
+      if (minusOne != null) candidates.add(minusOne);
+      for (final c in candidates) {
+        final name = nameByMac[c];
+        if (name != null) {
+          nameByDevice[id] = name;
+          break;
+        }
+      }
     }
     return nameByDevice;
   }
@@ -924,6 +948,28 @@ class ProtocolPlusController {
     if (_terminalHandled) return;
     _terminalHandled = true;
     final localId = _localSessionId;
+    final engine = _engine;
+
+    // Belt-and-suspenders terminal STOP. Nothing else guarantees the physical
+    // device halts at end-of-run: the server's stop can't reach a BLE unit at
+    // all, and the firmware self-stop (per-protocol totalDuration) is the only
+    // thing ending a Plus run — if it misfires (a late/half-applied switch, a
+    // wrong duration) the device keeps running long after the app shows
+    // "completed". Explicitly STOP every bound device here. stopDevice() is
+    // idempotent and already handles WiFi (playCmd=2) vs BLE and the
+    // disconnected/idle-between-protocols Plus case, so a redundant stop on an
+    // already-stopped device is harmless.
+    if (engine != null) {
+      for (final b in _bindings) {
+        try {
+          await engine.stopDevice(b.localMac);
+        } catch (e) {
+          appLogger.w(
+            'ProtocolPlus: terminal stopDevice(${b.localMac}) failed: $e',
+          );
+        }
+      }
+    }
 
     if (stopServer) {
       try {

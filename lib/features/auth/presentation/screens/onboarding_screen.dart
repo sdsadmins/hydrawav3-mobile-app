@@ -42,6 +42,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _state = TextEditingController();
   final _zip = TextEditingController();
   final _country = TextEditingController();
+  String? _dob; // yyyy-MM-dd (date of birth)
   bool _obscurePassword = true;
 
   // Step 2 — certification draft.
@@ -83,6 +84,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         state: _state.text.trim(),
         zip: _zip.text.trim(),
         country: _country.text.trim(),
+        dateOfBirth: _dob ?? '',
       );
 
   void _onPrimary() {
@@ -422,6 +424,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: _field(_country, 'Country',
                   req: true, hint: 'USA', err: s.step1Errors['country'])),
         ]),
+        _dateField('Date of Birth', _dob,
+            (v) => setState(() => _dob = v), req: true),
+        if (s.step1Errors['dateOfBirth'] != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(s.step1Errors['dateOfBirth']!,
+                style: TextStyle(fontSize: 12, color: ThemeConstants.error)),
+          ),
       ],
     );
   }
@@ -812,21 +822,28 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _dateField(String label, String? value, ValueChanged<String> onPicked) {
+  Widget _dateField(String label, String? value, ValueChanged<String> onPicked,
+      {bool req = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label(label, false),
+        _label(label, req),
         const SizedBox(height: 6),
         InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () async {
             final now = DateTime.now();
-            final picked = await showDatePicker(
+            // Cascading Year → Month → Day picker (no month `< >` navigation):
+            // the user picks the year first, then the month, then the day.
+            final picked = await showModalBottomSheet<DateTime>(
               context: context,
-              initialDate: now,
-              firstDate: DateTime(now.year - 60),
-              lastDate: DateTime(now.year + 60),
+              backgroundColor: Colors.transparent,
+              isScrollControlled: true,
+              builder: (_) => _YearMonthDayPicker(
+                firstYear: now.year - 60,
+                lastYear: now.year + 60,
+                initialDate: DateTime.tryParse(value ?? '') ?? now,
+              ),
             );
             if (picked != null) {
               String two(int n) => n.toString().padLeft(2, '0');
@@ -1023,10 +1040,266 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Future<void> _launch(String url) async {
+    // Open INSIDE the app (SFSafariViewController on iOS / Custom Tab on
+    // Android), not the external/default browser — App Store Guideline 4.
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
     }
+  }
+}
+
+/// A cascading date picker shown in a bottom sheet that selects the date in
+/// sequence — **Year → Month → Day** — instead of the Material calendar's
+/// month `< >` navigation. Returns the chosen [DateTime] via `Navigator.pop`,
+/// or null if dismissed.
+class _YearMonthDayPicker extends StatefulWidget {
+  final int firstYear;
+  final int lastYear;
+  final DateTime initialDate;
+  const _YearMonthDayPicker({
+    required this.firstYear,
+    required this.lastYear,
+    required this.initialDate,
+  });
+
+  @override
+  State<_YearMonthDayPicker> createState() => _YearMonthDayPickerState();
+}
+
+class _YearMonthDayPickerState extends State<_YearMonthDayPicker> {
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  // Row height used to estimate the initial year-grid scroll offset
+  // (mainAxisExtent 48 + mainAxisSpacing 8).
+  static const double _yearRowHeight = 56;
+
+  int _step = 0; // 0 = year, 1 = month, 2 = day
+  late int _year;
+  late int _month;
+  late int _day;
+  late final ScrollController _yearController;
+
+  @override
+  void initState() {
+    super.initState();
+    _year =
+        widget.initialDate.year.clamp(widget.firstYear, widget.lastYear);
+    _month = widget.initialDate.month;
+    _day = widget.initialDate.day;
+    // Years are listed newest-first, so the selected year's row index is
+    // (lastYear - year) ~/ 3. Start the grid scrolled near it.
+    final rowIndex = ((widget.lastYear - _year) ~/ 3);
+    _yearController =
+        ScrollController(initialScrollOffset: rowIndex * _yearRowHeight);
+  }
+
+  @override
+  void dispose() {
+    _yearController.dispose();
+    super.dispose();
+  }
+
+  void _commitDay(int day) {
+    final maxDay = DateUtils.getDaysInMonth(_year, _month);
+    Navigator.of(context).pop(DateTime(_year, _month, day.clamp(1, maxDay)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: ThemeConstants.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewPadding.bottom + 12,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 6),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: ThemeConstants.border,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          _header(),
+          const SizedBox(height: 8),
+          SizedBox(height: 320, child: _body()),
+        ],
+      ),
+    );
+  }
+
+  Widget _header() {
+    const titles = ['Select Year', 'Select Month', 'Select Day'];
+    final subtitle = _step == 0
+        ? ''
+        : (_step == 1 ? '$_year' : '${_months[_month - 1]} $_year');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          if (_step > 0)
+            IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              color: ThemeConstants.textSecondary,
+              onPressed: () => setState(() => _step--),
+            )
+          else
+            const SizedBox(width: 48),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  titles[_step],
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: ThemeConstants.textTertiary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 48),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    switch (_step) {
+      case 0:
+        return _yearGrid();
+      case 1:
+        return _monthGrid();
+      default:
+        return _dayGrid();
+    }
+  }
+
+  Widget _yearGrid() {
+    final years = [
+      for (var y = widget.lastYear; y >= widget.firstYear; y--) y,
+    ];
+    return GridView.builder(
+      controller: _yearController,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisExtent: 48,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: years.length,
+      itemBuilder: (_, i) {
+        final y = years[i];
+        return _cell(
+          label: '$y',
+          selected: y == _year,
+          onTap: () => setState(() {
+            _year = y;
+            _step = 1;
+          }),
+        );
+      },
+    );
+  }
+
+  Widget _monthGrid() {
+    return GridView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisExtent: 56,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemCount: 12,
+      itemBuilder: (_, i) {
+        final m = i + 1;
+        return _cell(
+          label: _months[i],
+          selected: m == _month,
+          onTap: () => setState(() {
+            _month = m;
+            _step = 2;
+          }),
+        );
+      },
+    );
+  }
+
+  Widget _dayGrid() {
+    final days = DateUtils.getDaysInMonth(_year, _month);
+    return GridView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 6,
+        mainAxisExtent: 44,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: days,
+      itemBuilder: (_, i) {
+        final d = i + 1;
+        return _cell(
+          label: '$d',
+          selected: d == _day && _day <= days,
+          onTap: () => _commitDay(d),
+        );
+      },
+    );
+  }
+
+  Widget _cell({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected
+              ? ThemeConstants.accent.withValues(alpha: 0.16)
+              : ThemeConstants.surfaceVariant.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+            width: selected ? 1.4 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+            color:
+                selected ? ThemeConstants.accent : ThemeConstants.textPrimary,
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1123,8 +1396,9 @@ class _OnboardingLogo extends StatelessWidget {
   }
 }
 
-/// Shown after a successful submit — no auto-login (the endpoint returns no
-/// user session), so we route back to sign in.
+/// Shown after a successful submit. The web-parity flow creates the account +
+/// organization and links them; we don't auto-login here, so the practitioner
+/// signs in with the username/password they just set.
 class _SuccessView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -1149,7 +1423,7 @@ class _SuccessView extends StatelessWidget {
                     size: 40, color: ThemeConstants.success),
               ),
               const SizedBox(height: 22),
-              Text('Application submitted',
+              Text('Account created',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontSize: 20,
@@ -1157,8 +1431,8 @@ class _SuccessView extends StatelessWidget {
                       color: ThemeConstants.textPrimary)),
               const SizedBox(height: 8),
               Text(
-                'Thanks! We\'ll review your details and set up your account. '
-                'You\'ll be able to sign in once it\'s approved.',
+                'Your account and business are set up. '
+                'Sign in with your username and password to get started.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 14,
@@ -1167,7 +1441,7 @@ class _SuccessView extends StatelessWidget {
               ),
               const SizedBox(height: 28),
               HwButton(
-                label: 'Back to sign in',
+                label: 'Sign in',
                 width: double.infinity,
                 onPressed: () => context.go(RoutePaths.login),
               ),
