@@ -38,7 +38,7 @@ class AppConstants {
 
   // Version and Release Notes
   static const String appVersion = '1.0.3';
-  static const String buildNumber = '11';
+  static const String buildNumber = '3';
   static const String releaseNotes = '''
 Version 1.0.3
 - Your plan details now correctly show remaining session minutes
