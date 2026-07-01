@@ -1545,6 +1545,24 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       (_deviceStopwatches[id]?.elapsed ?? Duration.zero) +
       (_deviceClockOffset[id] ?? Duration.zero);
 
+  /// True when [id]'s Protocol Plus sequence has no further sub-protocol to
+  /// switch to — i.e. it is running the LAST one, so when that finishes the
+  /// whole run is genuinely over (no START_PROTOCOL arrives after it). Handles
+  /// both per-device sequences (mixed/multi-Plus) and the single-device
+  /// sequence. When the sequence is unknown (length 0) we treat it as final so
+  /// an elapsed whole-sequence clock can still end the run rather than hang
+  /// "running" forever — the failure mode this guards against.
+  bool _isPlusDeviceOnFinalProtocol(String id) {
+    final perDeviceSeq = state.protocolPlusSequenceByDevice[id];
+    final seqLen = (perDeviceSeq != null && perDeviceSeq.isNotEmpty)
+        ? perDeviceSeq.length
+        : state.protocolPlusSequence.length;
+    if (seqLen <= 1) return true; // single/unknown → nothing comes next
+    final index =
+        state.protocolPlusIndexByDevice[id] ?? state.protocolPlusIndex;
+    return index >= seqLen - 1;
+  }
+
   /// Firmware runtime of a single sub-protocol, in seconds — used to predict
   /// when one protocol in the stack ends and the break to the next begins.
   /// Mirrors the duration the server uses to schedule START_PROTOCOL switches.
@@ -1910,18 +1928,26 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     AdvancedSettings advancedSettings,
   ) {
     final cycles = p.cycles;
-    if (cycles.length < 3) return p.totalDurationSeconds;
+    // No cycles to compute from (e.g. a Protocol Plus parent entry) → fall back
+    // to the server-provided total. Real sub-protocols always carry cycles here.
+    if (cycles.isEmpty) return p.totalDurationSeconds;
 
-    // Match web calculateFirmwareTotalDuration behavior.
-    final c2 = cycles[0];
-    final c3 = cycles[1];
-    final c4 = cycles[2];
-    int baseTimeline = (c2.repetitions *
-            ((c2.durationSeconds + c2.pauseSeconds).toInt())) +
-        c2.cyclePause.toInt() +
-        (c3.repetitions * ((c3.durationSeconds + c3.pauseSeconds).toInt())) +
-        c3.cyclePause.toInt() +
-        (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
+    // Mirror web calculateFirmwareTotalDuration: sum EVERY cycle's active time,
+    // adding the trailing inter-cycle pause for all cycles except the last. The
+    // old code summed only the first three cycles and, for <3-cycle protocols,
+    // returned the server's nominal totalDuration — which could leak a whole-
+    // sequence (Protocol Plus) total into a single sub-protocol's firmware
+    // command, making the firmware's self-stop clock run far past the app's
+    // "completed" so the device kept running.
+    int baseTimeline = 0;
+    for (var i = 0; i < cycles.length; i++) {
+      final c = cycles[i];
+      baseTimeline +=
+          c.repetitions * ((c.durationSeconds + c.pauseSeconds).toInt());
+      if (i < cycles.length - 1) {
+        baseTimeline += c.cyclePause.toInt();
+      }
+    }
 
     if (p.sessions > 1) {
       baseTimeline = (baseTimeline * p.sessions) +
@@ -2374,14 +2400,38 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         final devElapsed =
             sw.elapsed + (_deviceClockOffset[id] ?? Duration.zero);
         if (devElapsed >= timerState.totalDuration) {
-          // Protocol Plus: a single protocol finishing is NOT the end of the
-          // session. The firmware stops itself and the next protocol arrives
-          // via START_PROTOCOL, so DON'T mark completed or send STOP here —
-          // just clamp the displayed time and keep the device "running" so the
-          // session stays live for the upcoming switch.
+          // Protocol Plus: a MID-sequence protocol finishing is NOT the end of
+          // the session — the firmware stops itself and the next protocol
+          // arrives via START_PROTOCOL, so we keep the device "running" and just
+          // clamp the display while waiting for that switch. But on the LAST
+          // sub-protocol nothing comes next, so we MUST complete here — else the
+          // engine sits in `running` at 00:00 forever: it never goes terminal,
+          // so _finishRun never runs (device never gets a STOP, the foreground
+          // notification never clears) and the session screen stays "running"
+          // while the live card already reads "completed".
           final deviceIsPlus = _protocolPlusDeviceIds.contains(id) ||
               (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty);
-          if (deviceIsPlus) {
+          // Decide whether the WHOLE Plus run is genuinely over.
+          // `timerState.totalDuration` is the whole-sequence total, so reaching
+          // it means every switch should already have happened.
+          final segEnd = _plusSegmentEndByDevice[id];
+          final onFinal = _isPlusDeviceOnFinalProtocol(id);
+          // Clean end: on the last sub-protocol and its own segment has elapsed.
+          // The segment-end guard avoids an early cut-off when the last switch
+          // landed late (segEnd pushed past the total) — let it finish first.
+          final finalProtocolDone =
+              onFinal && (segEnd == null || devElapsed >= segEnd);
+          // Watchdog: well past the whole-sequence total but NOT on the final
+          // sub-protocol → a mid-sequence START_PROTOCOL switch was lost and
+          // none is realistically still coming. End the run instead of hanging
+          // "running" at 00:00 forever. Switches always occur before the total,
+          // so on a healthy run we're already on the final protocol here and
+          // this never trips.
+          final stuckPastTotal = !onFinal &&
+              devElapsed >=
+                  timerState.totalDuration + const Duration(seconds: 120);
+          final plusRunDone = finalProtocolDone || stuckPastTotal;
+          if (deviceIsPlus && !plusRunDone) {
             updatedTimers[id] = timerState.copyWith(
               elapsed: timerState.totalDuration,
               isRunning: true,

@@ -135,8 +135,18 @@ class _TokenDetailsSheet extends ConsumerWidget {
                       Expanded(
                         child: _StatCard(
                           icon: Icons.play_circle_outline_rounded,
-                          label: 'Sessions left',
-                          value: plan?.sessionsAvailable?.toString() ?? ph,
+                          // Web parity: the header shows the sessions quota as
+                          // minutes derived from `sessionDurationSeconds`. Fall
+                          // back to the legacy per-session count if a backend
+                          // still returns `sessionsAvailable` instead.
+                          label: plan?.sessionDurationSeconds != null
+                              ? 'Sessions (min)'
+                              : 'Sessions left',
+                          value: plan?.sessionDurationSeconds != null
+                              ? (plan!.sessionDurationSeconds! / 60)
+                                  .round()
+                                  .toString()
+                              : (plan?.sessionsAvailable?.toString() ?? ph),
                         ),
                       ),
                       const SizedBox(width: 10),
