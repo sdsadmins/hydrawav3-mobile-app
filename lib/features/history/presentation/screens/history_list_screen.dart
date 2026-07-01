@@ -41,20 +41,26 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     });
   }
 
-  bool _isLiveStatus(SessionStatus status) {
-    return status == SessionStatus.running || status == SessionStatus.paused;
+  /// A session stays on the Live tab as long as it's still present in the
+  /// backend live feed and hasn't been stopped — that includes the fully-paused
+  /// case AND the completed case. Completed sessions are intentionally kept
+  /// (not auto-cleared) so the user can still open them and hit Stop All to send
+  /// the backend stop and remove them from the feed. They only disappear once
+  /// the backend drops them (after Stop All).
+  bool _isVisibleStatus(SessionStatus status) {
+    return status == SessionStatus.running ||
+        status == SessionStatus.paused ||
+        status == SessionStatus.completed;
   }
 
-  /// Keep sessions visible while at least one device is still live,
-  /// including the fully-paused case where no device is currently running.
   bool _isVisibleActiveSession(ActiveSession session) {
-    if (_isLiveStatus(session.status)) {
+    if (_isVisibleStatus(session.status)) {
       return true;
     }
     for (final deviceId in session.deviceIds) {
       final deviceStatus =
           session.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (_isLiveStatus(deviceStatus)) {
+      if (_isVisibleStatus(deviceStatus)) {
         return true;
       }
     }
@@ -422,22 +428,25 @@ class _ActiveSessionCard extends ConsumerWidget {
           );
           return;
         }
-        // Foreign WiFi run → open the live REMOTE VIEW (no local engine, no
-        // restart; display + control come from the backend feed).
-        if (canRemoteControl) {
-          context.pushNamed(
-            RouteNames.session,
-            extra: {
-              'remoteView': true,
-              'backendSessionId': session.id,
-              'sessionId': session.id,
-              'protocolId': '',
-              'deviceIds': session.deviceIds,
-              'transport': session.transport,
-              'skipEngineBootstrap': true,
-            },
-          );
-        }
+        // Every other case opens the live REMOTE VIEW (no local engine, no
+        // restart; display comes from the backend feed). This covers foreign
+        // WiFi (full broker control), foreign BLE (Pause All / Stop All routed
+        // through the backend — we can't reach the pads, but we can stop &
+        // clear the session), and an own run whose local engine is already
+        // gone (e.g. completed). The session-wide Pause All / Stop All live on
+        // that screen's top control card.
+        context.pushNamed(
+          RouteNames.session,
+          extra: {
+            'remoteView': true,
+            'backendSessionId': session.id,
+            'sessionId': session.id,
+            'protocolId': '',
+            'deviceIds': session.deviceIds,
+            'transport': session.transport,
+            'skipEngineBootstrap': true,
+          },
+        );
       },
       padding: const EdgeInsets.all(16),
       showShadow: false,
@@ -627,9 +636,7 @@ class _ActiveSessionCard extends ConsumerWidget {
             Row(
               children: [
                 Icon(
-                  canRemoteControl
-                      ? Icons.touch_app_outlined
-                      : Icons.visibility_outlined,
+                  Icons.touch_app_outlined,
                   size: 14,
                   color: ThemeConstants.textTertiary,
                 ),
@@ -637,7 +644,7 @@ class _ActiveSessionCard extends ConsumerWidget {
                 Text(
                   canRemoteControl
                       ? 'Tap to open & control'
-                      : 'View only (BLE session on another device)',
+                      : 'Tap to open & stop (BLE on another device)',
                   style: TextStyle(
                     fontSize: 11,
                     color: ThemeConstants.textTertiary,

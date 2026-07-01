@@ -6,11 +6,13 @@ class SessionHistoryItem {
   final List<HistoryDiscomfort> discomfortAreas;
   final String? sessionNotes;
   final DateTime? createdAt;
+  final String? createdBy;
 
   const SessionHistoryItem({
     this.id,
     this.clientId,
     this.clientType,
+    this.createdBy,
     this.protocols = const [],
     this.discomfortAreas = const [],
     this.sessionNotes,
@@ -34,6 +36,7 @@ class SessionHistoryItem {
               .toList() ??
           [],
       sessionNotes: json['sessionNotes'] as String?,
+      createdBy: json['createdBy']?.toString(),
       createdAt: json['createdAt'] != null
           ? DateTime.tryParse(json['createdAt'] as String)
           : null,

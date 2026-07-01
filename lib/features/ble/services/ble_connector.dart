@@ -123,6 +123,16 @@ class BleConnector {
   Map<String, int> get currentBatteryLevels => Map.unmodifiable(_batteryLevels);
 
   List<String> get connectedDeviceIds => _connectedDevices.keys.toList();
+
+  /// The advertised/platform name of the currently-connected device [deviceId]
+  /// (e.g. "Hydra-test1"), or null if it isn't connected or has no name. This is
+  /// the same value logged as "BLE: Connected to …" and is the most direct
+  /// source of a BLE device's human name when reporting a run to the backend.
+  String? getConnectedDeviceName(String deviceId) {
+    final name = _connectedDevices[deviceId]?.platformName;
+    return (name != null && name.trim().isNotEmpty) ? name.trim() : null;
+  }
+
   BleGattInfo? getGattInfo(String deviceId) => _gattInfoByDevice[deviceId];
   String? getFirmwareSessionId(String deviceId) =>
       _firmwareSessionIdByDevice[deviceId];

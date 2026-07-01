@@ -14,6 +14,14 @@ class SubscriptionPlan {
   final int? sessionsAvailable;
   final int? aiReportsAvailable;
 
+  /// Remaining session quota expressed as duration in seconds (backend
+  /// `sessionDurationSeconds`). The web header renders this as "Sessions (min)"
+  /// (`sessionDurationSeconds / 60`). The backend migrated the sessions quota
+  /// from a per-session count (`sessionsAvailable`) to this duration model, so
+  /// this is the field to prefer; `sessionsAvailable` is kept only as a
+  /// fallback for older backends.
+  final int? sessionDurationSeconds;
+
   /// Max devices this plan can run concurrently (backend `deviceLimit`).
   /// `0` (or null) means unlimited.
   final int? deviceLimit;
@@ -29,6 +37,7 @@ class SubscriptionPlan {
     this.remainingTokens,
     this.sessionsAvailable,
     this.aiReportsAvailable,
+    this.sessionDurationSeconds,
     this.deviceLimit,
   });
 
@@ -55,6 +64,8 @@ class SubscriptionPlan {
       remainingTokens: (json['remainingTokens'] as num?)?.toDouble(),
       sessionsAvailable: (json['sessionsAvailable'] as num?)?.toInt(),
       aiReportsAvailable: (json['aiReportsAvailable'] as num?)?.toInt(),
+      sessionDurationSeconds:
+          (json['sessionDurationSeconds'] as num?)?.toInt(),
       deviceLimit: (json['deviceLimit'] as num?)?.toInt(),
     );
   }
