@@ -30,6 +30,12 @@ class RouteNames {
   static const String aiReports = 'ai-reports';
   static const String aiReportClients = 'ai-report-clients';
 
+  // Client device lease
+  static const String clientLease = 'client-lease';
+
+  // At-home client session (post client-login landing)
+  static const String clientHome = 'client-home';
+
   // Device sub-routes
   static const String deviceRegister = 'device-register';
   static const String deviceDetail = 'device-detail';
@@ -74,6 +80,8 @@ class RoutePaths {
   static const String aiReport = '/ai-report';
   static const String aiReports = '/ai-reports';
   static const String aiReportClients = '/ai-report-clients';
+  static const String clientLease = '/client-lease';
+  static const String clientHome = '/client-home';
   static const String deviceRegister = '/devices/register';
   static const String deviceDetail = '/devices/:id';
   static const String sessionDetail = '/history/:id';

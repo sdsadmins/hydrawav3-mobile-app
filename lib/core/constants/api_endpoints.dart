@@ -47,12 +47,22 @@ class ApiEndpoints {
   static String sensorsByOrg(String orgId) =>
       '/admin/sensors/organisation/$orgId';
 
+  // Client auth (Node Nest — at-home client login, distinct from the Django
+  // practitioner `/auth/login`). Relative (no leading slash) so it appends to
+  // the Node base URL path. Login body `{clientName, password}`; rejected with
+  // "Lease is not active" unless the client's lease is active.
+  static const String clientAuthLogin = 'auth/login';
+  static const String clientAuthRefresh = 'auth/refresh';
+
   // Clients
   static const String clients = '/clients';
   static String clientsByOrg(String orgId) => '/clients/$orgId';
   static String clientDetails(String orgId) => '/clients/details/$orgId';
   static String clientById(String clientId) =>
       '/clients/clientDetails/$clientId';
+  // `PATCH /clients/:clientId` — lease activation / deactivation / password
+  // reset (web parity: `updateClient` in `actions/action.ts`).
+  static String clientPatch(String clientId) => '/clients/$clientId';
 
   // AI reports (Node Nest — parity with web `actions/action.ts` + `hydrawav3-api.ts`).
   // Two-phase queued generation: POST analyze -> poll status -> POST ai-reports.

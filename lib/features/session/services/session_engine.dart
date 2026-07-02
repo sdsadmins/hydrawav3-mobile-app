@@ -202,6 +202,11 @@ class SessionEngineState {
   final Map<String, List<String>> protocolPlusSequenceByDevice;
   final Map<String, int> protocolPlusIndexByDevice;
 
+  /// Per-device ordered sub-protocol durations (seconds), aligned index-for-index
+  /// with [protocolPlusSequenceByDevice]. Lets the live tracker show each
+  /// protocol's time under its name.
+  final Map<String, List<int>> protocolPlusDurationsByDevice;
+
   /// Per-device delay (seconds) inserted between stacked protocols on a
   /// Protocol Plus run (the `delay` field on the protocol-plus document).
   /// Shown in the live session tracker for Plus devices.
@@ -242,6 +247,7 @@ class SessionEngineState {
     this.protocolPlusNameByDevice = const {},
     this.protocolPlusSequenceByDevice = const {},
     this.protocolPlusIndexByDevice = const {},
+    this.protocolPlusDurationsByDevice = const {},
     this.protocolPlusDelayByDevice = const {},
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
@@ -268,6 +274,7 @@ class SessionEngineState {
     Map<String, String>? protocolPlusNameByDevice,
     Map<String, List<String>>? protocolPlusSequenceByDevice,
     Map<String, int>? protocolPlusIndexByDevice,
+    Map<String, List<int>>? protocolPlusDurationsByDevice,
     Map<String, int>? protocolPlusDelayByDevice,
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
@@ -298,6 +305,8 @@ class SessionEngineState {
           protocolPlusSequenceByDevice ?? this.protocolPlusSequenceByDevice,
       protocolPlusIndexByDevice:
           protocolPlusIndexByDevice ?? this.protocolPlusIndexByDevice,
+      protocolPlusDurationsByDevice:
+          protocolPlusDurationsByDevice ?? this.protocolPlusDurationsByDevice,
       protocolPlusDelayByDevice:
           protocolPlusDelayByDevice ?? this.protocolPlusDelayByDevice,
       protocolPlusOnBreakByDevice:
@@ -1525,6 +1534,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     Map<String, String> nameByDevice,
     Map<String, List<String>> sequenceByDevice, {
     Map<String, int> delayByDevice = const {},
+    Map<String, List<int>> durationsByDevice = const {},
   }) {
     if (!_isActive || sequenceByDevice.isEmpty) return;
     _isProtocolPlus = true;
@@ -1536,6 +1546,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       },
       protocolPlusIndexByDevice: {
         for (final id in sequenceByDevice.keys) id: 0,
+      },
+      protocolPlusDurationsByDevice: {
+        for (final e in durationsByDevice.entries)
+          e.key: List<int>.from(e.value),
       },
       protocolPlusDelayByDevice: Map<String, int>.from(delayByDevice),
     );
@@ -1806,6 +1820,21 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         hotDrop: p.hotdrop,
         coldDrop: p.colddrop,
       );
+
+  /// Public wrapper over the firmware payload builder, for at-home client
+  /// sessions that run a single device directly over BLE (no backend session,
+  /// default advanced settings). Mirrors the web `templateToRS35Payload`.
+  Map<String, dynamic> buildFirmwarePayload(
+    Protocol p, {
+    required String mac,
+  }) {
+    return _protocolToRs35Payload(
+      p,
+      mac: mac,
+      advancedSettings: const AdvancedSettings(),
+      applyStartDelay: false,
+    );
+  }
 
   Map<String, dynamic> _protocolToRs232Json(
     Protocol p, {

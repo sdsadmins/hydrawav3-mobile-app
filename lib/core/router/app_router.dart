@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/providers/auth_provider.dart';
+import '../../features/auth/presentation/providers/client_auth_provider.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
@@ -32,6 +33,8 @@ import '../../features/ai_chat/presentation/screens/chat_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
+import '../../features/clients/presentation/screens/client_lease_screen.dart';
+import '../../features/client_session/presentation/screens/client_session_screen.dart';
 import '../constants/theme_constants.dart';
 import 'route_names.dart';
 import '../../features/auth/presentation/screens/select_organization_page.dart';
@@ -41,6 +44,10 @@ final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authStateProvider);
+  // Client (at-home) sessions authenticate separately from practitioners; the
+  // router must treat an authenticated client as logged-in too, and skip the
+  // practitioner-only org-selection gate.
+  final isClientAuth = ref.watch(clientAuthProvider).isAuthenticated;
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
@@ -65,17 +72,26 @@ final routerProvider = Provider<GoRouter>((ref) {
         return null;
       }
 
-      // ❌ Not logged in
-      if (!isAuth && !isAuthRoute) {
+      // ❌ Not logged in (neither practitioner nor client)
+      if (!isAuth && !isClientAuth && !isAuthRoute) {
         return RoutePaths.login;
       }
 
-      // ✅ Logged in but NO org
+      // ✅ Client logged in → their at-home session screen (no org gate and
+      // no practitioner shell; the client's org comes from their lease session).
+      if (isClientAuth && !isAuth) {
+        if (state.matchedLocation != RoutePaths.clientHome) {
+          return RoutePaths.clientHome;
+        }
+        return null;
+      }
+
+      // ✅ Practitioner logged in but NO org
       if (isAuth && !hasSelectedOrg && !isSelectingOrg) {
         return '/select-organization';
       }
 
-      // ✅ Logged in + org selected
+      // ✅ Practitioner logged in + org selected
       if (isAuth && hasSelectedOrg && isAuthRoute) {
         // Redirect authenticated users to the device list first.
         return RoutePaths.devices;
@@ -311,6 +327,23 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: RoutePaths.aiReportClients,
         name: RouteNames.aiReportClients,
         builder: (c, s) => const ClientsListScreen(),
+      ),
+      GoRoute(
+        path: RoutePaths.clientHome,
+        name: RouteNames.clientHome,
+        builder: (c, s) => const ClientSessionScreen(),
+      ),
+      GoRoute(
+        path: RoutePaths.clientLease,
+        name: RouteNames.clientLease,
+        builder: (c, s) {
+          final extra = s.extra;
+          final m = extra is Map<String, dynamic> ? extra : const {};
+          return ClientLeaseScreen(
+            clientId: (m['clientId'] as String?) ?? '',
+            title: m['title'] as String?,
+          );
+        },
       ),
     ],
   );

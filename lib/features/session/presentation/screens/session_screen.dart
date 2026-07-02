@@ -1674,6 +1674,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ctrl: ctrl,
         isProtocolPlusDevice: deviceSequence.isNotEmpty,
         plusSequence: deviceSequence,
+        plusDurations:
+            engine.protocolPlusDurationsByDevice[id] ?? const <int>[],
         plusName: plusName,
         plusIndex: plusIndex,
         plusDelaySeconds: plusDelay,
@@ -1878,6 +1880,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     List<String> names, {
     required String name,
     required int index,
+    List<int> durations = const [],
     int delaySeconds = 0,
     bool onBreak = false,
     int breakRemaining = 0,
@@ -1955,6 +1958,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   child: _routeStop(
                     index: i,
                     name: names[i],
+                    durationSeconds: i < durations.length ? durations[i] : 0,
                     // During a break the finished protocol reads as "past" and
                     // the next one is highlighted as "up next".
                     isActive: !breaking && i == currentIndex,
@@ -1986,6 +1990,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required bool isActive,
     required bool isPast,
     bool isNext = false,
+    int durationSeconds = 0,
   }) {
     final Color dotBg;
     final Color dotFg;
@@ -2064,6 +2069,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     : ThemeConstants.textSecondary,
           ),
         ),
+        if (durationSeconds > 0) ...[
+          const SizedBox(height: 2),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.timer_outlined,
+                  size: 9, color: ThemeConstants.textTertiary),
+              const SizedBox(width: 2),
+              Text(
+                _fmtStopDuration(durationSeconds),
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: ThemeConstants.textTertiary,
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 3),
         if (isActive)
           Text(
@@ -2087,6 +2111,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           ),
       ],
     );
+  }
+
+  /// Compact per-protocol duration label for a route stop: "45s", "5m", "5m 30s".
+  String _fmtStopDuration(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    if (m == 0) return '${s}s';
+    return s == 0 ? '${m}m' : '${m}m ${s}s';
   }
 
   /// The connecting track segment between two stations. Sits at dot height.
@@ -2398,6 +2430,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     DeviceTelemetry? telemetry,
     bool isProtocolPlusDevice = false,
     List<String> plusSequence = const [],
+    List<int> plusDurations = const [],
     String plusName = '',
     int plusIndex = 0,
     int plusDelaySeconds = 0,
@@ -2498,6 +2531,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 plusSequence,
                 name: plusName,
                 index: plusIndex,
+                durations: plusDurations,
                 delaySeconds: plusDelaySeconds,
                 onBreak: plusOnBreak,
                 breakRemaining: plusBreakRemaining,

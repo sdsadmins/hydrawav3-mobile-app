@@ -558,10 +558,16 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                   children: [
                     // Client / Guest selector (web parity).
                     const ClientSelectionSection(),
-                    // Guided Assessment vs Quick Start.
-                    const _SessionTypeCards(),
-                    // The guided wizard appears only in Guided mode.
-                    if (ref.watch(sessionTypeProvider) == SessionType.guided)
+                    // Guided vs Quick Start chooser is Guest-only (web parity):
+                    // in Client mode the Guided Assessment loads directly.
+                    if (ref.watch(sessionClientModeProvider) ==
+                        ClientMode.guest)
+                      const _SessionTypeCards(),
+                    // Guided wizard: always in Client mode; in Guest mode only
+                    // when Guided is chosen.
+                    if (ref.watch(sessionClientModeProvider) ==
+                            ClientMode.client ||
+                        ref.watch(sessionTypeProvider) == SessionType.guided)
                       const GuidedAssessmentWizard(),
                     Text(
                       'Configure each device individually',
@@ -918,10 +924,15 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
 
                                 // Thread Client/Guest + Guided Assessment so the
                                 // synced intake carries clientId + real fields.
+                                // Client sessions always run the Guided
+                                // Assessment (Quick Start is Guest-only), so
+                                // capture intake in Client mode OR when a Guest
+                                // chose Guided.
                                 final sessionType =
                                     ref.read(sessionTypeProvider);
-                                final intake = sessionType ==
-                                        SessionType.guided
+                                final intake = (clientMode ==
+                                            ClientMode.client ||
+                                        sessionType == SessionType.guided)
                                     ? ref.read(guidedAssessmentProvider)
                                     : null;
                                 await launchSession(

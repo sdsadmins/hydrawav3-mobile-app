@@ -37,41 +37,45 @@ class _NewClientForm extends StatefulWidget {
 }
 
 class _NewClientFormState extends State<_NewClientForm> {
-  final _name = TextEditingController();
   final _nickname = TextEditingController();
   final _age = TextEditingController();
-  final _height = TextEditingController();
-  final _weight = TextEditingController();
-  final _phone = TextEditingController();
+  final _feet = TextEditingController();
+  final _inches = TextEditingController();
+  final _pounds = TextEditingController();
   String? _gender;
   bool _saving = false;
 
   @override
   void dispose() {
-    _name.dispose();
     _nickname.dispose();
     _age.dispose();
-    _height.dispose();
-    _weight.dispose();
-    _phone.dispose();
+    _feet.dispose();
+    _inches.dispose();
+    _pounds.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     final age = int.tryParse(_age.text.trim());
-    final height = double.tryParse(_height.text.trim());
-    final weight = double.tryParse(_weight.text.trim());
+    final feet = int.tryParse(_feet.text.trim()) ?? 0;
+    final inches = int.tryParse(_inches.text.trim()) ?? 0;
+    final pounds = double.tryParse(_pounds.text.trim());
+
+    // Web parity (newpatientIntake.tsx): height entered in feet/inches and
+    // weight in pounds, converted to cm/kg before the backend (which is metric).
+    final height = (feet * 12 + inches) * 2.54;
+    final weight = (pounds ?? 0) * 0.453592;
 
     if (age == null || age <= 0) {
       context.showSnackBar('Enter a valid age', isError: true);
       return;
     }
-    if (height == null || height <= 0) {
-      context.showSnackBar('Enter a valid height (cm)', isError: true);
+    if (height <= 0) {
+      context.showSnackBar('Enter a valid height', isError: true);
       return;
     }
-    if (weight == null || weight <= 0) {
-      context.showSnackBar('Enter a valid weight (kg)', isError: true);
+    if (pounds == null || pounds <= 0) {
+      context.showSnackBar('Enter a valid weight (lbs)', isError: true);
       return;
     }
 
@@ -92,11 +96,12 @@ class _NewClientFormState extends State<_NewClientForm> {
                   weight: weight,
                   organizationId: orgId,
                   organizationName: auth.selectedOrgName ?? '',
-                  clientName: _name.text.trim().isEmpty ? null : _name.text.trim(),
+                  // Web parity: no full-name field — the backend auto-generates
+                  // the client name.
+                  clientName: null,
                   nickname:
                       _nickname.text.trim().isEmpty ? null : _nickname.text.trim(),
                   gender: _gender,
-                  phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
                 ),
               );
       // Select the new client and refresh the list.
@@ -125,7 +130,7 @@ class _NewClientFormState extends State<_NewClientForm> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'New Client',
+              'New Client Intake Form',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
@@ -133,18 +138,17 @@ class _NewClientFormState extends State<_NewClientForm> {
               ),
             ),
             const SizedBox(height: 16),
-            _field('Full name', _name, hint: 'Optional — auto-generated if blank'),
-            const SizedBox(height: 12),
-            _field('Nickname', _nickname, hint: 'Optional'),
+            _field('Nickname (Optional)', _nickname, hint: 'Enter nickname'),
             const SizedBox(height: 12),
             _field('Age', _age,
+                hint: 'Enter age',
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
             const SizedBox(height: 12),
             PickerField(
               label: 'Gender',
               value: _gender,
-              placeholder: 'Select gender',
+              placeholder: 'Select Gender',
               onTap: () async {
                 final picked = await showOptionPicker<String>(
                   context,
@@ -157,24 +161,42 @@ class _NewClientFormState extends State<_NewClientForm> {
               },
             ),
             const SizedBox(height: 12),
+            // Height in feet + inches (web parity), converted to cm on submit.
+            Text(
+              'Height',
+              style: TextStyle(
+                color: ThemeConstants.textSecondary,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
-                  child: _field('Height (cm)', _height,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true)),
+                  child: _field(null, _feet,
+                      hint: '0',
+                      suffixText: 'ft',
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _field('Weight (kg)', _weight,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true)),
+                  child: _field(null, _inches,
+                      hint: '0',
+                      suffixText: 'in',
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            _field('Phone', _phone,
-                hint: 'Optional', keyboardType: TextInputType.phone),
+            // Weight in pounds (web parity), converted to kg on submit.
+            _field('Weight', _pounds,
+                hint: 'Enter weight',
+                suffixText: 'lbs',
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true)),
             const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
@@ -197,24 +219,27 @@ class _NewClientFormState extends State<_NewClientForm> {
   }
 
   Widget _field(
-    String label,
+    String? label,
     TextEditingController controller, {
     String? hint,
+    String? suffixText,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: ThemeConstants.textSecondary,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
+        if (label != null) ...[
+          Text(
+            label,
+            style: TextStyle(
+              color: ThemeConstants.textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
+          const SizedBox(height: 8),
+        ],
         TextField(
           controller: controller,
           keyboardType: keyboardType,
@@ -223,6 +248,23 @@ class _NewClientFormState extends State<_NewClientForm> {
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(color: ThemeConstants.textTertiary),
+            // Use suffixIcon (not suffixText) so the unit stays visible even
+            // when the field is empty/unfocused.
+            suffixIcon: suffixText == null
+                ? null
+                : Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      suffixText,
+                      style: TextStyle(
+                        color: ThemeConstants.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+            suffixIconConstraints:
+                const BoxConstraints(minWidth: 0, minHeight: 0),
             filled: true,
             fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
             contentPadding:

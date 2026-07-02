@@ -204,12 +204,99 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
       Column(
         children: [
           for (var i = 0; i < subs.length; i++) ...[
-            if (i > 0) const SizedBox(height: 10),
+            // A connector between consecutive protocols showing the switch
+            // delay (the gap the device waits before starting the next one).
+            if (i > 0) _delayConnector(detail.delay),
             _subProtocolTile(i + 1, subs[i]),
           ],
         ],
       ),
     );
+  }
+
+  /// Connector shown between two sub-protocols in the sequence: a vertical line
+  /// aligned under the order badge, with a subtle chip stating the switch delay
+  /// (the gap the device waits before the next protocol). Shows "Starts
+  /// immediately" when there's no gap.
+  Widget _delayConnector(int delaySeconds) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
+      child: Row(
+        children: [
+          // 24px column keeps the dotted line centred under the 24px badge.
+          SizedBox(
+            width: 24,
+            height: 26,
+            child: Center(child: _dottedLine()),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(6, 5, 12, 5),
+            decoration: BoxDecoration(
+              color: ThemeConstants.accent.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                  color: ThemeConstants.accent.withValues(alpha: 0.28)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.accent.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.schedule_rounded,
+                      size: 12, color: ThemeConstants.accent),
+                ),
+                const SizedBox(width: 7),
+                Text(
+                  delaySeconds > 0
+                      ? '${_fmtDelay(delaySeconds)} switch delay'
+                      : 'No delay',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: ThemeConstants.accent,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A dotted vertical line (Flutter has no built-in one) — a column of short
+  /// dashes evenly spread over the connector height.
+  Widget _dottedLine() => SizedBox(
+        width: 3,
+        height: 26,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(
+            4,
+            (_) => Container(
+              width: 3,
+              height: 4,
+              decoration: BoxDecoration(
+                color: ThemeConstants.accent.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      );
+
+  /// Compact delay label: "45s", "1m", or "1m 30s".
+  String _fmtDelay(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return s == 0 ? '${m}m' : '${m}m ${s}s';
   }
 
   /// One row in the Protocol Plus sequence: order badge + name + compact

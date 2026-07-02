@@ -190,6 +190,51 @@ class BleConnector {
     }
   }
 
+  /// Wait for a specific lease acknowledgement from firmware.
+  ///
+  /// Unlike [waitForConfigAck] (which accepts any non-empty notify frame), this
+  /// matches only the explicit lease tokens the firmware emits — parity with
+  /// the web `setLeaseId` / `clearLeaseId` handlers which wait for
+  /// `{leaseSet:true}` / `{detail:"lease_set"}` (and the `cleared` variants).
+  /// Returns true when a matching ack is seen, false on timeout.
+  Future<bool> waitForLeaseAck(
+    String deviceId, {
+    required Set<String> tokens,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    StreamSubscription<BleNotification>? sub;
+    Timer? timer;
+    final completer = Completer<bool>();
+    final lowerTokens = tokens.map((t) => t.toLowerCase()).toSet();
+
+    try {
+      sub = notifications.listen((n) {
+        if (n.deviceId != deviceId || completer.isCompleted) return;
+        final decoded = utf8.decode(n.value, allowMalformed: true).trim();
+        if (decoded.isEmpty) return;
+
+        appLogger.i('BLE: lease notify ($deviceId): $decoded');
+
+        final lower = decoded.toLowerCase();
+        if (lowerTokens.any(lower.contains)) {
+          completer.complete(true);
+        }
+      });
+
+      timer = Timer(timeout, () {
+        if (!completer.isCompleted) {
+          appLogger.w('BLE: lease ACK timeout for $deviceId');
+          completer.complete(false);
+        }
+      });
+
+      return await completer.future;
+    } finally {
+      timer?.cancel();
+      await sub?.cancel();
+    }
+  }
+
   /// Connect to a device by its BluetoothDevice reference.
   Future<bool> connect(BluetoothDevice device,
       {bool autoReconnect = true}) async {

@@ -59,6 +59,31 @@ class ClientRemoteSource {
     }
   }
 
+  /// `PATCH /clients/:clientId` — partial update used for the device-lease
+  /// lifecycle (web parity: `updateClient` in `actions/action.ts`). Callers
+  /// pass only the fields they want to change, e.g. `{leaseActive: true}` or
+  /// `{leaseActive: false, isActive: false}` on deactivation. The server
+  /// generates `leaseId` / stamps `leaseDate` / manages LeaseHistory.
+  Future<Client> updateClient(
+    String clientId,
+    Map<String, dynamic> patch,
+  ) async {
+    try {
+      final response = await _dio.patch(
+        ApiEndpoints.clientPatch(clientId),
+        data: patch,
+      );
+      final data = response.data;
+      final map = data is Map && data['data'] is Map ? data['data'] : data;
+      return Client.fromJson(Map<String, dynamic>.from(map as Map));
+    } on DioException catch (e) {
+      throw ServerException(
+        _message(e, 'Failed to update client'),
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   /// `POST /clients`.
   Future<Client> create(CreateClientRequest request) async {
     try {

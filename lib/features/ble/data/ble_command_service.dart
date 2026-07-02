@@ -7,6 +7,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/ble_connector.dart';
 import 'ble_repository.dart';
 
+/// Raised when a lease BLE command cannot proceed for a device-identity
+/// reason (wrong device, or the firmware MAC could not be resolved). Carries a
+/// user-facing [message] the lease UI can show verbatim.
+class LeaseCommandException implements Exception {
+  final String message;
+  const LeaseCommandException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 final bleCommandServiceProvider = Provider<BleCommandService>((ref) {
   return BleCommandService(
     bleRepository: ref.read(bleRepositoryProvider),
@@ -146,6 +157,111 @@ class BleCommandService {
     }
 
     return false;
+  }
+
+  /// Load a lease ID onto the connected device (web parity: `setLeaseId`).
+  ///
+  /// Sends `{cmd:"setLeaseID", id:<leaseId>}`. When [expectedMac] is provided,
+  /// the device's firmware-reported MAC must match first (same-device safety).
+  /// Resolving the MAC via [resolveHardwareMac] — not the BLE id — is what makes
+  /// this work on iOS, where the BLE identifier is an opaque UUID.
+  ///
+  /// Confirmation is BEST-EFFORT: some Hydra firmware builds accept the command
+  /// silently and never send a `leaseSet` frame (confirmed on Hydra-56 — the
+  /// 60-byte write completes with no GATT error, then nothing on either notify
+  /// channel). So a successful write is treated as success; the ack, when it
+  /// arrives, is a fast-path confirmation only. Mirrors [sendWifiCredentials],
+  /// which the firmware also doesn't reliably ACK. Throws [LeaseCommandException]
+  /// only on a MAC mismatch so the UI can show a precise "wrong device" message.
+  Future<bool> setLeaseId(
+    String deviceId,
+    String leaseId, {
+    String? expectedMac,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    await _verifyDeviceMac(deviceId, expectedMac);
+
+    final writeOk = await _bleRepository.writeJsonToDevice(
+      deviceId,
+      {'cmd': 'setLeaseID', 'id': leaseId},
+    );
+    if (!writeOk) return false;
+
+    // Give the firmware a brief window to confirm, but don't fail if it stays
+    // silent — the write already reached the device.
+    await _connector.waitForLeaseAck(
+      deviceId,
+      tokens: const {'leaseset', 'lease_set'},
+      timeout: const Duration(milliseconds: 2500),
+    );
+    return true;
+  }
+
+  /// Clear a lease ID from the connected device (web parity: `clearLeaseId`).
+  ///
+  /// Sends `{cmd:"clearLeaseID", id:<leaseId>}`. Best-effort confirmation and
+  /// same [expectedMac] safety rule as [setLeaseId].
+  Future<bool> clearLeaseId(
+    String deviceId,
+    String leaseId, {
+    String? expectedMac,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    await _verifyDeviceMac(deviceId, expectedMac);
+
+    final writeOk = await _bleRepository.writeJsonToDevice(
+      deviceId,
+      {'cmd': 'clearLeaseID', 'id': leaseId},
+    );
+    if (!writeOk) return false;
+
+    await _connector.waitForLeaseAck(
+      deviceId,
+      tokens: const {'leasecleared', 'lease_cleared'},
+      timeout: const Duration(milliseconds: 2500),
+    );
+    return true;
+  }
+
+  /// Ensure the connected device is the one the lease was registered against.
+  /// No-op when [expectedMac] is null/empty. Tolerates the Hydra "BLE MAC ±1"
+  /// quirk (the advertised/BLE address differs from the firmware MAC by one on
+  /// the last octet). Throws [LeaseCommandException] on a real mismatch, or when
+  /// the firmware MAC can't be resolved (common on iOS if the device never
+  /// published its MAC yet).
+  Future<void> _verifyDeviceMac(String deviceId, String? expectedMac) async {
+    if (expectedMac == null || expectedMac.trim().isEmpty) return;
+    final actual = await resolveHardwareMac(deviceId);
+    if (actual == null) {
+      throw const LeaseCommandException(
+        'Could not read the device MAC. Reconnect and try again.',
+      );
+    }
+    if (!_macsEquivalent(actual, expectedMac.trim())) {
+      throw LeaseCommandException(
+        'This is not the registered device (expected '
+        '${expectedMac.toUpperCase()}, found ${actual.toUpperCase()}).',
+      );
+    }
+  }
+
+  /// True if two MACs identify the same Hydra unit: an exact match, or a match
+  /// on the first five octets with the last octet differing by at most 1 (the
+  /// documented BLE-vs-firmware MAC ±1 offset).
+  bool _macsEquivalent(String a, String b) {
+    final na = a.toUpperCase().replaceAll('-', ':');
+    final nb = b.toUpperCase().replaceAll('-', ':');
+    if (na == nb) return true;
+    final pa = na.split(':');
+    final pb = nb.split(':');
+    if (pa.length != 6 || pb.length != 6) return false;
+    for (var i = 0; i < 5; i++) {
+      if (pa[i] != pb[i]) return false;
+    }
+    final la = int.tryParse(pa[5], radix: 16);
+    final lb = int.tryParse(pb[5], radix: 16);
+    if (la == null || lb == null) return false;
+    return (la - lb).abs() <= 1;
   }
 
   Future<String?> resolveHardwareMac(

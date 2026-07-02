@@ -19,4 +19,7 @@ class ClientRepository {
 
   Future<Client> create(CreateClientRequest request) =>
       _remote.create(request);
+
+  Future<Client> updateClient(String clientId, Map<String, dynamic> patch) =>
+      _remote.updateClient(clientId, patch);
 }

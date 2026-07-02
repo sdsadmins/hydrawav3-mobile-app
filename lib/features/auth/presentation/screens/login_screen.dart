@@ -8,6 +8,7 @@ import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../domain/auth_models.dart';
 import '../providers/auth_provider.dart';
+import '../providers/client_auth_provider.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -21,8 +22,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
 
-  bool _remember = false;
+  final bool _remember = false;
   bool _obscure = true;
+  bool _submitting = false;
 
   @override
   void dispose() {
@@ -31,16 +33,54 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
+  /// Unified login (web parity: `Login` in `actions/action.ts`). One form, one
+  /// submit: try the practitioner backend first; if that fails, fall back to
+  /// the Node client login using the same field as `clientName`. No mode
+  /// toggle — the credential shape decides which session is created.
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
-    await ref.read(authStateProvider.notifier).login(
-          LoginRequest(
-            username: _userCtrl.text.trim(),
-            password: _passCtrl.text,
-            rememberMe: _remember,
-          ),
-        );
+    final username = _userCtrl.text.trim();
+    final password = _passCtrl.text;
+
+    setState(() => _submitting = true);
+    try {
+      // 1) Practitioner (Django) login.
+      await ref.read(authStateProvider.notifier).login(
+            LoginRequest(
+              username: username,
+              password: password,
+              rememberMe: _remember,
+            ),
+          );
+      if (ref.read(authStateProvider).isAuthenticated) {
+        return; // router redirects to home
+      }
+
+      // 2) Fallback: at-home client (Node) login.
+      final clientOk = await ref.read(clientAuthProvider.notifier).login(
+            clientName: username,
+            password: password,
+          );
+      if (clientOk) {
+        return; // router redirects to session setup
+      }
+
+      // Both failed — surface the most specific message (the client backend
+      // returns "Lease is not active" / "Invalid credentials").
+      final clientErr = ref.read(clientAuthProvider).error;
+      final practErr = ref.read(authStateProvider).error;
+      _showError(clientErr ?? practErr ?? 'Login failed. Please try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: ThemeConstants.error),
+    );
   }
 
   void _openOnboarding() {
@@ -51,20 +91,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth = ref.watch(authStateProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    /// ✅ ONLY ERROR HANDLING
-    ref.listen<AuthState>(authStateProvider, (_, next) {
-      if (next.error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(next.error!),
-            backgroundColor: ThemeConstants.error,
-          ),
-        );
-      }
-    });
+    // Errors are surfaced manually in [_login] so a failed practitioner attempt
+    // doesn't flash an error before the client-login fallback runs.
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -189,7 +218,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 width: double.infinity,
                                 child: _GradientCTA(
                                   label: 'Login',
-                                  isLoading: auth.isLoading,
+                                  isLoading: _submitting,
                                   onTap: _login,
                                 ),
                               ),

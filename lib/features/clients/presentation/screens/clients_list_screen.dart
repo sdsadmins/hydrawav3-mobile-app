@@ -131,6 +131,24 @@ class ClientsListScreen extends ConsumerWidget {
                                 ],
                               ),
                             ),
+                            IconButton(
+                              tooltip: 'Device lease',
+                              icon: Icon(
+                                c.isLeaseActive
+                                    ? Icons.bluetooth_connected_rounded
+                                    : Icons.bluetooth_rounded,
+                                color: c.isLeaseActive
+                                    ? ThemeConstants.success
+                                    : ThemeConstants.textTertiary,
+                              ),
+                              onPressed: () => context.pushNamed(
+                                RouteNames.clientLease,
+                                extra: {
+                                  'clientId': c.id,
+                                  'title': c.displayName,
+                                },
+                              ),
+                            ),
                             Icon(Icons.chevron_right_rounded,
                                 color: ThemeConstants.textTertiary),
                           ],

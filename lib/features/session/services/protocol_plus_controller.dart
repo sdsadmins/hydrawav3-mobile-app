@@ -1178,6 +1178,7 @@ Future<void> launchSession(
     // Per-device tracker data so each Plus device gets its own progress card.
     final plusNameByDevice = <String, String>{};
     final plusSequenceByDevice = <String, List<String>>{};
+    final plusDurationsByDevice = <String, List<int>>{};
     final plusDelayByDevice = <String, int>{};
 
     for (final sel in selections) {
@@ -1218,6 +1219,10 @@ Future<void> launchSession(
         plusNameByDevice[sel.deviceId] = detail.templateName;
         plusSequenceByDevice[sel.deviceId] =
             _protocolPlusSequenceNames(populated, orderedIds);
+        // Per-sub-protocol durations in the SAME order as the sequence names,
+        // so the live tracker can show each protocol's time under its name.
+        plusDurationsByDevice[sel.deviceId] =
+            populated.map((p) => p.totalDurationSeconds).toList();
         plusDelayByDevice[sel.deviceId] = detail.delay;
       } else {
         protocolByDevice[sel.deviceId] = sel.protocol;
@@ -1258,6 +1263,7 @@ Future<void> launchSession(
           plusNameByDevice,
           plusSequenceByDevice,
           delayByDevice: plusDelayByDevice,
+          durationsByDevice: plusDurationsByDevice,
         );
       }
     }

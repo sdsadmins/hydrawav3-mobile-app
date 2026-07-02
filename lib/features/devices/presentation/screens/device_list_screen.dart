@@ -1054,11 +1054,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       ];
 
       // Thread Client/Guest + Guided Assessment so the synced intake carries
-      // clientId + the real guided fields (web parity).
+      // clientId + the real guided fields (web parity). Client sessions always
+      // run the Guided Assessment (Quick Start is Guest-only), so capture
+      // intake in Client mode OR when a Guest chose Guided.
       final sessionType = ref.read(sessionTypeProvider);
-      final intake = sessionType == SessionType.guided
-          ? ref.read(guidedAssessmentProvider)
-          : null;
+      final intake =
+          (clientMode == ClientMode.client || sessionType == SessionType.guided)
+              ? ref.read(guidedAssessmentProvider)
+              : null;
       await launchSession(
         ref,
         context,
@@ -1085,12 +1088,17 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   /// wizard (shown only in Guided mode). Rendered above the Start button so the
   /// practitioner chooses the client and fills the intake before starting.
   Widget _buildClientGuestSection() {
-    final isGuided = ref.watch(sessionTypeProvider) == SessionType.guided;
+    final isGuest =
+        ref.watch(sessionClientModeProvider) == ClientMode.guest;
+    // Client sessions always run the Guided Assessment (web parity), so the
+    // Guided vs Quick Start chooser is Guest-only.
+    final isGuided =
+        !isGuest || ref.watch(sessionTypeProvider) == SessionType.guided;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const ClientSelectionSection(),
-        const SessionTypeCards(),
+        if (isGuest) const SessionTypeCards(),
         if (isGuided) const GuidedAssessmentPanel(),
       ],
     );
@@ -1117,9 +1125,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         style: ElevatedButton.styleFrom(
           backgroundColor: ThemeConstants.accent,
           foregroundColor: Colors.white,
-          disabledBackgroundColor:
-              ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
-          disabledForegroundColor: ThemeConstants.textTertiary,
+          // Let the disabled state fall back to the theme default (grayish),
+          // matching the "Generate AI Report" button in light mode.
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -1293,8 +1300,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         deviceLimit > 0 &&
         (inUseDeviceIds.length + newlySelectedCount) >= deviceLimit;
     // In Guided Assessment mode, Start stays disabled until the required intake
-    // fields are filled (same set the AI report needs).
-    final isGuided = ref.watch(sessionTypeProvider) == SessionType.guided;
+    // fields are filled (same set the AI report needs). Client sessions always
+    // run the Guided Assessment (Quick Start is Guest-only).
+    final isGuided =
+        ref.watch(sessionClientModeProvider) == ClientMode.client ||
+            ref.watch(sessionTypeProvider) == SessionType.guided;
     final guidedReady =
         !isGuided || ref.watch(guidedAssessmentProvider).canGenerateReport;
     final canStart = runIds.isNotEmpty &&
