@@ -8,8 +8,12 @@ import '../../domain/intake_models.dart';
 /// Guided Assessment vs Quick Start choice.
 enum SessionType { guided, quick }
 
+// Default to Quick Start so a Guest session can start immediately from the
+// Devices screen without needing the Guided Assessment (which now lives on the
+// AI tab and is opt-in). Selecting Client mode or Guided on the AI tab re-gates
+// Start on a completed assessment.
 final sessionTypeProvider =
-    StateProvider<SessionType>((ref) => SessionType.guided);
+    StateProvider<SessionType>((ref) => SessionType.quick);
 
 /// Holds the in-progress Guided Assessment wizard state.
 class GuidedAssessmentNotifier extends StateNotifier<GuidedAssessmentData> {

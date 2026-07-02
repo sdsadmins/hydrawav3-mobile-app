@@ -35,6 +35,7 @@ import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dar
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
 import '../../features/clients/presentation/screens/client_lease_screen.dart';
 import '../../features/client_session/presentation/screens/client_session_screen.dart';
+import '../../features/ai_hub/presentation/screens/ai_screen.dart';
 import '../constants/theme_constants.dart';
 import 'route_names.dart';
 import '../../features/auth/presentation/screens/select_organization_page.dart';
@@ -134,6 +135,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               path: RoutePaths.devices,
               name: RouteNames.devices,
               builder: (c, s) => const DeviceListScreen()),
+          GoRoute(
+              path: RoutePaths.ai,
+              name: RouteNames.ai,
+              builder: (c, s) => const AiScreen()),
           GoRoute(
               path: RoutePaths.history,
               name: RouteNames.history,
@@ -377,8 +382,9 @@ class _AppShell extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     int idx = 0;
     if (location.startsWith(RoutePaths.devices)) idx = 1;
-    if (location.startsWith(RoutePaths.history)) idx = 2;
-    if (location.startsWith(RoutePaths.settings)) idx = 3;
+    if (location.startsWith(RoutePaths.ai)) idx = 2;
+    if (location.startsWith(RoutePaths.history)) idx = 3;
+    if (location.startsWith(RoutePaths.settings)) idx = 4;
 
     // Backend-driven live feed (same source as the History → Live tab) so the
     // badge stays consistent and clears when a session stops/finishes.
@@ -424,17 +430,23 @@ class _AppShell extends ConsumerWidget {
                     active: idx == 1,
                     onTap: () => context.go(RoutePaths.devices)),
                 _NavTab(
+                    icon: Icons.auto_awesome_outlined,
+                    activeIcon: Icons.auto_awesome_rounded,
+                    label: 'AI',
+                    active: idx == 2,
+                    onTap: () => context.go(RoutePaths.ai)),
+                _NavTab(
                     icon: Icons.history_outlined,
                     activeIcon: Icons.history_rounded,
                     label: 'History',
-                    active: idx == 2,
+                    active: idx == 3,
                     badgeCount: activeBackgroundCount,
                     onTap: () => context.go(RoutePaths.history)),
                 _NavTab(
                     icon: Icons.settings_outlined,
                     activeIcon: Icons.settings_rounded,
                     label: 'Settings',
-                    active: idx == 3,
+                    active: idx == 4,
                     onTap: () => context.go(RoutePaths.settings)),
               ],
             ),

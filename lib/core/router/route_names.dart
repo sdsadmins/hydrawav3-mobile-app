@@ -14,6 +14,7 @@ class RouteNames {
   // Main tabs
   static const String protocols = 'protocols';
   static const String devices = 'devices';
+  static const String ai = 'ai';
   static const String history = 'history';
   static const String settings = 'settings';
 
@@ -69,6 +70,7 @@ class RoutePaths {
   // Main tabs
   static const String protocols = '/protocols';
   static const String devices = '/devices';
+  static const String ai = '/ai-hub';
   static const String history = '/history';
   static const String settings = '/settings';
 

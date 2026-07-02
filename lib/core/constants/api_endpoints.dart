@@ -54,6 +54,18 @@ class ApiEndpoints {
   static const String clientAuthLogin = 'auth/login';
   static const String clientAuthRefresh = 'auth/refresh';
 
+  // Treatment / Session plan (Node) — pad-placement plan for a body part
+  // (web parity: getTreatmentPlanByBodyPart). Returns sun/moon electrode
+  // placements + recommended protocol per area. Relative (no leading slash).
+  static String treatmentPlanByBodyPart(String bodyPartName) =>
+      'treatment-plans/body-part/${Uri.encodeComponent(bodyPartName)}';
+
+  // Notifications (Node) — the AI-report processor writes one when a report
+  // finishes generating (web parity: actions/notification.ts). List per user +
+  // mark-read. Relative (no leading slash) so they append to the Node base URL.
+  static String notificationsByUser(String userId) => 'notifications/$userId';
+  static String notificationRead(String id) => 'notifications/read/$id';
+
   // Clients
   static const String clients = '/clients';
   static String clientsByOrg(String orgId) => '/clients/$orgId';

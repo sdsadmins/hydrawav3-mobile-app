@@ -25,11 +25,7 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
-import '../../../clients/presentation/widgets/client_selection_section.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
-import '../../../intake/presentation/widgets/guided_assessment_panel.dart';
-import '../../../intake/presentation/widgets/session_type_cards.dart';
-import '../../../ai_report/presentation/widgets/ai_report_status_banner.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/domain/active_session_model.dart' as live;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
@@ -1084,25 +1080,10 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     }
   }
 
-  /// Client/Guest selector + Guided Assessment vs Quick Start + the guided
-  /// wizard (shown only in Guided mode). Rendered above the Start button so the
-  /// practitioner chooses the client and fills the intake before starting.
-  Widget _buildClientGuestSection() {
-    final isGuest =
-        ref.watch(sessionClientModeProvider) == ClientMode.guest;
-    // Client sessions always run the Guided Assessment (web parity), so the
-    // Guided vs Quick Start chooser is Guest-only.
-    final isGuided =
-        !isGuest || ref.watch(sessionTypeProvider) == SessionType.guided;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const ClientSelectionSection(),
-        if (isGuest) const SessionTypeCards(),
-        if (isGuided) const GuidedAssessmentPanel(),
-      ],
-    );
-  }
+  // Client/Guest selection, the Guided-vs-QuickStart chooser and the Guided
+  // Assessment now live on the dedicated "AI" tab (AiScreen). This screen keeps
+  // only device management + per-device Session Setup + the Start button, which
+  // still reads the client/session-type/guided state from the shared providers.
 
   Widget _buildStartSessionButton({
     required List<String> runIds,
@@ -1110,32 +1091,70 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required bool canStart,
   }) {
     final enabled = !_starting && canStart;
-    return SizedBox(
-      width: double.infinity,
-      height: 50,
-      child: ElevatedButton.icon(
-        onPressed: enabled
-            ? () => _startSession(runIds: runIds, transport: transport)
-            : null,
-        icon: Icon(
-          _starting ? Icons.hourglass_top_rounded : Icons.play_arrow_rounded,
-          size: 20,
-        ),
-        label: Text(_starting ? 'Starting...' : 'Start Session'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: ThemeConstants.accent,
-          foregroundColor: Colors.white,
-          // Let the disabled state fall back to the theme default (grayish),
-          // matching the "Generate AI Report" button in light mode.
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+
+    // Explain why Start is disabled so it never looks stuck (esp. now that the
+    // Guided Assessment moved to the AI tab).
+    String? reason;
+    if (!enabled && !_starting) {
+      final isGuided =
+          ref.watch(sessionClientModeProvider) == ClientMode.client ||
+              ref.watch(sessionTypeProvider) == SessionType.guided;
+      final guidedReady =
+          !isGuided || ref.watch(guidedAssessmentProvider).canGenerateReport;
+      if (runIds.isEmpty) {
+        reason = 'Connect or select a device to start.';
+      } else if (!runIds.every((id) =>
+          _protocolIdByDeviceId.containsKey(id) &&
+          _settingsByDeviceId.containsKey(id))) {
+        reason = 'Select a protocol for each device.';
+      } else if (!guidedReady) {
+        reason = 'Complete the Guided Assessment in the AI tab.';
+      }
+    }
+
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: ElevatedButton.icon(
+            onPressed: enabled
+                ? () => _startSession(runIds: runIds, transport: transport)
+                : null,
+            icon: Icon(
+              _starting
+                  ? Icons.hourglass_top_rounded
+                  : Icons.play_arrow_rounded,
+              size: 20,
+            ),
+            label: Text(_starting ? 'Starting...' : 'Start Session'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ThemeConstants.accent,
+              foregroundColor: Colors.white,
+              // Let the disabled state fall back to the theme default (grayish),
+              // matching the "Generate AI Report" button in light mode.
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-          textStyle: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-          ),
         ),
-      ),
+        if (reason != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            reason,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11,
+              color: ThemeConstants.textTertiary,
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -1319,7 +1338,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         bottom: false,
         child: Column(
           children: [
-            const AiReportStatusBanner(),
             Expanded(
               child: CustomScrollView(
                 physics: const ClampingScrollPhysics(),
@@ -1671,7 +1689,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildClientGuestSection(),
                       _buildStartSessionButton(
                         runIds: runIds,
                         transport: target.transport,
@@ -1855,7 +1872,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                       }),
                       const SizedBox(height: 16),
                       if (connectedDevices.isNotEmpty) ...[
-                        _buildClientGuestSection(),
                         _buildStartSessionButton(
                           runIds: runIds,
                           transport: target.transport,
