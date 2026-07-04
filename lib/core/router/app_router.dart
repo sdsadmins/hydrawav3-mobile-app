@@ -32,6 +32,7 @@ import '../../features/presets/presentation/screens/preset_management_screen.dar
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
+import '../../features/ai_report/presentation/screens/kinetic_chain_3d_screen.dart';
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
 import '../../features/clients/presentation/screens/client_lease_screen.dart';
 import '../../features/client_session/presentation/screens/client_session_screen.dart';
@@ -332,6 +333,20 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: RoutePaths.aiReportClients,
         name: RouteNames.aiReportClients,
         builder: (c, s) => const ClientsListScreen(),
+      ),
+      GoRoute(
+        path: RoutePaths.kineticChain3d,
+        name: RouteNames.kineticChain3d,
+        builder: (c, s) {
+          final m = s.extra is Map<String, dynamic>
+              ? s.extra as Map<String, dynamic>
+              : const <String, dynamic>{};
+          return KineticChain3DScreen(
+            patternLabel: (m['patternLabel'] as String?) ?? '3D Kinetic Chain',
+            payload: (m['payload'] as Map<String, dynamic>?) ??
+                const <String, dynamic>{},
+          );
+        },
       ),
       GoRoute(
         path: RoutePaths.clientHome,

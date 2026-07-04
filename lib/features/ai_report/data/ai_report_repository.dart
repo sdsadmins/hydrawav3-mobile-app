@@ -126,15 +126,36 @@ class AiReportRepository {
     }
 
     final personalSnapshot = obj('personal_snapshot');
+
+    // `age` MUST be a Number for the backend AiReport schema. The AI returns
+    // "Not provided" (string) when age is unknown, which makes Mongoose throw
+    // `Cast to Number failed for value "not provided"`. Coerce a valid age to
+    // a num, otherwise drop the field entirely. This runs in BOTH guest and
+    // client mode — the web cleans age in both branches (action.ts
+    // createAIReport), and a client with no recorded age hits the same error.
+    final rawAge = personalSnapshot['age'];
+    final numAge =
+        rawAge is num ? rawAge : num.tryParse(rawAge?.toString() ?? '');
+    if (numAge != null && numAge > 0) {
+      personalSnapshot['age'] = numAge;
+    } else {
+      personalSnapshot.remove('age');
+    }
+
     if (isGuest) {
-      // Strip demographics that were never provided (web guest cleaning).
-      final age = personalSnapshot['age'];
-      if (age is! num || age <= 0) personalSnapshot.remove('age');
+      // Guest reports also strip name/gender that were never provided
+      // (web guest cleaning) — no client history is attached.
       final gender = personalSnapshot['gender'];
       if (gender is! String ||
           gender.trim().isEmpty ||
           gender.toLowerCase() == 'not provided') {
         personalSnapshot.remove('gender');
+      }
+      final name = personalSnapshot['name'];
+      if (name is! String ||
+          name.trim().isEmpty ||
+          name.toLowerCase() == 'not provided') {
+        personalSnapshot.remove('name');
       }
     }
 
@@ -146,7 +167,11 @@ class AiReportRepository {
         'guestMode': 'true',
         'organizationId': organizationId,
       } else ...{
-        if (userId != null) 'userId': userId,
+        // A client report is stored under the CLIENT's ObjectId. The backend
+        // validates `userId` as an ObjectId, so sending the practitioner's
+        // numeric id (e.g. "662") fails with "Invalid userId format". The
+        // acting practitioner (createdBy) is derived server-side from the token.
+        if (clientId != null) 'userId': clientId,
         if (clientId != null) 'clientId': clientId,
         'organizationId': organizationId,
       },

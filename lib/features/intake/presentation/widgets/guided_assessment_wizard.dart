@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/router/route_names.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../ai_report/presentation/providers/ai_report_providers.dart';
 import '../../domain/intake_enums.dart';
@@ -57,22 +54,25 @@ class _GuidedAssessmentWizardState
     }
   }
 
-  Future<void> _generate() async {
-    final report =
-        await ref.read(aiReportGenerationProvider.notifier).generate();
+  /// Kick generation off in the BACKGROUND and let the user keep working —
+  /// progress + the finished report surface on the AI screen's status banner
+  /// (web parity). No inline await, no forced navigation.
+  void _generate() {
+    final err = ref.read(aiReportGenerationProvider.notifier).startGenerate();
     if (!mounted) return;
-    if (report != null) {
-      context.pushNamed(RouteNames.aiReport, extra: report);
+    if (err != null) {
+      context.showSnackBar(err, isError: true);
     } else {
-      final msg = ref.read(aiReportGenerationProvider).message;
-      context.showSnackBar(msg ?? 'Failed to generate report', isError: true);
+      context.showSnackBar(
+        'Generating AI report in the background — you can keep working. '
+        'Track progress on the AI screen.',
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final data = ref.watch(guidedAssessmentProvider);
-    final gen = ref.watch(aiReportGenerationProvider);
     final isLast = _step == _titles.length - 1;
 
     return Container(
@@ -120,9 +120,7 @@ class _GuidedAssessmentWizardState
               if (_step > 0)
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: gen.isBusy
-                        ? null
-                        : () => setState(() => _step--),
+                    onPressed: () => setState(() => _step--),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: ThemeConstants.textPrimary,
                       side: BorderSide(color: ThemeConstants.border),
@@ -135,31 +133,14 @@ class _GuidedAssessmentWizardState
               Expanded(
                 child: isLast
                     ? ElevatedButton(
+                        // Non-blocking: kick off in the background and stay free
+                        // to start another (web parity).
                         onPressed:
-                            (!data.canGenerateReport || gen.isBusy)
-                                ? null
-                                : _generate,
+                            !data.canGenerateReport ? null : _generate,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
-                        child: gen.isBusy
-                            ? const Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  SizedBox(
-                                    height: 16,
-                                    width: 16,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  ),
-                                  SizedBox(width: 10),
-                                  Flexible(
-                                    child: Text('Generating… 3–5 min',
-                                        overflow: TextOverflow.ellipsis),
-                                  ),
-                                ],
-                              )
-                            : const Text('Generate AI Report'),
+                        child: const Text('Generate AI Report'),
                       )
                     : ElevatedButton(
                         onPressed: _canAdvance(data)

@@ -26,6 +26,11 @@ dependencies:
   dio: ^5.7.0
   socket_io_client: ^2.0.3+1
 
+  # In-app WebView + bundled localhost server (hosts the offline three.js
+  # kinetic-chain 3D viewer in assets/3d over http://localhost so WebGL + the
+  # Draco WASM worker can load — file:// can't serve those).
+  flutter_inappwebview: ^6.1.5
+
   # Audio (session "Atmosphere" music — foreground-only looping playback)
   just_audio: ^0.9.42
   audio_session: ^0.1.21
@@ -103,6 +108,9 @@ flutter:
     - assets/icons/svg/
     - assets/fonts/
     - assets/animations/
+    # Offline 3D kinetic-chain viewer (three.js bundle + GLB + Draco decoder).
+    - assets/3d/
+    - assets/3d/draco/
 
 flutter_launcher_icons:
   android: "ic_launcher"

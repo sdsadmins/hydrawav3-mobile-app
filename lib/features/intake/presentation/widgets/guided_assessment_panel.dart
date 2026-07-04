@@ -123,7 +123,6 @@ class _GuidedAssessmentPanelState
   @override
   Widget build(BuildContext context) {
     final data = ref.watch(guidedAssessmentProvider);
-    final gen = ref.watch(aiReportGenerationProvider);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -192,7 +191,8 @@ class _GuidedAssessmentPanelState
                       ? 'Select areas on the body'
                       : '${data.discomfortAreas.length} area(s) selected',
                   done: data.discomfortAreas.isNotEmpty,
-                  onTap: () => _openSheet(context, const _AreaOfFocusSheet()),
+                  onTap: () => _openStep(context,
+                      index: 1, sheet: const _AreaOfFocusSheet()),
                 ),
                 _stepCard(
                   context,
@@ -202,7 +202,8 @@ class _GuidedAssessmentPanelState
                       ? 'Record movement findings'
                       : '${data.romFindings.length} finding(s)',
                   done: data.romFindings.isNotEmpty,
-                  onTap: () => _openSheet(context, const _RomSheet()),
+                  onTap: () =>
+                      _openStep(context, index: 2, sheet: const _RomSheet()),
                 ),
                 _stepCard(
                   context,
@@ -216,8 +217,8 @@ class _GuidedAssessmentPanelState
                   done: data.dailyActivities.isNotEmpty &&
                       data.sleepPosture != null &&
                       data.hardestPosition != null,
-                  onTap: () =>
-                      _openSheet(context, const _DailyActivitiesSheet()),
+                  onTap: () => _openStep(context,
+                      index: 3, sheet: const _DailyActivitiesSheet()),
                 ),
                 _stepCard(
                   context,
@@ -227,7 +228,8 @@ class _GuidedAssessmentPanelState
                       ? 'Added'
                       : 'Optional',
                   done: data.missingRemark?.trim().isNotEmpty ?? false,
-                  onTap: () => _openSheet(context, const _RemarksSheet()),
+                  onTap: () => _openStep(context,
+                      index: 4, sheet: const _RemarksSheet()),
                 ),
               ],
             ),
@@ -249,21 +251,24 @@ class _GuidedAssessmentPanelState
             width: double.infinity,
             child: ElevatedButton(
               // Background generation: kick it off and let the top banner track
-              // it — the guided assessment stays free to use (web parity).
-              onPressed: (!data.canGenerateReport || gen.isBusy)
+              // it — the assessment stays free and you can start another while
+              // one is running (web parity).
+              onPressed: !data.canGenerateReport
                   ? null
                   : () {
-                      ref
+                      final err = ref
                           .read(aiReportGenerationProvider.notifier)
-                          .generate();
+                          .startGenerate();
                       context.showSnackBar(
-                        'Generating AI report — this can take 3–5 minutes.',
+                        err ??
+                            'Generating AI report — you can keep working. '
+                                'Track progress above.',
+                        isError: err != null,
                       );
                     },
               style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: Text(
-                  gen.isBusy ? 'Generating…' : 'Generate AI Report'),
+              child: const Text('Generate AI Report'),
             ),
           ),
           if (!data.canGenerateReport)
@@ -284,9 +289,10 @@ class _GuidedAssessmentPanelState
   /// Open the latest report: the just-generated one if present, else the most
   /// recent persisted report (recent — client: by user+org, guest: org only).
   Future<void> _openLatestReport(BuildContext context, WidgetRef ref) async {
-    final gen = ref.read(aiReportGenerationProvider);
-    if (gen.report != null) {
-      context.pushNamed(RouteNames.aiReport, extra: gen.report);
+    final lastDone =
+        ref.read(aiReportGenerationProvider.notifier).lastDoneReport;
+    if (lastDone != null) {
+      context.pushNamed(RouteNames.aiReport, extra: lastDone);
       return;
     }
     final auth = ref.read(authStateProvider);
@@ -308,6 +314,46 @@ class _GuidedAssessmentPanelState
       if (context.mounted) {
         context.showSnackBar('Failed to load report: $e', isError: true);
       }
+    }
+  }
+
+  /// Open a step's sheet and, once it closes, auto-advance the carousel to the
+  /// next step if this one is now complete (so the practitioner isn't forced to
+  /// manually swipe after finishing each step).
+  Future<void> _openStep(
+    BuildContext context, {
+    required int index,
+    required Widget sheet,
+  }) async {
+    await _openSheet(context, sheet);
+    if (!mounted) return;
+    // `index` is 1-based; the next page's 0-based position equals `index`.
+    if (index < 4 && _isStepDone(index)) {
+      _pageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  /// Whether the given 1-based step is complete (mirrors each step card's
+  /// `done` condition), used to gate the auto-advance.
+  bool _isStepDone(int index) {
+    final d = ref.read(guidedAssessmentProvider);
+    switch (index) {
+      case 1:
+        return d.discomfortAreas.isNotEmpty;
+      case 2:
+        return d.romFindings.isNotEmpty;
+      case 3:
+        return d.dailyActivities.isNotEmpty &&
+            d.sleepPosture != null &&
+            d.hardestPosition != null;
+      case 4:
+        return d.missingRemark?.trim().isNotEmpty ?? false;
+      default:
+        return false;
     }
   }
 
@@ -425,8 +471,8 @@ class _GuidedAssessmentPanelState
   }
 }
 
-void _openSheet(BuildContext context, Widget child) {
-  showModalBottomSheet(
+Future<void> _openSheet(BuildContext context, Widget child) {
+  return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,

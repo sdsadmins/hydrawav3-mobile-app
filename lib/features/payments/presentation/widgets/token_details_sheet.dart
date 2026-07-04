@@ -135,17 +135,16 @@ class _TokenDetailsSheet extends ConsumerWidget {
                       Expanded(
                         child: _StatCard(
                           icon: Icons.play_circle_outline_rounded,
-                          // Web parity: the header shows the sessions quota as
-                          // minutes derived from `sessionDurationSeconds`. Fall
-                          // back to the legacy per-session count if a backend
-                          // still returns `sessionsAvailable` instead.
+                          // The sessions quota (derived from
+                          // `sessionDurationSeconds`) is shown as hours +
+                          // minutes rather than raw minutes. Fall back to the
+                          // legacy per-session count if a backend still returns
+                          // `sessionsAvailable` instead.
                           label: plan?.sessionDurationSeconds != null
-                              ? 'Sessions (min)'
+                              ? 'Session time'
                               : 'Sessions left',
                           value: plan?.sessionDurationSeconds != null
-                              ? (plan!.sessionDurationSeconds! / 60)
-                                  .round()
-                                  .toString()
+                              ? _fmtSessionTime(plan!.sessionDurationSeconds!)
                               : (plan?.sessionsAvailable?.toString() ?? ph),
                         ),
                       ),
@@ -209,6 +208,16 @@ class _TokenDetailsSheet extends ConsumerWidget {
     if (s.contains('active')) return ThemeConstants.success;
     if (s.contains('free')) return ThemeConstants.accent;
     return ThemeConstants.textTertiary;
+  }
+
+  /// Format a session-time quota (seconds) as "Xh Ym" (e.g. 9000s → "2h 30m").
+  static String _fmtSessionTime(num seconds) {
+    final totalMin = (seconds / 60).round();
+    final h = totalMin ~/ 60;
+    final m = totalMin % 60;
+    if (h > 0 && m > 0) return '${h}h ${m}m';
+    if (h > 0) return '${h}h';
+    return '${m}m';
   }
 
   static String _fmtDate(DateTime d) {

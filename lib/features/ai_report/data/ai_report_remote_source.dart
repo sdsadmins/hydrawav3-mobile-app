@@ -18,10 +18,21 @@ class AiReportRemoteSource {
 
   AiReportRemoteSource(this._dio);
 
-  /// `POST ai/analyze` — enqueue a job; returns `{ id, status, ... }`.
+  /// AI analysis can block synchronously for minutes (the web client allows
+  /// this call up to 5 min). The global 30s `receiveTimeout` is far too short,
+  /// so override it per-request to avoid a false HTTP timeout.
+  static final _aiOptions =
+      Options(receiveTimeout: const Duration(minutes: 5));
+
+  /// `POST ai/analyze` — enqueue a job; returns `{ id, status, ... }` or the
+  /// full AnalysisOutput inline (see [AnalysisStatus.fromJson]).
   Future<AnalysisStatus> analyze(Map<String, dynamic> body) async {
     try {
-      final response = await _dio.post(ApiEndpoints.aiReportAnalyze, data: body);
+      final response = await _dio.post(
+        ApiEndpoints.aiReportAnalyze,
+        data: body,
+        options: _aiOptions,
+      );
       return AnalysisStatus.fromJson(_asMap(response.data));
     } on DioException catch (e) {
       throw ServerException(
@@ -34,8 +45,10 @@ class AiReportRemoteSource {
   /// `GET ai/analyze/:id` — poll job status/result.
   Future<AnalysisStatus> status(String id) async {
     try {
-      final response =
-          await _dio.get(ApiEndpoints.aiReportAnalyzeStatus(id));
+      final response = await _dio.get(
+        ApiEndpoints.aiReportAnalyzeStatus(id),
+        options: _aiOptions,
+      );
       return AnalysisStatus.fromJson(_asMap(response.data));
     } on DioException catch (e) {
       throw ServerException(
@@ -48,7 +61,11 @@ class AiReportRemoteSource {
   /// `POST ai-reports` — persist the completed report. Returns the saved report.
   Future<Map<String, dynamic>> persist(Map<String, dynamic> body) async {
     try {
-      final response = await _dio.post(ApiEndpoints.aiReports, data: body);
+      final response = await _dio.post(
+        ApiEndpoints.aiReports,
+        data: body,
+        options: _aiOptions,
+      );
       final data = response.data;
       final map = data is Map && data['report'] is Map
           ? data['report']

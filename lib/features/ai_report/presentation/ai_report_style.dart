@@ -20,20 +20,39 @@ class HydraReport {
   static const red50 = Color(0xFFFEF2F2);
   static const red100 = Color(0xFFFEE2E2);
   static const red500 = Color(0xFFEF4444);
+  static const red600 = Color(0xFFDC2626);
+  static const red800 = Color(0xFF991B1B);
   static const red900 = Color(0xFF7F1D1D);
   static const green50 = Color(0xFFF0FDF4);
   static const green100 = Color(0xFFDCFCE7);
+  static const green500 = Color(0xFF22C55E);
   static const green600 = Color(0xFF16A34A);
+  static const green800 = Color(0xFF166534);
   static const green900 = Color(0xFF14532D);
   static const blue50 = Color(0xFFEFF6FF);
   static const blue100 = Color(0xFFDBEAFE);
+  static const blue500 = Color(0xFF3B82F6);
   static const blue800 = Color(0xFF1E40AF);
+  static const blue900 = Color(0xFF1E3A8A);
   static const yellow50 = Color(0xFFFEFCE8);
   static const yellow100 = Color(0xFFFEF9C3);
+  static const yellow600 = Color(0xFFCA8A04);
   static const yellow700 = Color(0xFFA16207);
+  static const yellow900 = Color(0xFF713F12);
+  static const orange50 = Color(0xFFFFF7ED);
+  static const orange100 = Color(0xFFFFEDD5);
+  static const orange600 = Color(0xFFEA580C);
+  static const orange900 = Color(0xFF7C2D12);
   static const purple50 = Color(0xFFFAF5FF);
   static const purple100 = Color(0xFFF3E8FF);
+  static const purple500 = Color(0xFFA855F7);
   static const purple700 = Color(0xFF7E22CE);
+  static const purple800 = Color(0xFF6B21A8);
+  // Grays (web gray-50/100/400/700).
+  static const gray50 = Color(0xFFF9FAFB);
+  static const gray100 = Color(0xFFF3F4F6);
+  static const gray400 = Color(0xFF9CA3AF);
+  static const gray700 = Color(0xFF374151);
 
   /// Sections in render order: key, title, icon, and whether it's
   /// practitioner-only (hidden on the "Your Report" tab).

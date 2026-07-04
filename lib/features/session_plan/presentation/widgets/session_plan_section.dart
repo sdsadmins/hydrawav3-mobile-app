@@ -4,6 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../ai_report/data/ai_report_repository.dart';
+import '../../../ai_report/domain/kinetic_chain_payload.dart';
+import '../../../ai_report/presentation/providers/ai_report_providers.dart';
+import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../domain/session_plan.dart';
@@ -37,6 +41,23 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
         .toSet()
         .toList();
 
+    // Web parity (session.tsx `disabled = isGuestMode || !selectedClientId ||
+    // generating`): View Detailed Report / 3D-Pattern A/B are enabled only in
+    // Client mode, with a client selected, and no report currently generating.
+    final isClientMode =
+        ref.watch(sessionClientModeProvider) == ClientMode.client;
+    final hasClient = ref.watch(selectedClientProvider) != null;
+    final busy = ref.watch(aiReportBusyProvider);
+    final canUse = isClientMode && hasClient && !busy;
+    // Tell the user exactly which condition is blocking the buttons.
+    final String? gateReason = canUse
+        ? null
+        : !isClientMode
+            ? 'Switch to Client mode (Guest can\'t open the report / 3D).'
+            : !hasClient
+                ? 'Select a client above to open the report or 3D patterns.'
+                : 'Wait for the AI report to finish generating.';
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -65,20 +86,31 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
                 _actionButton(
                   icon: Icons.description_rounded,
                   label: 'View Detailed Report',
+                  enabled: canUse,
                   onTap: _openReport,
                 ),
                 _actionButton(
                   icon: Icons.view_in_ar_rounded,
                   label: '3D-Pattern A',
+                  enabled: canUse,
                   onTap: () => _open3d('A'),
                 ),
                 _actionButton(
                   icon: Icons.view_in_ar_rounded,
                   label: '3D-Pattern B',
+                  enabled: canUse,
                   onTap: () => _open3d('B'),
                 ),
               ],
             ),
+            if (gateReason != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                gateReason,
+                style: TextStyle(
+                    fontSize: 11, color: ThemeConstants.textTertiary),
+              ),
+            ],
             // "Active Areas" reveals the focus-area editor + pad placements.
             if (_showAreas) ...[
               const SizedBox(height: 14),
@@ -131,18 +163,21 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
     required String label,
     required VoidCallback onTap,
     bool selected = false,
+    bool enabled = true,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        decoration: BoxDecoration(
-          color: selected
-              ? ThemeConstants.accent
-              : ThemeConstants.navBackground,
-          borderRadius: BorderRadius.circular(999),
-        ),
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.45,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: enabled ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: selected
+                ? ThemeConstants.accent
+                : ThemeConstants.navBackground,
+            borderRadius: BorderRadius.circular(999),
+          ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -160,6 +195,7 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -200,12 +236,57 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
     );
   }
 
-  void _open3d(String pattern) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('3D-Pattern $pattern view isn\'t available on mobile yet.'),
-      ),
-    );
+  bool _loading3d = false;
+
+  /// Open the 3D kinetic-chain viewer for the given pattern ('A' or 'B').
+  /// Fetches the latest AI report (web parity: `anatomyViewerData` reads the
+  /// recent report's `kinetic_chain_pattern_a/_b`), derives the viewer payload,
+  /// and navigates to the full-screen WebGL viewer.
+  Future<void> _open3d(String pattern) async {
+    if (_loading3d) return;
+    setState(() => _loading3d = true);
+    try {
+      final auth = ref.read(authStateProvider);
+      final client = ref.read(selectedClientProvider);
+      final report = await ref.read(aiReportRepositoryProvider).recent(
+            // Reports are stored under the CLIENT's id (a Mongo ObjectId), not
+            // the practitioner's numeric id — the /recent endpoint rejects the
+            // numeric id with "Invalid userId format".
+            userId: client?.id,
+            organizationId: int.tryParse(auth.selectedOrgId ?? ''),
+          );
+      if (!mounted) return;
+      if (report == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Generate a report first to view the 3D kinetic chain.'),
+        ));
+        return;
+      }
+      final key = pattern.toLowerCase();
+      if (!kineticChainPatternHasData(report, key)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Pattern $pattern has no kinetic-chain data to show.'),
+        ));
+        return;
+      }
+      final payload = buildKineticChainPayload(report, key);
+      context.pushNamed(
+        RouteNames.kineticChain3d,
+        extra: {
+          'patternLabel':
+              'Kinetic Chain Visualization - Pattern ${pattern.toUpperCase()}',
+          'payload': payload,
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Couldn\'t load the 3D view: $e'),
+      ));
+    } finally {
+      if (mounted) setState(() => _loading3d = false);
+    }
   }
 
   void _openReport() {

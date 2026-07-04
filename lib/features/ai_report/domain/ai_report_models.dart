@@ -19,10 +19,24 @@ class AnalysisStatus {
 
   factory AnalysisStatus.fromJson(Map<String, dynamic> j) {
     final res = j['result'];
+
+    // Some backends (and the web `analyzePatientIntake`) return the full
+    // AnalysisOutput INLINE as the response body — no { id, status, result }
+    // job envelope. Detect that shape via its required sections so a finished
+    // analysis isn't misread as a still-pending job and wrongly surfaced as
+    // "AI analysis timed out".
+    final isInlineResult = res is! Map &&
+        (j.containsKey('personal_snapshot') ||
+            j.containsKey('clinical_insight_snapshot') ||
+            j.containsKey('kinetic_chain_pattern_a'));
+
     return AnalysisStatus(
       id: (j['id'] ?? j['_id'] ?? '').toString(),
-      status: (j['status'] ?? 'pending').toString(),
-      result: res is Map ? Map<String, dynamic>.from(res) : null,
+      status:
+          (j['status'] ?? (isInlineResult ? 'completed' : 'pending')).toString(),
+      result: res is Map
+          ? Map<String, dynamic>.from(res)
+          : (isInlineResult ? Map<String, dynamic>.from(j) : null),
       error: j['error']?.toString(),
     );
   }
