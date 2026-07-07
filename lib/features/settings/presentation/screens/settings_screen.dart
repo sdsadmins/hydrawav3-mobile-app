@@ -728,6 +728,16 @@ class SettingsScreen extends ConsumerWidget {
                           sections: LegalContent.termsAndConditionsSections,
                         ),
                       ),
+                      _Item(
+                        Icons.copyright_outlined,
+                        'Acknowledgements',
+                        onTap: () => _showInfoSheet(
+                          context,
+                          title: 'Acknowledgements',
+                          subtitle: 'Open-source and third-party content used in this app.',
+                          sections: LegalContent.acknowledgementsSections,
+                        ),
+                      ),
                     ])),
                 const SizedBox(height: 20),
                 const SizedBox(height: 16),

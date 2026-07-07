@@ -207,4 +207,21 @@ class LegalContent {
       ],
     ),
   ];
+
+  // Third-party / open-source attributions. Required to satisfy the license
+  // terms of bundled assets (e.g. the CC BY-SA 3D anatomy model). Surfaced in
+  // Settings → Legal → Acknowledgements.
+  static const List<InfoSheetSection> acknowledgementsSections = [
+    InfoSheetSection(
+      heading: '3D Anatomy Model',
+      paragraphs: [
+        'The 3D muscle model used in the Kinetic Chain viewer is Z-Anatomy (licensed under CC BY-SA 4.0), adapted from BodyParts3D, © The Database Center for Life Science (DBCLS) (licensed under CC BY-SA 2.1 Japan). The model has been modified for use in this app.',
+      ],
+      bullets: [
+        'Z-Anatomy — CC BY-SA 4.0',
+        'BodyParts3D, © DBCLS — CC BY-SA 2.1 Japan',
+        'License: https://creativecommons.org/licenses/by-sa/4.0',
+      ],
+    ),
+  ];
 }
