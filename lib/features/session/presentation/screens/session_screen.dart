@@ -30,6 +30,8 @@ import '../../../session/domain/active_session_model.dart' as active_session;
 import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
+import '../../../session/presentation/providers/pending_outcomes_provider.dart';
+import '../widgets/post_session_outcomes_sheet.dart';
 import '../../../session/services/background_session_runtime.dart';
 import '../../../session/services/wifi_remote_control.dart';
 
@@ -134,6 +136,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       _bleConnectionSub;
   bool _startingSession = false;
   bool _terminalSessionCleanupInFlight = false;
+  bool _outcomesPromptShown = false;
   String? _activeSessionId;
   String? _historySnapshotSessionId;
   late final String _engineKey;
@@ -1492,6 +1495,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // End the backend session for a normal run first, so the run clears from
     // every client's live feed even if there's no local active-session record.
     _stopNormalServerSession();
+
+    // Queue the post-session review snapshot (idempotent, client-only). We do
+    // NOT auto-open the sheet here — web parity: the questions appear on the
+    // explicit Stop All / Done end-action. If the session ended off-screen, the
+    // queued snapshot surfaces as a "Needs review" card on the Live feed.
+    if (!widget.remoteView) {
+      ref
+          .read(sessionEngineFamilyProvider(_engineKey).notifier)
+          .enqueuePendingOutcome();
+    }
+
     if (_terminalSessionCleanupInFlight) return;
     if (_activeSessionId == null) return;
 
@@ -1513,6 +1527,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     } finally {
       _terminalSessionCleanupInFlight = false;
     }
+  }
+
+  /// Present the post-session outcomes sheet for this session (if it has a
+  /// queued review), then finalize — a single `/intake` POST with the answers,
+  /// or a bare log on Skip/dismiss. Idempotent via [_outcomesPromptShown].
+  Future<void> _promptSessionOutcomes() async {
+    if (_outcomesPromptShown) return;
+    final notifier = ref.read(pendingOutcomesProvider.notifier);
+    final pending = notifier.needsReviewById(_engineKey);
+    if (pending == null) return; // nothing queued, or already answered
+    _outcomesPromptShown = true;
+    if (!mounted) return;
+    final outcomes = await showPostSessionOutcomesSheet(
+      context,
+      protocolQuestions: pending.orderedProtocolQuestions,
+      discomfortAreas: pending.discomfortAreasForSheet,
+    );
+    // outcomes == null → Skip/dismiss: still log the session (no answers).
+    await notifier.finalize(_engineKey, outcomes);
   }
 
   bool _isDisconnectTransition(
@@ -2901,9 +2934,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     }
 
-    void onStopAll() {
+    Future<void> onStopAll() async {
       if (!widget.remoteView) {
         ctrl.stop();
+        // Web parity: the post-session questions appear on the explicit Stop
+        // All (client sessions only — the enqueue no-ops for guests).
+        ctrl.enqueuePendingOutcome();
+        await _promptSessionOutcomes();
         return;
       }
       if (isBleRemote) {
@@ -3048,6 +3085,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           width: double.infinity,
           child: ElevatedButton(
               onPressed: () async {
+                // Ask the post-session questions before leaving, if not already
+                // handled by the auto-prompt (idempotent).
+                if (!widget.remoteView) {
+                  ref
+                      .read(sessionEngineFamilyProvider(_engineKey).notifier)
+                      .enqueuePendingOutcome();
+                  await _promptSessionOutcomes();
+                }
                 await _removeTrackedSessionIfAny();
                 ctrl.reset();
                 if (!mounted) return;

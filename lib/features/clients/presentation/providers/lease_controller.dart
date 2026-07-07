@@ -88,12 +88,14 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     }
 
     state = state.copyWith(busy: true, error: null, step: 'Connecting to device…');
+    var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
       if (!connected) {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
+      didConnect = true;
 
       state = state.copyWith(busy: true, step: 'Loading lease to device…');
       final acked = await _commands.setLeaseId(
@@ -119,6 +121,11 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     } catch (e) {
       state = state.copyWith(busy: false, error: _describe(e));
       return null;
+    } finally {
+      // Release the device once the lease is loaded. A connected device stops
+      // advertising and would be missing from the later "Deactivate" scan —
+      // disconnecting lets it re-advertise so it stays selectable.
+      await _releaseDevice(didConnect, device);
     }
   }
 
@@ -131,12 +138,14 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     final leaseId = client.leaseId ?? '';
 
     state = state.copyWith(busy: true, error: null, step: 'Connecting to device…');
+    var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
       if (!connected) {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
+      didConnect = true;
 
       state = state.copyWith(busy: true, step: 'Clearing lease on device…');
       final acked = await _commands.clearLeaseId(
@@ -165,6 +174,10 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     } catch (e) {
       state = state.copyWith(busy: false, error: _describe(e));
       return null;
+    } finally {
+      // Release the device so it re-advertises and stays selectable in any
+      // later scan (e.g. re-registering / loading a new lease).
+      await _releaseDevice(didConnect, device);
     }
   }
 
@@ -185,12 +198,14 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
   /// Returns null (and sets an error) if it can't be resolved.
   Future<String?> readDeviceMac(BluetoothDevice device) async {
     state = state.copyWith(busy: true, error: null, step: 'Reading device…');
+    var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
       if (!connected) {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
+      didConnect = true;
       final mac = await _commands.resolveHardwareMac(device.remoteId.str);
       if (mac == null) {
         state = state.copyWith(
@@ -204,6 +219,28 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     } catch (e) {
       state = state.copyWith(busy: false, error: _describe(e));
       return null;
+    } finally {
+      // Reading the MAC is a one-off probe, so release the connection before
+      // returning. A connected device stops advertising and would NOT appear in
+      // the later "Load Lease ID to Device" scan — leaving it connected here is
+      // exactly why that device went missing from the picker. Disconnecting
+      // lets it re-advertise so it's selectable again. (A later explicit
+      // connect() clears the manual-disconnect suppression.)
+      await _releaseDevice(didConnect, device);
+    }
+  }
+
+  /// Best-effort disconnect after a one-off lease BLE operation. Every lease
+  /// step (read MAC / load lease / deactivate) connects, does its work, and must
+  /// release the device: a still-connected unit stops advertising and vanishes
+  /// from the next scan picker. Only disconnects if [didConnect] is true; a
+  /// later explicit connect() re-enables the device for the next step.
+  Future<void> _releaseDevice(bool didConnect, BluetoothDevice device) async {
+    if (!didConnect) return;
+    try {
+      await _ble.disconnectDevice(device.remoteId.str);
+    } catch (_) {
+      // Best-effort; the operation's result is unaffected.
     }
   }
 

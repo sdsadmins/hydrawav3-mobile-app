@@ -86,6 +86,13 @@ class ApiEndpoints {
   static const String aiReportsAll = 'ai-reports/all';
   static String aiReportById(String id) => 'ai-reports/$id';
 
+  // Live analysis system prompt (Node Nest). The web fetches this and sends its
+  // `content` as `customSystemPrompt` with every `ai/analyze` call; the mobile
+  // must do the same, otherwise the backend falls back to an older built-in
+  // prompt that can emit non-numeric fields (e.g. age "not provided") the
+  // AiReport schema rejects. Relative (no leading slash).
+  static const String promptAnalysisLive = 'admin/prompts/analysis/live';
+
   // Session music ("Atmosphere") tracks
   static const String musics = '/musics';
 

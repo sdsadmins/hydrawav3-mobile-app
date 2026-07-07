@@ -9,8 +9,11 @@ import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../session/domain/active_session_model.dart';
+import '../../../session/domain/pending_session_outcome_model.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
+import '../../../session/presentation/providers/pending_outcomes_provider.dart';
+import '../../../session/presentation/widgets/post_session_outcomes_sheet.dart';
 import '../../../session/services/session_sync_service.dart';
 
 enum _HistoryTab { live, history }
@@ -27,6 +30,7 @@ class HistoryListScreen extends ConsumerStatefulWidget {
 class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
   _HistoryTab _selectedTab = _HistoryTab.live;
   _HistoryFilter _historyFilter = _HistoryFilter.all;
+  bool _outcomesSheetOpen = false;
 
   @override
   void initState() {
@@ -38,6 +42,8 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
       if (orgId != null && orgId.isNotEmpty) {
         ref.read(liveSessionsProvider.notifier).start(orgId);
       }
+      // Retry any answered-but-unsynced outcome POSTs (best-effort).
+      ref.read(pendingOutcomesProvider.notifier).drainSyncPending();
     });
   }
 
@@ -71,11 +77,27 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
   Widget build(BuildContext context) {
     final allActiveSessions = ref.watch(liveSessionsProvider);
 
-    // Keep only genuinely live sessions (running on top, older below).
+    // Sessions still awaiting a post-session review (unanswered only). Rendered
+    // as "Needs review" cards that persist until the user answers or skips —
+    // even after the backend drops the live card. Answered-but-unsynced entries
+    // are excluded (they retry silently and never re-appear).
+    final pendingReviews = ref
+        .watch(pendingOutcomesProvider)
+        .where((e) => e.answers == null)
+        .toList();
+    final pendingIds = {for (final p in pendingReviews) p.sessionId};
+
+    // Keep only genuinely live sessions (running on top, older below), and drop
+    // any that already have a needs-review card so a session shows once.
     final runningSessions = allActiveSessions
         .where(_isVisibleActiveSession)
+        .where((s) => !pendingIds.contains(s.id))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    // No auto-prompt (web parity): pending client sessions surface as tap-to-
+    // answer "Needs review" cards on the Live tab; the sheet opens on tap or via
+    // the session screen's Stop All / Done.
 
     final sessionsAsync = ref.watch(allSessionsProvider);
     final savedSessions = sessionsAsync.asData?.value ?? const <SessionHistoryItem>[];
@@ -159,7 +181,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
               const SizedBox(height: 14),
               Expanded(
                 child: _selectedTab == _HistoryTab.live
-                    ? _buildLiveSessions(runningSessions)
+                    ? _buildLiveSessions(runningSessions, pendingReviews)
                     : _buildHistorySessions(sessionsAsync),
               ),
             ],
@@ -169,8 +191,11 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     );
   }
 
-  Widget _buildLiveSessions(List<ActiveSession> runningSessions) {
-    if (runningSessions.isEmpty) {
+  Widget _buildLiveSessions(
+    List<ActiveSession> runningSessions,
+    List<PendingSessionOutcome> pendingReviews,
+  ) {
+    if (runningSessions.isEmpty && pendingReviews.isEmpty) {
       return const _EmptyHistoryState(
         title: 'No live sessions',
         subtitle: 'Start a session to see it appear here while it is running.',
@@ -178,12 +203,27 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
       );
     }
 
+    // Needs-review cards are pinned above the live sessions.
+    final reviews = [...pendingReviews]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final total = reviews.length + runningSessions.length;
+
     return ListView.separated(
       physics: const ClampingScrollPhysics(),
-      itemCount: runningSessions.length,
+      itemCount: total,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
-        final session = runningSessions[index];
+        if (index < reviews.length) {
+          final entry = reviews[index];
+          return AnimatedEntrance(
+            index: index,
+            child: _NeedsReviewCard(
+              entry: entry,
+              onTap: () => _reviewOutcomes(entry),
+            ),
+          );
+        }
+        final session = runningSessions[index - reviews.length];
         return AnimatedEntrance(
           index: index,
           child: _ActiveSessionCard(
@@ -193,6 +233,26 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
         );
       },
     );
+  }
+
+  /// Show the outcomes sheet for [entry], then finalize (single `/intake` POST
+  /// with answers, or a bare log on Skip/dismiss). Removing the entry drops its
+  /// "Needs review" card from the Live tab.
+  Future<void> _reviewOutcomes(PendingSessionOutcome entry) async {
+    if (_outcomesSheetOpen) return;
+    _outcomesSheetOpen = true;
+    try {
+      final outcomes = await showPostSessionOutcomesSheet(
+        context,
+        protocolQuestions: entry.orderedProtocolQuestions,
+        discomfortAreas: entry.discomfortAreasForSheet,
+      );
+      await ref
+          .read(pendingOutcomesProvider.notifier)
+          .finalize(entry.sessionId, outcomes);
+    } finally {
+      _outcomesSheetOpen = false;
+    }
   }
 
   Widget _buildHistorySessions(
@@ -1019,6 +1079,85 @@ class _HistorySessionCard extends StatelessWidget {
             Icons.chevron_right_rounded,
             color: ThemeConstants.textTertiary,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A completed session awaiting its post-session outcomes. Persists on the Live
+/// tab until the user answers or skips, then finalizes (single `/intake` POST).
+class _NeedsReviewCard extends StatelessWidget {
+  final PendingSessionOutcome entry;
+  final VoidCallback onTap;
+  const _NeedsReviewCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final deviceCount = entry.deviceIds.length;
+    final qCount = entry.orderedProtocolQuestions
+        .fold<int>(0, (sum, p) => sum + p.questions.length);
+    return GradientCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(16),
+      showShadow: false,
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: ThemeConstants.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.assignment_turned_in_rounded,
+                color: ThemeConstants.accent, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.protocolName.isEmpty ? 'Session' : entry.protocolName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$deviceCount device(s) • Completed',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: ThemeConstants.textTertiary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.warning.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    qCount > 0 ? 'Needs review • $qCount question(s)' : 'Needs review',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: ThemeConstants.warning,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.chevron_right_rounded,
+              color: ThemeConstants.textTertiary),
         ],
       ),
     );

@@ -215,8 +215,13 @@ class GuidedAssessmentData {
   /// from the selected [client] (omitted in guest mode). Replicates the web
   /// `mapSessionDataToIntakeInput`.
   Map<String, dynamic> toPatientIntakeInput(Client? client) {
-    final demographics = <String, dynamic>{};
-    if (client?.age != null) demographics['age'] = client!.age;
+    // Always send a numeric age. Guests (and clients with no recorded age) send
+    // 0, so the AI echoes a Number instead of "Not provided" — the backend
+    // AiReport schema types `age` as Number and rejects a string with
+    // "Cast to Number failed for value \"not provided\"".
+    final demographics = <String, dynamic>{
+      'age': client?.age ?? 0,
+    };
     if (client?.gender != null && client!.gender!.trim().isNotEmpty) {
       demographics['gender'] = client.gender;
     }

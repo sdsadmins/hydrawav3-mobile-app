@@ -1,3 +1,70 @@
+/// One preset answer option for a post-session question: the answer text plus
+/// its admin-assigned [rank] (1–5). The backend stores options as objects
+/// (`answers: [{answer, rank}]`) and REQUIRES the rank back on the submitted
+/// intake, so the rank must be carried through — not just the answer string.
+class ProtocolAnswerOption {
+  final String answer;
+  final int rank;
+
+  const ProtocolAnswerOption({required this.answer, this.rank = 0});
+
+  Map<String, dynamic> toJson() => {'answer': answer, 'rank': rank};
+
+  /// Parse one option. [index] is the option's position, used as the rank
+  /// fallback (`i + 1`) for a plain-string option or a missing rank — matching
+  /// the web (`rank = a.rank ?? i + 1`).
+  factory ProtocolAnswerOption.fromJson(dynamic raw, int index) {
+    if (raw is Map) {
+      final rank = (raw['rank'] as num?)?.toInt() ?? (index + 1);
+      return ProtocolAnswerOption(
+        answer: (raw['answer'] ?? '').toString().trim(),
+        rank: rank,
+      );
+    }
+    return ProtocolAnswerOption(
+      answer: (raw ?? '').toString().trim(),
+      rank: index + 1,
+    );
+  }
+}
+
+/// An admin-defined post-session question and its preset answer options
+/// (web parity: `protocol.questions[] = { question, answers: [{answer, rank}] }`).
+/// [answers] is empty when the question is free-text.
+class ProtocolQuestion {
+  final String text;
+  final List<ProtocolAnswerOption> answers;
+
+  const ProtocolQuestion({required this.text, this.answers = const []});
+
+  Map<String, dynamic> toJson() =>
+      {'question': text, 'answers': answers.map((a) => a.toJson()).toList()};
+
+  factory ProtocolQuestion.fromJson(Map<String, dynamic> j) {
+    final rawAnswers = j['answers'];
+    final answers = <ProtocolAnswerOption>[];
+    if (rawAnswers is List) {
+      for (var i = 0; i < rawAnswers.length; i++) {
+        final opt = ProtocolAnswerOption.fromJson(rawAnswers[i], i);
+        if (opt.answer.isNotEmpty) answers.add(opt);
+      }
+    }
+    return ProtocolQuestion(
+      text: (j['question'] ?? j['text'] ?? '').toString().trim(),
+      answers: answers,
+    );
+  }
+
+  /// The rank of the option whose answer matches [answer], or null when there's
+  /// no match (e.g. a free-text response). Mirrors the web's `matched?.rank`.
+  int? rankForAnswer(String answer) {
+    for (final o in answers) {
+      if (o.answer == answer) return o.rank;
+    }
+    return null;
+  }
+}
+
 class Protocol {
   final String id;
   final String templateName;
@@ -33,6 +100,10 @@ class Protocol {
   /// .includes(_id)`). Locked protocols are shown disabled (web parity).
   final bool active;
 
+  /// Admin-defined post-session questions asked after this protocol runs
+  /// (web parity: `protocol.questions[]`). Empty when none configured.
+  final List<ProtocolQuestion> questions;
+
   const Protocol({
     required this.id,
     required this.templateName,
@@ -53,6 +124,7 @@ class Protocol {
     this.protocolPlusIds = const [],
     this.apiTotalDurationSeconds = 0,
     this.active = true,
+    this.questions = const [],
   });
 
   factory Protocol.fromJson(Map<String, dynamic> json) {
@@ -91,7 +163,29 @@ class Protocol {
       // protocol is usable when the field is absent (matches the backend's
       // regular-protocol default).
       active: data['active'] as bool? ?? true,
+      questions: _parseQuestions(data),
     );
+  }
+
+  /// Parse admin-defined post-session questions. Tolerant of the web shape
+  /// (`[{question, answers}]`) and a plain `[String]` list; trims, drops blanks,
+  /// and de-dupes by question text while preserving order.
+  static List<ProtocolQuestion> _parseQuestions(Map<String, dynamic> data) {
+    final raw = data['questions'];
+    if (raw is! List) return const [];
+    final seen = <String>{};
+    final out = <ProtocolQuestion>[];
+    for (final item in raw) {
+      ProtocolQuestion? q;
+      if (item is String) {
+        final t = item.trim();
+        if (t.isNotEmpty) q = ProtocolQuestion(text: t);
+      } else if (item is Map) {
+        q = ProtocolQuestion.fromJson(Map<String, dynamic>.from(item));
+      }
+      if (q != null && q.text.isNotEmpty && seen.add(q.text)) out.add(q);
+    }
+    return out;
   }
 
   static List<String> _parseProtocolPlusIds(Map<String, dynamic> data) {
@@ -161,6 +255,7 @@ class Protocol {
 
   Protocol copyWith({
     String? goalTagName,
+    List<ProtocolQuestion>? questions,
   }) {
     return Protocol(
       id: id,
@@ -182,6 +277,7 @@ class Protocol {
       protocolPlusIds: protocolPlusIds,
       apiTotalDurationSeconds: apiTotalDurationSeconds,
       active: active,
+      questions: questions ?? this.questions,
     );
   }
 

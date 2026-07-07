@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +36,14 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
     final m = totalSeconds ~/ 60;
     final s = totalSeconds % 60;
     return '${m}m ${s.toString().padLeft(2, '0')}s';
+  }
+
+  /// Clock format for the live countdown, e.g. `04:30`.
+  String _fmtClock(int totalSeconds) {
+    final t = totalSeconds < 0 ? 0 : totalSeconds;
+    final m = t ~/ 60;
+    final s = t % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
   Future<void> _connect(String registeredMac) async {
@@ -215,27 +225,45 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
             ),
           ),
           if (!session.isLive)
-            ElevatedButton.icon(
-              onPressed: session.connecting ? null : () => _connect(registeredMac),
-              icon: session.connecting
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.bluetooth_rounded, size: 16),
-              label: Text(session.connecting
-                  ? 'Connecting…'
-                  : session.deviceReady
-                      ? 'Reconnect'
-                      : 'Connect'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: ThemeConstants.navBackground,
-                foregroundColor: ThemeConstants.onNav,
-                // Inline Row button: override the theme's full-width min size.
-                minimumSize: const Size(0, 44),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              ),
-            ),
+            session.deviceReady
+                // Connected → offer Disconnect.
+                ? OutlinedButton.icon(
+                    onPressed: session.connecting
+                        ? null
+                        : () => _controller.disconnect(),
+                    icon: const Icon(Icons.bluetooth_disabled_rounded, size: 16),
+                    label: const Text('Disconnect'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: ThemeConstants.error,
+                      side: BorderSide(
+                          color: ThemeConstants.error.withValues(alpha: 0.5)),
+                      // Inline Row button: override the theme's full-width min.
+                      minimumSize: const Size(0, 44),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                    ),
+                  )
+                // Not connected → offer Connect.
+                : ElevatedButton.icon(
+                    onPressed: session.connecting
+                        ? null
+                        : () => _connect(registeredMac),
+                    icon: session.connecting
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.bluetooth_rounded, size: 16),
+                    label: Text(session.connecting ? 'Connecting…' : 'Connect'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ThemeConstants.navBackground,
+                      foregroundColor: ThemeConstants.onNav,
+                      // Inline Row button: override the theme's full-width min.
+                      minimumSize: const Size(0, 44),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                    ),
+                  ),
         ],
       ),
     );
@@ -429,25 +457,22 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [ThemeConstants.navBackground, ThemeConstants.surfaceVariant],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: ThemeConstants.surface,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: ThemeConstants.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(Icons.monitor_heart_rounded, color: ThemeConstants.onNav),
+            Icon(Icons.monitor_heart_rounded, color: ThemeConstants.accent),
             const SizedBox(width: 10),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(running ? 'SESSION RUNNING' : 'SESSION PAUSED',
                     style: TextStyle(
-                        color: ThemeConstants.onNav,
+                        color: ThemeConstants.textPrimary,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.5)),
                 const SizedBox(height: 2),
@@ -458,12 +483,49 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
                       _selectedProtocol!.templateName,
                   ].join(' · '),
                   style: TextStyle(
-                      color: ThemeConstants.onNav.withValues(alpha: 0.7),
+                      color: ThemeConstants.textSecondary,
                       fontSize: 12),
                 ),
               ],
             ),
           ]),
+          const SizedBox(height: 20),
+          // Circular countdown ring — same style as the practitioner session
+          // screen (`_TimerRing`): progress arc + the live time in the centre.
+          Center(
+            child: SizedBox(
+              width: 200,
+              height: 200,
+              child: CustomPaint(
+                painter: _ClientTimerRing(
+                    progress: session.progress, active: running),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _fmtClock(session.remainingSeconds),
+                        style: TextStyle(
+                          color: ThemeConstants.textPrimary,
+                          fontSize: 40,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(running ? 'RUNNING' : 'PAUSED',
+                          style: TextStyle(
+                              color: ThemeConstants.textSecondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.5)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 18),
           Row(children: [
             Expanded(
@@ -482,8 +544,7 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
               child: ElevatedButton.icon(
                 onPressed: running ? _controller.pause : _controller.resume,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      ThemeConstants.onNav.withValues(alpha: 0.15),
+                  backgroundColor: ThemeConstants.navBackground,
                   foregroundColor: ThemeConstants.onNav,
                   minimumSize: const Size.fromHeight(48),
                 ),
@@ -515,7 +576,7 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
   Widget _liveStat(String label, String value) => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: ThemeConstants.onNav.withValues(alpha: 0.1),
+          color: ThemeConstants.surfaceVariant,
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
@@ -523,14 +584,14 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
           children: [
             Text(label,
                 style: TextStyle(
-                    color: ThemeConstants.onNav.withValues(alpha: 0.6),
+                    color: ThemeConstants.textSecondary,
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1)),
             const SizedBox(height: 4),
             Text(value,
                 style: TextStyle(
-                    color: ThemeConstants.onNav,
+                    color: ThemeConstants.textPrimary,
                     fontSize: 15,
                     fontWeight: FontWeight.w800)),
           ],
@@ -547,6 +608,37 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
         ),
         child: child,
       );
+}
+
+/// Circular countdown ring for the live client session — same shape and colors
+/// as the practitioner screen's `_TimerRing` (`accent` arc on a `border` track),
+/// so it reads on the light theme card.
+class _ClientTimerRing extends CustomPainter {
+  final double progress;
+  final bool active;
+  _ClientTimerRing({required this.progress, required this.active});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 10;
+    final bg = Paint()
+      ..color = ThemeConstants.border
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    canvas.drawCircle(center, radius, bg);
+    final fg = Paint()
+      ..color = ThemeConstants.accent.withValues(alpha: active ? 1 : 0.5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -pi / 2,
+        2 * pi * progress, false, fg);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ClientTimerRing old) =>
+      progress != old.progress || active != old.active;
 }
 
 /// Bluetooth device picker sheet — streams live scan results and returns the

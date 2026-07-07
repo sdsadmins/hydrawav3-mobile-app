@@ -63,6 +63,9 @@ class _GuidedAssessmentWizardState
     if (err != null) {
       context.showSnackBar(err, isError: true);
     } else {
+      // Clear the assessment selections so the next report starts fresh
+      // (startGenerate already snapshotted the intake for the background run).
+      ref.read(guidedAssessmentProvider.notifier).reset();
       context.showSnackBar(
         'Generating AI report in the background — you can keep working. '
         'Track progress on the AI screen.',

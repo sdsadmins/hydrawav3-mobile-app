@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../data/client_repository.dart';
@@ -573,10 +574,40 @@ class _ClientLeaseScreenState extends ConsumerState<ClientLeaseScreen> {
 }
 
 /// Bluetooth device picker sheet. Streams live scan results and returns the
-/// chosen [BluetoothDevice] to the caller.
-class _DevicePickerSheet extends StatelessWidget {
+/// chosen [BluetoothDevice] to the caller. A "Hydrawav only" toggle (on by
+/// default) hides unrelated Bluetooth devices by name prefix.
+class _DevicePickerSheet extends StatefulWidget {
   final BleRepository repo;
   const _DevicePickerSheet({required this.repo});
+
+  @override
+  State<_DevicePickerSheet> createState() => _DevicePickerSheetState();
+}
+
+class _DevicePickerSheetState extends State<_DevicePickerSheet> {
+  bool _hydraOnly = true;
+
+  /// Normalized Hydra GATT service UUID advertised by the firmware. Null/empty
+  /// disables UUID filtering (defensive — the constant is set in practice).
+  static final String? _hydraServiceUuid =
+      (BleConstants.preferredServiceUuid == null ||
+              BleConstants.preferredServiceUuid!.isEmpty)
+          ? null
+          : BleConstants.normalizeUuid(BleConstants.preferredServiceUuid!);
+
+  /// A scan result is a Hydra unit when it advertises the Hydra service UUID.
+  /// Matches [autoConnectManager]'s scan filter exactly (normalize both sides,
+  /// compare against [BleConstants.preferredServiceUuid]) — UUID, not name.
+  bool _isHydra(ScanResult r) {
+    final target = _hydraServiceUuid;
+    if (target == null) return true; // no UUID configured → don't filter
+    return r.advertisementData.serviceUuids
+        .any((u) => BleConstants.normalizeUuid(u.str) == target);
+  }
+
+  String _nameOf(ScanResult r) => r.device.platformName.isNotEmpty
+      ? r.device.platformName
+      : r.advertisementData.advName;
 
   @override
   Widget build(BuildContext context) {
@@ -587,23 +618,38 @@ class _DevicePickerSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Select a device',
-                style: TextStyle(
-                    color: ThemeConstants.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800)),
-            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Select a device',
+                      style: TextStyle(
+                          color: ThemeConstants.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800)),
+                ),
+                Text('Hydrawav only',
+                    style: TextStyle(
+                        color: ThemeConstants.textSecondary, fontSize: 12)),
+                Switch(
+                  value: _hydraOnly,
+                  activeThumbColor: ThemeConstants.accent,
+                  onChanged: (v) => setState(() => _hydraOnly = v),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
             SizedBox(
               height: 320,
               child: StreamBuilder<List<ScanResult>>(
-                stream: repo.scanResults,
-                initialData: repo.currentScanResults,
+                stream: widget.repo.scanResults,
+                initialData: widget.repo.currentScanResults,
                 builder: (context, snapshot) {
                   final results = (snapshot.data ?? const <ScanResult>[])
-                      .where((r) =>
-                          r.device.platformName.isNotEmpty ||
-                          r.advertisementData.advName.isNotEmpty)
-                      .toList();
+                      .where((r) {
+                    if (_hydraOnly) return _isHydra(r);
+                    // Unfiltered view still hides nameless junk devices.
+                    return _nameOf(r).isNotEmpty;
+                  }).toList();
                   if (results.isEmpty) {
                     return Center(
                       child: Column(
@@ -615,7 +661,10 @@ class _DevicePickerSheet extends StatelessWidget {
                               child:
                                   CircularProgressIndicator(strokeWidth: 2)),
                           const SizedBox(height: 12),
-                          Text('Scanning for devices…',
+                          Text(
+                              _hydraOnly
+                                  ? 'Scanning for Hydrawav devices…'
+                                  : 'Scanning for devices…',
                               style: TextStyle(
                                   color: ThemeConstants.textSecondary)),
                         ],
@@ -627,9 +676,9 @@ class _DevicePickerSheet extends StatelessWidget {
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, i) {
                       final r = results[i];
-                      final name = r.device.platformName.isNotEmpty
-                          ? r.device.platformName
-                          : r.advertisementData.advName;
+                      final rawName = _nameOf(r);
+                      final name =
+                          rawName.isEmpty ? 'Unknown device' : rawName;
                       return ListTile(
                         leading: Icon(Icons.bluetooth_rounded,
                             color: ThemeConstants.accent),

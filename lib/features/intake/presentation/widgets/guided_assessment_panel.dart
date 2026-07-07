@@ -259,6 +259,14 @@ class _GuidedAssessmentPanelState
                       final err = ref
                           .read(aiReportGenerationProvider.notifier)
                           .startGenerate();
+                      // Clear the assessment selections once generation is
+                      // queued (it snapshots the intake first) so the next
+                      // report starts from a clean slate.
+                      if (err == null) {
+                        ref
+                            .read(guidedAssessmentProvider.notifier)
+                            .reset();
+                      }
                       context.showSnackBar(
                         err ??
                             'Generating AI report — you can keep working. '
@@ -317,23 +325,54 @@ class _GuidedAssessmentPanelState
     }
   }
 
-  /// Open a step's sheet and, once it closes, auto-advance the carousel to the
-  /// next step if this one is now complete (so the practitioner isn't forced to
-  /// manually swipe after finishing each step).
+  /// Open a step's sheet; when its "Done" button is pressed, roll straight into
+  /// the NEXT step's sheet (the last step just closes). The carousel also
+  /// advances so its position tracks progress. Dismissing a sheet (drag / tap
+  /// outside) stops the chain.
   Future<void> _openStep(
     BuildContext context, {
     required int index,
     required Widget sheet,
   }) async {
-    await _openSheet(context, sheet);
-    if (!mounted) return;
-    // `index` is 1-based; the next page's 0-based position equals `index`.
-    if (index < 4 && _isStepDone(index)) {
-      _pageController.animateToPage(
-        index,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+    var current = index;
+    var currentSheet = sheet;
+    while (true) {
+      // `true` == the sheet's Done button was pressed (vs. a drag-dismiss).
+      final goNext = await _openSheet(context, currentSheet);
+      if (!mounted) return;
+      // `current` is 1-based; the next page's 0-based position equals `current`.
+      if (current < 4 && _isStepDone(current)) {
+        _pageController.animateToPage(
+          current,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+      if (goNext == true && current < 4) {
+        // Let the previous sheet finish dismissing before opening the next.
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        if (!mounted) return;
+        current += 1;
+        currentSheet = _sheetForStep(current);
+        continue;
+      }
+      break;
+    }
+  }
+
+  /// The bottom-sheet widget for a 1-based guided-assessment step.
+  Widget _sheetForStep(int index) {
+    switch (index) {
+      case 1:
+        return const _AreaOfFocusSheet();
+      case 2:
+        return const _RomSheet();
+      case 3:
+        return const _DailyActivitiesSheet();
+      case 4:
+        return const _RemarksSheet();
+      default:
+        return const SizedBox.shrink();
     }
   }
 
@@ -471,8 +510,10 @@ class _GuidedAssessmentPanelState
   }
 }
 
-Future<void> _openSheet(BuildContext context, Widget child) {
-  return showModalBottomSheet<void>(
+/// Returns `true` when the sheet was closed via its Done button (so the caller
+/// can advance to the next step), or `null` when it was dismissed.
+Future<bool?> _openSheet(BuildContext context, Widget child) {
+  return showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
@@ -488,7 +529,12 @@ Future<void> _openSheet(BuildContext context, Widget child) {
 class _SheetShell extends StatelessWidget {
   final String title;
   final Widget child;
-  const _SheetShell({required this.title, required this.child});
+  final String doneLabel;
+  const _SheetShell({
+    required this.title,
+    required this.child,
+    this.doneLabel = 'Done & Next',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -519,10 +565,11 @@ class _SheetShell extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  // Signal "done" so the panel rolls into the next step's sheet.
+                  onPressed: () => Navigator.of(context).pop(true),
                   style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14)),
-                  child: const Text('Done'),
+                  child: Text(doneLabel),
                 ),
               ),
             ],
@@ -1360,6 +1407,7 @@ class _RemarksSheetState extends ConsumerState<_RemarksSheet> {
   Widget build(BuildContext context) {
     return _SheetShell(
       title: 'Final Remarks',
+      doneLabel: 'Done',
       child: _sectionCard(
         title: 'Anything else to note?',
         child: TextField(

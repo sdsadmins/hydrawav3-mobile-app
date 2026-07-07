@@ -25,11 +25,16 @@ class SessionRepository {
   final Dio _nodeDio;
   final bool _isOnline;
 
-  /// Session ids that have already been saved/synced (or are being saved) in
-  /// this app run. The backend inserts a new intake on every POST (no upsert),
-  /// so opening the live session card repeatedly must not create duplicates.
+  /// Session ids already POSTed to the backend in this app run. The backend
+  /// inserts a new intake on every POST (no upsert), so a session must be
+  /// finalized (POSTed) at most once. Only ids with a SUCCESSFUL POST are added
+  /// — a failed POST leaves the id absent so a later retry can proceed.
   /// Static so it survives provider re-creation and is shared app-wide.
   static final Set<String> _handledSessionIds = {};
+
+  /// Session ids saved as a local draft this run (avoids redundant re-writes
+  /// when the live card is re-opened before completion).
+  static final Set<String> _draftedSessionIds = {};
 
   SessionRepository({
     required AppDatabase db,
@@ -39,28 +44,8 @@ class SessionRepository {
         _nodeDio = nodeDio,
         _isOnline = isOnline;
 
-  /// Save a completed session locally and sync to backend if online.
-  Future<void> saveSession(SessionRecord record) async {
-    // Claim this session id synchronously (before any await). If it's already
-    // claimed, another save for the same session is in progress or done — skip
-    // so we never POST the same intake twice (e.g. re-opening the live card).
-    if (!_handledSessionIds.add(record.id)) {
-      appLogger.i(
-          'Session ${record.id} already handled this run, skipping duplicate save');
-      return;
-    }
-
-    // Also skip if a previous app run already synced it to the backend.
-    final existing = await _db.getLocalSession(record.id);
-    final alreadySynced = existing?.synced ?? false;
-    if (alreadySynced) {
-      appLogger.i('Session ${record.id} already synced, skipping duplicate save');
-      return;
-    }
-
-    // Always save locally first. Preserve the existing synced flag so we never
-    // downgrade a synced row back to unsynced.
-    await _db.upsertSession(LocalSessionsCompanion(
+  LocalSessionsCompanion _companion(SessionRecord record, {required bool synced}) {
+    return LocalSessionsCompanion(
       id: Value(record.id),
       protocolId: Value(record.protocolId),
       protocolName: Value(record.protocolName),
@@ -75,16 +60,54 @@ class SessionRepository {
       intakeJson: Value(
         record.intake == null ? null : jsonEncode(record.intake!.toJson()),
       ),
-      synced: Value(record.synced),
+      synced: Value(synced),
       completedAt: Value(record.completedAt),
-    ));
+    );
+  }
 
-    appLogger.i('Session saved locally: ${record.id}');
+  /// Save a session as a LOCAL-ONLY draft at start — no backend POST. The
+  /// `/intake` POST is deferred to [finalizeSession] once the user has answered
+  /// the post-session questions (or skipped), so the record is written to the
+  /// backend exactly once, with the outcome data.
+  Future<void> saveSessionDraft(SessionRecord record) async {
+    if (_handledSessionIds.contains(record.id)) return; // already finalized
+    if (!_draftedSessionIds.add(record.id)) return; // already drafted this run
 
-    // Attempt to sync to backend (only when not already synced).
-    if (_isOnline) {
-      await _syncSession(record);
+    final existing = await _db.getLocalSession(record.id);
+    if (existing?.synced ?? false) return; // finalized in a previous run
+
+    await _db.upsertSession(_companion(record, synced: false));
+    appLogger.i('Session draft saved locally: ${record.id}');
+  }
+
+  /// Finalize a completed session: persist the enriched record locally and POST
+  /// it to `/intake` exactly once. Returns true when the backend has the record
+  /// (either just POSTed, or already synced); false when the POST failed (so the
+  /// caller can keep it queued for retry). Legacy alias: [saveSession].
+  Future<bool> finalizeSession(SessionRecord record) async {
+    // Already POSTed this run, or in a previous run → treat as done.
+    if (_handledSessionIds.contains(record.id)) return true;
+    final existing = await _db.getLocalSession(record.id);
+    if (existing?.synced ?? false) {
+      _handledSessionIds.add(record.id);
+      return true;
     }
+
+    // Persist the enriched record locally (still unsynced until the POST lands).
+    await _db.upsertSession(_companion(record, synced: false));
+
+    if (!_isOnline) {
+      appLogger.i('Session ${record.id} finalized offline; awaiting sync');
+      return false;
+    }
+    return _syncSession(record);
+  }
+
+  /// Legacy one-shot save (draft + immediate finalize). Retained for any caller
+  /// that isn't part of the post-session outcomes flow.
+  Future<void> saveSession(SessionRecord record) async {
+    await saveSessionDraft(record);
+    await finalizeSession(record);
   }
 
   /// Sync all unsynced sessions to the backend.
@@ -130,7 +153,7 @@ class SessionRepository {
     }
   }
 
-  Future<void> _syncSession(SessionRecord record) async {
+  Future<bool> _syncSession(SessionRecord record) async {
     try {
       final body = record.toIntakeJson();
       appLogger.i('Intake POST protocols → ${body['protocols']}');
@@ -139,9 +162,12 @@ class SessionRepository {
         data: body,
       );
       await _db.markSessionSynced(record.id);
+      _handledSessionIds.add(record.id);
       appLogger.i('Session synced: ${record.id}');
+      return true;
     } catch (e) {
       appLogger.e('Failed to sync session: $e');
+      return false;
     }
   }
 

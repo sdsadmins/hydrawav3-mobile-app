@@ -9,6 +9,7 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/services/protocol_plus_controller.dart';
@@ -160,6 +161,11 @@ class _ProtocolPlusListScreenState
       // Register the server-driven sequence (schedules protocol[1..N]) in the
       // background; the session screen connects its socket when the binding is
       // published via protocolPlusBindingsProvider.
+      // Register under the selected client in Client mode so the backend ties
+      // the run to the client (live feed name / history), not guest.
+      final clientId = ref.read(sessionClientModeProvider) == ClientMode.client
+          ? ref.read(selectedClientProvider)?.id
+          : null;
       unawaited(controller.registerAndPublishBindings(
         sessionId: sessionId,
         plans: [
@@ -170,6 +176,7 @@ class _ProtocolPlusListScreenState
           ),
         ],
         transport: widget.transport,
+        clientId: clientId,
       ));
     } catch (e) {
       if (sessionId != null) {

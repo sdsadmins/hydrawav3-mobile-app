@@ -115,6 +115,7 @@ class SessionSyncService {
   Future<String?> startServerSession({
     required List<NormalDeviceSpec> devices,
     required String transport,
+    String? clientId,
   }) async {
     if (devices.isEmpty) return null;
     try {
@@ -172,7 +173,11 @@ class SessionSyncService {
         ApiEndpoints.sessionStart,
         data: {
           'organizationId': int.tryParse(orgId),
-          'isGuestMode': true,
+          // Client mode (clientId present) registers the run under the client so
+          // the backend resolves the client name/demographics and the live feed
+          // shows the client (not "Guest"). Guest mode → null id + guest flag.
+          if (clientId != null && clientId.isNotEmpty) 'clientId': clientId,
+          'isGuestMode': clientId == null || clientId.isEmpty,
           'isMobile': true,
           'devices': devicePayload,
         },

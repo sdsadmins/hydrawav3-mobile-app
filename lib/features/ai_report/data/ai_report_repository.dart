@@ -10,10 +10,11 @@ final aiReportRepositoryProvider = Provider<AiReportRepository>((ref) {
   return AiReportRepository(ref.read(aiReportRemoteSourceProvider));
 });
 
-/// Drives the two-phase, queued AI report flow (web parity):
-/// 1) `POST ai/analyze` → job id
+/// Drives the queued AI report flow (web parity):
+/// 1) `POST ai/analyze` (with the live system prompt) → job id
 /// 2) poll `GET ai/analyze/:id` until completed (~3-5 min)
-/// 3) `POST ai-reports` with the mapped result (guest vs client branch)
+/// The backend queue processor persists the report itself on completion, so we
+/// do NOT persist it again here (that created duplicate reports).
 class AiReportRepository {
   final AiReportRemoteSource _remote;
 
@@ -21,6 +22,20 @@ class AiReportRepository {
 
   static const _pollInterval = Duration(seconds: 5);
   static const _maxPolls = 72; // ~6 minutes
+
+  /// The live analysis system prompt, fetched once and reused. The web sends
+  /// this with every analyze call; without it the backend uses an older default
+  /// prompt that can emit non-numeric fields (e.g. age "not provided") the
+  /// AiReport schema rejects.
+  String? _cachedSystemPrompt;
+
+  Future<String> _liveSystemPrompt() async {
+    final cached = _cachedSystemPrompt;
+    if (cached != null && cached.isNotEmpty) return cached;
+    final prompt = await _remote.liveAnalysisPrompt();
+    if (prompt.isNotEmpty) _cachedSystemPrompt = prompt;
+    return prompt;
+  }
 
   Future<Map<String, dynamic>> generate({
     required GuidedAssessmentData intake,
@@ -33,10 +48,15 @@ class AiReportRepository {
   }) async {
     final intakeData = intake.toPatientIntakeInput(client);
 
-    // Phase 1 — enqueue.
+    // Phase 1 — enqueue. Send the live analysis prompt as `customSystemPrompt`
+    // (web parity): without it the backend's fallback prompt can produce
+    // fields the schema rejects (e.g. guest age "not provided" → Cast to Number
+    // failed). Best-effort — if the prompt can't be fetched, proceed without.
     onStatus?.call('analyzing');
+    final systemPrompt = await _liveSystemPrompt();
     final started = await _remote.analyze({
       'intakeData': intakeData,
+      if (systemPrompt.isNotEmpty) 'customSystemPrompt': systemPrompt,
       'provider': aiProvider,
       'organizationId': organizationId,
       if (!isGuest && client != null) 'clientId': client.id,
@@ -62,19 +82,10 @@ class AiReportRepository {
           'AI analysis timed out. Please try again in a few minutes.');
     }
 
-    // Phase 3 — persist.
-    onStatus?.call('persisting');
-    final body = _buildPersistBody(
-      result: result,
-      intakeData: intakeData,
-      isGuest: isGuest,
-      organizationId: organizationId,
-      userId: userId,
-      clientId: client?.id,
-      aiProvider: aiProvider,
-    );
-    await _remote.persist(body);
-
+    // The backend queue processor already saves the report (keyed by the
+    // client's ObjectId) when the job completes — so we must NOT persist it
+    // again here, or each generation creates a SECOND doc and the client's
+    // report list shows every report twice.
     onStatus?.call('completed');
     return result;
   }
@@ -99,133 +110,4 @@ class AiReportRepository {
       );
 
   Future<Map<String, dynamic>?> getById(String id) => _remote.getById(id);
-
-  // --- Mapping helpers (mirror web `createAIReport`) ---
-
-  Map<String, dynamic> _buildPersistBody({
-    required Map<String, dynamic> result,
-    required Map<String, dynamic> intakeData,
-    required bool isGuest,
-    required int organizationId,
-    String? userId,
-    String? clientId,
-    required String aiProvider,
-  }) {
-    Map<String, dynamic> obj(String key) {
-      final v = result[key];
-      return v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
-    }
-
-    // why_this_pattern_matters is a string in the AI output but an object in
-    // the DTO — wrap it.
-    Map<String, dynamic> whyMatters() {
-      final v = result['why_this_pattern_matters'];
-      if (v is Map) return Map<String, dynamic>.from(v);
-      if (v is String) return {'explanation': v};
-      return <String, dynamic>{};
-    }
-
-    final personalSnapshot = obj('personal_snapshot');
-
-    // `age` MUST be a Number for the backend AiReport schema. The AI returns
-    // "Not provided" (string) when age is unknown, which makes Mongoose throw
-    // `Cast to Number failed for value "not provided"`. Coerce a valid age to
-    // a num, otherwise drop the field entirely. This runs in BOTH guest and
-    // client mode — the web cleans age in both branches (action.ts
-    // createAIReport), and a client with no recorded age hits the same error.
-    final rawAge = personalSnapshot['age'];
-    final numAge =
-        rawAge is num ? rawAge : num.tryParse(rawAge?.toString() ?? '');
-    if (numAge != null && numAge > 0) {
-      personalSnapshot['age'] = numAge;
-    } else {
-      personalSnapshot.remove('age');
-    }
-
-    if (isGuest) {
-      // Guest reports also strip name/gender that were never provided
-      // (web guest cleaning) — no client history is attached.
-      final gender = personalSnapshot['gender'];
-      if (gender is! String ||
-          gender.trim().isEmpty ||
-          gender.toLowerCase() == 'not provided') {
-        personalSnapshot.remove('gender');
-      }
-      final name = personalSnapshot['name'];
-      if (name is! String ||
-          name.trim().isEmpty ||
-          name.toLowerCase() == 'not provided') {
-        personalSnapshot.remove('name');
-      }
-    }
-
-    final loadVsRecovery = _coerceLoadVsRecovery(obj('load_vs_recovery_profile'));
-
-    return {
-      // Identity branch.
-      if (isGuest) ...{
-        'guestMode': 'true',
-        'organizationId': organizationId,
-      } else ...{
-        // A client report is stored under the CLIENT's ObjectId. The backend
-        // validates `userId` as an ObjectId, so sending the practitioner's
-        // numeric id (e.g. "662") fails with "Invalid userId format". The
-        // acting practitioner (createdBy) is derived server-side from the token.
-        if (clientId != null) 'userId': clientId,
-        if (clientId != null) 'clientId': clientId,
-        'organizationId': organizationId,
-      },
-      'aiProvider': aiProvider,
-      'schema_version':
-          (result['schema_version'] ?? '2.0').toString(),
-      'report_type': (result['report_type'] ??
-              'general_mobility_kinetic_chain')
-          .toString(),
-      'intakeData': intakeData,
-      // Required report sections (default to {} when missing).
-      'personal_snapshot': personalSnapshot,
-      'clinical_insight_snapshot': obj('clinical_insight_snapshot'),
-      'movement_mobility_summary': obj('movement_mobility_summary'),
-      'kinetic_chain_pattern_a': obj('kinetic_chain_pattern_a'),
-      'kinetic_chain_pattern_b': obj('kinetic_chain_pattern_b'),
-      'load_vs_recovery_profile': loadVsRecovery,
-      'lifestyle_contributors': obj('lifestyle_contributors'),
-      'at_home_mobility_support': obj('at_home_mobility_support'),
-      'why_this_pattern_matters': whyMatters(),
-      if (result['practitioner_questions'] is List)
-        'practitioner_questions': result['practitioner_questions'],
-      'practitioner_hand_off':
-          (result['practitioner_hand_off'] ?? '').toString(),
-      'practitioner_notes_template': obj('practitioner_notes_template'),
-      'next_steps': obj('next_steps'),
-      'disclaimer': (result['disclaimer'] ?? '').toString(),
-    };
-  }
-
-  /// Backend requires numeric `estimated_daily_hours` / `daily_load_hours`.
-  Map<String, dynamic> _coerceLoadVsRecovery(Map<String, dynamic> lvr) {
-    num toNum(dynamic v) {
-      if (v is num) return v < 0 ? 0 : v;
-      final parsed = num.tryParse(v?.toString() ?? '');
-      if (parsed == null || parsed < 0) return 0;
-      return parsed;
-    }
-
-    final exposure = lvr['positioning_exposure'] is Map
-        ? Map<String, dynamic>.from(lvr['positioning_exposure'] as Map)
-        : <String, dynamic>{};
-    exposure['estimated_daily_hours'] =
-        toNum(exposure['estimated_daily_hours']);
-
-    final balance = lvr['load_recovery_balance'] is Map
-        ? Map<String, dynamic>.from(lvr['load_recovery_balance'] as Map)
-        : <String, dynamic>{};
-    balance['daily_load_hours'] = toNum(balance['daily_load_hours']);
-
-    return {
-      ...lvr,
-      'positioning_exposure': exposure,
-      'load_recovery_balance': balance,
-    };
-  }
 }

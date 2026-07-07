@@ -18,7 +18,9 @@ import '../../protocols/domain/protocol_model.dart';
 import 'background_session_runtime.dart';
 import 'session_sync_service.dart';
 import '../data/session_repository.dart';
+import '../domain/pending_session_outcome_model.dart';
 import '../domain/session_model.dart';
+import '../presentation/providers/pending_outcomes_provider.dart';
 
 /// Provider family that creates a separate SessionEngine instance for each session
 /// This allows true concurrent sessions without sharing state
@@ -226,6 +228,11 @@ class SessionEngineState {
   /// Empty until the first frame arrives over BLE notify or the backend channel.
   final Map<String, DeviceTelemetry> telemetryByDevice;
 
+  /// Admin-defined post-session questions for every protocol used in this
+  /// session (protocol name -> its questions), including each Protocol Plus
+  /// sub-protocol. Set once at launch; drives the post-session outcomes sheet.
+  final Map<String, List<ProtocolQuestion>> questionsByProtocolName;
+
   final String? error;
 
   const SessionEngineState({
@@ -252,6 +259,7 @@ class SessionEngineState {
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
     this.telemetryByDevice = const {},
+    this.questionsByProtocolName = const {},
     this.error,
   });
 
@@ -279,6 +287,7 @@ class SessionEngineState {
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
     Map<String, DeviceTelemetry>? telemetryByDevice,
+    Map<String, List<ProtocolQuestion>>? questionsByProtocolName,
     String? error,
   }) {
     return SessionEngineState(
@@ -314,6 +323,8 @@ class SessionEngineState {
       protocolPlusBreakRemainingByDevice: protocolPlusBreakRemainingByDevice ??
           this.protocolPlusBreakRemainingByDevice,
       telemetryByDevice: telemetryByDevice ?? this.telemetryByDevice,
+      questionsByProtocolName:
+          questionsByProtocolName ?? this.questionsByProtocolName,
       error: error,
     );
   }
@@ -345,6 +356,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   int _repetition = 0;
   bool _isActive = true; // Guard against state updates after disposal
   bool _historyCaptured = false; // Save session to history only once on start
+  bool _pendingOutcomeEnqueued = false; // Queue post-session review once
 
   /// Client/guest context for this session, set from the setup screen via
   /// [setClientContext]. Threads into the `POST /intake` body (and AI report).
@@ -357,6 +369,92 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void setClientContext({String? clientId, GuidedAssessmentData? intake}) {
     _clientId = clientId;
     _intake = intake;
+  }
+
+  /// Register the admin-defined post-session questions for every protocol used
+  /// in this session (protocol name -> questions), set by the launcher before
+  /// [start]. Drives the post-session outcomes sheet. Merges so multiple calls
+  /// accumulate.
+  void setSessionQuestions(Map<String, List<ProtocolQuestion>> byProtocolName) {
+    if (byProtocolName.isEmpty) return;
+    state = state.copyWith(
+      questionsByProtocolName: {
+        ...state.questionsByProtocolName,
+        ...byProtocolName,
+      },
+    );
+  }
+
+  /// Snapshot the just-completed session into the pending-outcomes queue so the
+  /// post-session questions can be asked even after the live card is gone.
+  /// Idempotent; only fires for sessions that actually ran (a draft was saved).
+  void enqueuePendingOutcome() {
+    if (_pendingOutcomeEnqueued) return;
+    // Post-session questions are asked for CLIENT sessions only (web parity —
+    // guests are never prompted). Guest = no client context.
+    if (_clientId == null) return;
+    if (!_historyCaptured) return; // never started running
+    if (state.protocol == null || state.deviceIds.isEmpty) return;
+    _pendingOutcomeEnqueued = true;
+    try {
+      final snapshot = _buildPendingOutcome();
+      unawaited(_ref.read(pendingOutcomesProvider.notifier).enqueue(snapshot));
+    } catch (e) {
+      _pendingOutcomeEnqueued = false;
+      appLogger.e('Session: failed to queue post-session outcome: $e');
+    }
+  }
+
+  PendingSessionOutcome _buildPendingOutcome() {
+    final protocolByDeviceId = <String, ({String name, int durationSeconds})>{};
+    final protocolNamesByDeviceId = <String, List<String>>{};
+    for (final deviceId in state.deviceIds) {
+      final proto = state.protocolByDevice[deviceId];
+      final isPlusDevice = _plusDeviceIds().contains(deviceId) ||
+          state.protocolPlusNameByDevice.containsKey(deviceId);
+      if (isPlusDevice) {
+        final plusName = state.protocolPlusNameByDevice[deviceId] ??
+            (state.protocolPlusName.isNotEmpty
+                ? state.protocolPlusName
+                : (proto?.templateName ?? state.protocol!.templateName));
+        final devTimer = state.deviceTimers[deviceId];
+        final plusDuration = devTimer != null
+            ? devTimer.totalDuration.inSeconds
+            : (proto?.totalDurationSeconds ?? 0);
+        protocolByDeviceId[deviceId] =
+            (name: plusName, durationSeconds: plusDuration);
+        // Ordered sub-protocol names drive one question section each.
+        final seq = state.protocolPlusSequenceByDevice[deviceId];
+        protocolNamesByDeviceId[deviceId] =
+            (seq != null && seq.isNotEmpty) ? List<String>.from(seq) : [plusName];
+      } else {
+        final name = proto?.templateName ?? state.protocol!.templateName;
+        protocolByDeviceId[deviceId] = (
+          name: name,
+          durationSeconds: proto?.totalDurationSeconds ?? 0,
+        );
+        protocolNamesByDeviceId[deviceId] = [name];
+      }
+    }
+
+    final resolvedClientType = _clientId != null ? 'client' : 'guest';
+    return PendingSessionOutcome(
+      sessionId: sessionId,
+      protocolId: state.protocol!.id,
+      protocolName: state.protocol!.templateName,
+      deviceIds: List<String>.from(state.deviceIds),
+      protocolByDeviceId: protocolByDeviceId,
+      protocolNamesByDeviceId: protocolNamesByDeviceId,
+      questionsByProtocolName:
+          Map<String, List<ProtocolQuestion>>.from(state.questionsByProtocolName),
+      clientType: resolvedClientType,
+      clientId: _clientId,
+      discomfortBefore: null,
+      totalDurationSeconds: state.timer.totalDuration.inSeconds,
+      elapsedSeconds: _effectiveElapsed.inSeconds,
+      createdAt: DateTime.now(),
+      intake: _intake,
+    );
   }
 
   /// True for a server-driven Protocol Plus run. While true, the engine must
@@ -1000,6 +1098,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           totalCycles: protocol.cycles.length,
           lastVisualCycleIndex: protocol.cycles.isNotEmpty ? 0 : -1,
         ),
+        // Preserve post-session questions across the fresh state so calling
+        // setSessionQuestions before OR after loadSession both work.
+        questionsByProtocolName: state.questionsByProtocolName,
       );
     } catch (e) {
       appLogger
@@ -1704,20 +1805,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final userId = _ref.read(authStateProvider).user?.id;
       // clientType / clientId / intake come from the context set on the engine
       // by the launcher (setClientContext) — guest when none was provided.
+      // Local-only draft — NO placeholder pain, NO backend POST. The real
+      // record (with post-session answers / discomfortAfter / notes) is POSTed
+      // once at finalize, after the outcomes sheet. See pendingOutcomesProvider.
       final record = getSessionRecord(
         sessionId: sessionId,
         createdBy: userId,
         updatedBy: userId,
-        discomfortBefore: 6,
-        discomfortAfter: 2,
-        notes: 'Session started from mobile app',
       );
       if (record == null) {
         _historyCaptured = false;
         return;
       }
-      await _ref.read(sessionRepositoryProvider).saveSession(record);
-      appLogger.i('Session: history captured on start for $sessionId');
+      await _ref.read(sessionRepositoryProvider).saveSessionDraft(record);
+      appLogger.i('Session: draft captured on start for $sessionId');
     } catch (e) {
       appLogger.e('Session: failed to capture history on start: $e');
     }
@@ -2559,6 +2660,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();
+      enqueuePendingOutcome();
       unawaited(_syncBackgroundRuntime('stopped'));
     } else if (completedDevices.isNotEmpty) {
       // A device finished but the session is still live — refresh the

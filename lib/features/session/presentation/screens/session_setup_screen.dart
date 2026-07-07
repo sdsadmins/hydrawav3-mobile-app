@@ -860,6 +860,25 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 return;
                               }
 
+                              // Web parity (session.tsx handleStart): Client mode
+                              // requires at least one area of focus (discomfort
+                              // area). Guest mode is never gated.
+                              if (clientMode == ClientMode.client &&
+                                  ref
+                                      .read(guidedAssessmentProvider)
+                                      .discomfortAreas
+                                      .isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text(
+                                      'Select at least one area of focus before starting.',
+                                    ),
+                                    backgroundColor: ThemeConstants.error,
+                                  ),
+                                );
+                                return;
+                              }
+
                               final currentSelectedDeviceIds = widget.deviceIds
                                   .where((id) => _runDeviceIds.contains(id))
                                   .toList();

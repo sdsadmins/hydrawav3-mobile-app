@@ -455,6 +455,7 @@ class ProtocolPlusController {
     required String sessionId,
     required List<ProtocolPlusRegistration> plans,
     required String transport,
+    String? clientId,
   }) async {
     if (plans.isEmpty) return const [];
 
@@ -500,6 +501,10 @@ class ProtocolPlusController {
           deviceName: deviceName,
           macAddress: serverDeviceId,
           transport: transport,
+          // Register under the client in Client mode so the backend ties the
+          // run to the client (live feed name, history). Guest → null + guest.
+          clientId: clientId,
+          isGuestMode: clientId == null || clientId.isEmpty,
           advancedSettings: plan.advanced.toJson(),
         );
         if (result.sessionId.isEmpty) {
@@ -950,6 +955,11 @@ class ProtocolPlusController {
     final localId = _localSessionId;
     final engine = _engine;
 
+    // Snapshot the completed run for post-session review BEFORE tearing down
+    // (removeSession/stopService), so the "needs review" card survives the live
+    // card being dropped. Idempotent — the engine tick may have queued it too.
+    engine?.enqueuePendingOutcome();
+
     // Belt-and-suspenders terminal STOP. Nothing else guarantees the physical
     // device halts at end-of-run: the server's stop can't reach a BLE unit at
     // all, and the firmware self-stop (per-protocol totalDuration) is the only
@@ -1181,6 +1191,15 @@ Future<void> launchSession(
     final plusDurationsByDevice = <String, List<int>>{};
     final plusDelayByDevice = <String, int>{};
 
+    // Admin-defined post-session questions per protocol (incl. each Plus
+    // sub-protocol), for the post-session outcomes sheet.
+    final questionsByProtocolName = <String, List<ProtocolQuestion>>{};
+    void recordQuestions(Protocol p) {
+      if (p.questions.isNotEmpty) {
+        questionsByProtocolName[p.templateName] = p.questions;
+      }
+    }
+
     for (final sel in selections) {
       if (sel.protocol.isProtocolPlus) {
         final detail = await controller.getProtocolPlusDetail(sel.protocol.id);
@@ -1219,6 +1238,12 @@ Future<void> launchSession(
         plusNameByDevice[sel.deviceId] = detail.templateName;
         plusSequenceByDevice[sel.deviceId] =
             _protocolPlusSequenceNames(populated, orderedIds);
+        // Questions for each sub-protocol (populated docs carry them; `first`
+        // covers the ids-only case where only protocol[0] was fetched).
+        recordQuestions(first);
+        for (final p in populated) {
+          recordQuestions(p);
+        }
         // Per-sub-protocol durations in the SAME order as the sequence names,
         // so the live tracker can show each protocol's time under its name.
         plusDurationsByDevice[sel.deviceId] =
@@ -1227,6 +1252,7 @@ Future<void> launchSession(
       } else {
         protocolByDevice[sel.deviceId] = sel.protocol;
         advancedByDevice[sel.deviceId] = sel.advanced;
+        recordQuestions(sel.protocol);
       }
     }
 
@@ -1253,6 +1279,9 @@ Future<void> launchSession(
       protocolByDevice: protocolByDevice,
       wifiConfigAlreadyPublished: false,
     );
+    // AFTER loadSession (which rebuilds the engine state) so the questions
+    // aren't wiped — this was why the outcomes sheet showed none.
+    engine.setSessionQuestions(questionsByProtocolName);
     if (plusDeviceIds.isNotEmpty) {
       engine.setProtocolPlusDevices(plusDeviceIds);
       if (durationsByDevice.isNotEmpty) {
@@ -1287,6 +1316,7 @@ Future<void> launchSession(
         sessionId: sid,
         plans: plusPlans,
         transport: transport,
+        clientId: clientId,
       );
       // Flag these backend sessions as owned by this phone so the live feed
       // treats them as controllable own-runs (not foreign), and map each back
@@ -1316,7 +1346,11 @@ Future<void> launchSession(
           .toList();
       final backendId = await ref
           .read(sessionSyncServiceProvider)
-          .startServerSession(devices: specs, transport: transport);
+          .startServerSession(
+            devices: specs,
+            transport: transport,
+            clientId: clientId,
+          );
       if (backendId != null) {
         ref.read(normalServerSessionIdProvider(sid).notifier).state = backendId;
         ref.read(liveSessionsProvider.notifier).markOwned(backendId);

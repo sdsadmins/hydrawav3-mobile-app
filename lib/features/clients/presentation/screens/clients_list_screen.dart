@@ -53,26 +53,43 @@ class ClientsListScreen extends ConsumerWidget {
             ),
           ),
           Expanded(
-            child: filtered.when(
+            child: RefreshIndicator(
+              color: ThemeConstants.accent,
+              onRefresh: () async {
+                ref.invalidate(clientListProvider);
+                await ref.read(clientListProvider.future);
+              },
+              child: filtered.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text('Failed to load clients: $e',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: ThemeConstants.error)),
-                ),
+              error: (e, _) => ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  const SizedBox(height: 120),
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text('Failed to load clients: $e',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: ThemeConstants.error)),
+                  ),
+                ],
               ),
               data: (clients) {
                 if (clients.isEmpty) {
-                  return Center(
-                    child: Text('No clients found',
-                        style: TextStyle(
-                            color: ThemeConstants.textSecondary,
-                            fontWeight: FontWeight.w700)),
+                  return ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      const SizedBox(height: 140),
+                      Center(
+                        child: Text('No clients found',
+                            style: TextStyle(
+                                color: ThemeConstants.textSecondary,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ],
                   );
                 }
                 return ListView.separated(
+                  physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   itemCount: clients.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -141,13 +158,19 @@ class ClientsListScreen extends ConsumerWidget {
                                     ? ThemeConstants.success
                                     : ThemeConstants.textTertiary,
                               ),
-                              onPressed: () => context.pushNamed(
-                                RouteNames.clientLease,
-                                extra: {
-                                  'clientId': c.id,
-                                  'title': c.displayName,
-                                },
-                              ),
+                              // Await the lease screen, then refresh so the
+                              // lease state (icon/badge) reflects any register/
+                              // activate/deactivate done there.
+                              onPressed: () async {
+                                await context.pushNamed(
+                                  RouteNames.clientLease,
+                                  extra: {
+                                    'clientId': c.id,
+                                    'title': c.displayName,
+                                  },
+                                );
+                                ref.invalidate(clientListProvider);
+                              },
                             ),
                             Icon(Icons.chevron_right_rounded,
                                 color: ThemeConstants.textTertiary),
@@ -158,6 +181,7 @@ class ClientsListScreen extends ConsumerWidget {
                   },
                 );
               },
+            ),
             ),
           ),
         ],

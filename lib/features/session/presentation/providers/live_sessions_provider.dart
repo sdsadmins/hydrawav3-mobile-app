@@ -8,7 +8,10 @@ import '../../../../core/network/dio_client.dart';
 import '../../../../core/storage/secure_storage.dart';
 import '../../../../core/utils/logger.dart';
 import '../../domain/active_session_model.dart';
+import '../../services/session_engine.dart';
+import '../../services/session_sync_service.dart';
 import '../../services/sessions_socket.dart';
+import 'active_sessions_provider.dart';
 
 /// The org-wide live-session feed — the single source of truth for which
 /// sessions are running, on mobile as on the web. Backed by the backend
@@ -82,6 +85,35 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     ];
   }
 
+  /// A run THIS phone started (owns the local engine) was stopped elsewhere —
+  /// via the web or another device (backend `SESSION_STOPPED`, or the session
+  /// dropping out of the active feed). Tear down the local tracking so the
+  /// device leaves the "In use" set and the local engine/timer + background
+  /// service stop. `reset()` sends no device commands (the unit is already
+  /// stopped remotely). If the run was already stopped LOCALLY, its normal stop
+  /// flow removed it from [activeSessionsProvider] first — we skip so we never
+  /// disturb the local completed/Stop-All (post-session questions) UI.
+  void _reconcileOwnedStopped(String backendSid) {
+    if (!_ownedSessionIds.remove(backendSid)) return; // not an owned run
+    final localId = _ref.read(ownBackendToLocalSessionProvider)[backendSid];
+    _ref
+        .read(ownBackendToLocalSessionProvider.notifier)
+        .update((m) => {...m}..remove(backendSid));
+    if (localId == null) return;
+    final stillActive =
+        _ref.read(activeSessionsProvider.notifier).getSessionById(localId) !=
+            null;
+    if (!stillActive) return; // already torn down by the local stop flow
+    try {
+      _ref.read(sessionEngineFamilyProvider(localId).notifier).reset();
+    } catch (_) {}
+    unawaited(_ref.read(activeSessionsProvider.notifier).removeSession(localId));
+    appLogger.i(
+      'LiveSessions: owned session $backendSid stopped remotely — freed local '
+      'session $localId',
+    );
+  }
+
   Future<void> _fetchActive() async {
     final orgId = _orgId;
     if (orgId == null) return;
@@ -100,10 +132,24 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         final s = _mapSession(raw.cast<String, dynamic>());
         if (s != null) mapped.add(s);
       }
+      // Owned runs that WERE live in the feed and are now gone were stopped
+      // elsewhere (web/other device). Reconcile them so the device frees even if
+      // the SESSION_STOPPED socket event was missed. (Only diff against the
+      // previous live state, so a just-started own run not yet in the feed is
+      // never torn down.)
+      final goneOwned = <String>[
+        for (final s in state)
+          if (_ownedSessionIds.contains(s.id) &&
+              !mapped.any((m) => m.id == s.id))
+            s.id,
+      ];
       // Avoid needless rebuilds (nav badge / History list / timer screen all
       // watch this): when there's nothing live and nothing changed, don't emit.
-      if (mapped.isEmpty && state.isEmpty) return;
+      if (mapped.isEmpty && state.isEmpty && goneOwned.isEmpty) return;
       if (mounted) state = mapped;
+      for (final sid in goneOwned) {
+        _reconcileOwnedStopped(sid);
+      }
     } catch (e) {
       appLogger.d('LiveSessions: active fetch failed: $e');
       _consecutiveFetchFailures++;
@@ -151,6 +197,9 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
             final sid = data['sessionId']?.toString();
             if (sid != null && mounted) {
               state = state.where((s) => s.id != sid).toList();
+              // If this phone owns the run, free its local tracking so the
+              // device stops showing "In use" when stopped from elsewhere.
+              _reconcileOwnedStopped(sid);
             }
             break;
           case 'SESSION_PAUSED':

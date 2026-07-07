@@ -42,6 +42,21 @@ class AiReportRemoteSource {
     }
   }
 
+  /// `GET admin/prompts/analysis/live` — the live analysis system prompt the
+  /// web sends with every analyze call (its `content` field). Best-effort:
+  /// returns '' on any failure so generation still proceeds with the backend
+  /// default. Practitioner tokens are authorized for this endpoint.
+  Future<String> liveAnalysisPrompt() async {
+    try {
+      final response = await _dio.get(ApiEndpoints.promptAnalysisLive);
+      final data = response.data;
+      final content = data is Map ? data['content'] : null;
+      return content is String ? content : '';
+    } on DioException {
+      return '';
+    }
+  }
+
   /// `GET ai/analyze/:id` — poll job status/result.
   Future<AnalysisStatus> status(String id) async {
     try {
