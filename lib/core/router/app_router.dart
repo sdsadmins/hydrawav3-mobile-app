@@ -34,6 +34,7 @@ import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
 import '../../features/ai_report/presentation/screens/kinetic_chain_3d_screen.dart';
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
+import '../../features/clients/presentation/screens/client_detail_screen.dart';
 import '../../features/clients/presentation/screens/client_lease_screen.dart';
 import '../../features/client_session/presentation/screens/client_session_screen.dart';
 import '../../features/ai_hub/presentation/screens/ai_screen.dart';
@@ -352,6 +353,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: RoutePaths.clientHome,
         name: RouteNames.clientHome,
         builder: (c, s) => const ClientSessionScreen(),
+      ),
+      GoRoute(
+        path: RoutePaths.clientDetail,
+        name: RouteNames.clientDetail,
+        builder: (c, s) {
+          final extra = s.extra;
+          final m = extra is Map<String, dynamic> ? extra : const {};
+          return ClientDetailScreen(
+            clientId: (m['clientId'] as String?) ?? '',
+            title: m['title'] as String?,
+          );
+        },
       ),
       GoRoute(
         path: RoutePaths.clientLease,

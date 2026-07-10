@@ -7,7 +7,7 @@ import '../../../../core/router/route_names.dart';
 import '../providers/client_providers.dart';
 
 /// Clients list (parity with the web `practitioner/clients`). Selecting a client
-/// opens their AI report history.
+/// opens their detail screen (device lease on top, AI report history below).
 class ClientsListScreen extends ConsumerWidget {
   const ClientsListScreen({super.key});
 
@@ -97,10 +97,16 @@ class ClientsListScreen extends ConsumerWidget {
                     final c = clients[i];
                     return InkWell(
                       borderRadius: BorderRadius.circular(14),
-                      onTap: () => context.pushNamed(
-                        RouteNames.aiReports,
-                        extra: {'clientId': c.id, 'title': c.displayName},
-                      ),
+                      // Open the combined client detail screen: device lease on
+                      // top, AI report history below. Refresh on return so the
+                      // lease icon/badge reflects any change made in there.
+                      onTap: () async {
+                        await context.pushNamed(
+                          RouteNames.clientDetail,
+                          extra: {'clientId': c.id, 'title': c.displayName},
+                        );
+                        ref.invalidate(clientListProvider);
+                      },
                       child: Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(

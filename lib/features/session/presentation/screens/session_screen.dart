@@ -2155,10 +2155,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 
   /// The connecting track segment between two stations. Sits at dot height.
-  /// When [delaySeconds] > 0 (a Protocol Plus break), shows the break time in
-  /// seconds above the line, e.g. "90s". When [active] is true the break on
-  /// THIS segment is happening right now, so [countdown] (the live remaining
-  /// seconds) is shown instead and the line is accented.
+  /// When [delaySeconds] > 0 (a Protocol Plus break), shows the break time as
+  /// minutes and seconds above the line, e.g. "1m 30s". When [active] is true the
+  /// break on THIS segment is happening right now, so [countdown] (the live
+  /// remaining time) is shown instead and the line is accented.
   Widget _routeTrack({
     required bool done,
     int delaySeconds = 0,
@@ -2181,7 +2181,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     // Live break on this segment → show the counting-down remaining time.
     if (active) {
-      final secs = (countdown ?? 0) > 0 ? '${countdown}s' : '…';
+      final secs = (countdown ?? 0) > 0 ? _formatBreak(countdown!) : '…';
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2212,7 +2212,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          '${delaySeconds}s',
+          _formatBreak(delaySeconds),
           style: TextStyle(
             fontSize: 9,
             fontWeight: FontWeight.w700,
@@ -2298,13 +2298,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// Format break seconds as M:SS (or SS for sub-minute gaps).
-  String _formatBreak(int seconds) {
-    if (seconds < 60) return '${seconds}s';
-    final m = seconds ~/ 60;
-    final s = (seconds % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
+  /// Format a Protocol Plus break as an informative "1m 30s" (or "45s" / "5m"),
+  /// matching the per-protocol station duration labels.
+  String _formatBreak(int seconds) => _fmtStopDuration(seconds);
 
   /// Red fault card — blocking firmware error (overcurrent / device fault).
   /// Mirrors the web live-session fault card (label + fault value + reason).

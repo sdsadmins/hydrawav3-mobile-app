@@ -418,9 +418,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
                 ? state.protocolPlusName
                 : (proto?.templateName ?? state.protocol!.templateName));
         final devTimer = state.deviceTimers[deviceId];
+        // Store how long the device ACTUALLY ran (elapsed at session end), not
+        // the planned whole-sequence length — history should reflect real run
+        // time even when the session is stopped early.
         final plusDuration = devTimer != null
-            ? devTimer.totalDuration.inSeconds
-            : (proto?.totalDurationSeconds ?? 0);
+            ? devTimer.elapsed.inSeconds
+            : _effectiveElapsed.inSeconds;
         protocolByDeviceId[deviceId] =
             (name: plusName, durationSeconds: plusDuration);
         // Ordered sub-protocol names drive one question section each.
@@ -429,9 +432,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             (seq != null && seq.isNotEmpty) ? List<String>.from(seq) : [plusName];
       } else {
         final name = proto?.templateName ?? state.protocol!.templateName;
+        final devTimer = state.deviceTimers[deviceId];
+        // Actual run time for this device (elapsed at session end), not the
+        // configured protocol length.
+        final actualElapsed =
+            devTimer?.elapsed.inSeconds ?? _effectiveElapsed.inSeconds;
         protocolByDeviceId[deviceId] = (
           name: name,
-          durationSeconds: proto?.totalDurationSeconds ?? 0,
+          durationSeconds: actualElapsed,
         );
         protocolNamesByDeviceId[deviceId] = [name];
       }
@@ -2440,17 +2448,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             state.protocolPlusName ??
             proto.templateName;
         final devTimer = state.deviceTimers[deviceId];
+        // Actual run time (elapsed), not the planned whole-sequence length.
         final plusDuration = devTimer != null
-            ? devTimer.totalDuration.inSeconds
-            : proto.totalDurationSeconds;
+            ? devTimer.elapsed.inSeconds
+            : _effectiveElapsed.inSeconds;
         protocolByDeviceId[deviceId] = (
           name: plusName,
           durationSeconds: plusDuration,
         );
       } else {
+        final devTimer = state.deviceTimers[deviceId];
         protocolByDeviceId[deviceId] = (
           name: proto.templateName,
-          durationSeconds: proto.totalDurationSeconds,
+          durationSeconds:
+              devTimer?.elapsed.inSeconds ?? _effectiveElapsed.inSeconds,
         );
       }
     }
