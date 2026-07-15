@@ -38,6 +38,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
   // Register-form state.
   bool _formOpen = false;
   final _macCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _showPassword = false;
 
@@ -54,6 +55,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
   @override
   void dispose() {
     _macCtrl.dispose();
+    _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _resetPwdCtrl.dispose();
     super.dispose();
@@ -83,6 +85,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         _formOpen = false;
         _resetMode = false;
         _macCtrl.clear();
+        _usernameCtrl.clear();
         _passwordCtrl.clear();
         _resetPwdCtrl.clear();
       });
@@ -93,9 +96,15 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
 
   Future<void> _register() async {
     final mac = _macCtrl.text.trim();
+    // Username is space-stripped as you type/paste, but trim defensively too.
+    final username = _usernameCtrl.text.trim();
     final pwd = _passwordCtrl.text;
     if (!_macRegex.hasMatch(mac)) {
       _snack('Enter a valid MAC address (AA:BB:CC:DD:EE:FF).');
+      return;
+    }
+    if (username.isEmpty) {
+      _snack('Enter a lease username.');
       return;
     }
     if (pwd.length < 6) {
@@ -105,6 +114,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
     final updated = await _controller.registerLease(
       clientId: widget.clientId,
       macAddress: mac,
+      username: username,
       password: pwd,
     );
     _applyResult(updated);
@@ -303,6 +313,22 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             onPressed: flow.busy ? null : _scanFillMac,
             icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
             label: const Text('Scan device to fill MAC'),
+          ),
+          const SizedBox(height: 14),
+          _label('Lease Username'),
+          TextField(
+            controller: _usernameCtrl,
+            enabled: !flow.busy,
+            // No spaces allowed — the formatter strips any whitespace whether
+            // typed or pasted, so a copied value with spaces lands clean.
+            inputFormatters: [
+              FilteringTextInputFormatter.deny(RegExp(r'\s')),
+            ],
+            keyboardType: TextInputType.text,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: _fieldDecoration('No spaces allowed'),
+            style: TextStyle(color: ThemeConstants.textPrimary),
           ),
           const SizedBox(height: 14),
           _label('Lease Password'),

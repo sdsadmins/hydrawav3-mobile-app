@@ -137,10 +137,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               path: RoutePaths.devices,
               name: RouteNames.devices,
               builder: (c, s) => const DeviceListScreen()),
-          GoRoute(
-              path: RoutePaths.ai,
-              name: RouteNames.ai,
-              builder: (c, s) => const AiScreen()),
+          // GoRoute(
+          //     path: RoutePaths.ai,
+          //     name: RouteNames.ai,
+          //     builder: (c, s) => const AiScreen()),
           GoRoute(
               path: RoutePaths.history,
               name: RouteNames.history,
@@ -457,12 +457,12 @@ class _AppShell extends ConsumerWidget {
                     label: 'Devices',
                     active: idx == 1,
                     onTap: () => context.go(RoutePaths.devices)),
-                _NavTab(
-                    icon: Icons.auto_awesome_outlined,
-                    activeIcon: Icons.auto_awesome_rounded,
-                    label: 'AI',
-                    active: idx == 2,
-                    onTap: () => context.go(RoutePaths.ai)),
+                // _NavTab(
+                //     icon: Icons.auto_awesome_outlined,
+                //     activeIcon: Icons.auto_awesome_rounded,
+                //     label: 'AI',
+                //     active: idx == 2,
+                //     onTap: () => context.go(RoutePaths.ai)),
                 _NavTab(
                     icon: Icons.history_outlined,
                     activeIcon: Icons.history_rounded,

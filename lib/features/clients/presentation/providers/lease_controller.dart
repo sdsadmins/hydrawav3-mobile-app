@@ -63,12 +63,14 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
   Future<Client?> registerLease({
     required String clientId,
     required String macAddress,
+    required String username,
     required String password,
   }) async {
     return _run('Registering lease…', () {
       return _clients.updateClient(clientId, {
         'leaseActive': false,
         'macAddress': macAddress.toUpperCase(),
+        'leaseUserName': username,
         'password': password,
         'isActive': true,
       });
