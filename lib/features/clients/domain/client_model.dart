@@ -23,6 +23,14 @@ class Client {
   final DateTime? leaseDate;
   final bool isActive;
 
+  // Member discriminator + player-only fields (university/sports-club orgs).
+  // A "Player" is a client created with `memberType: "Player"` — it carries a
+  // sport, optional jersey number, and Position ObjectIds.
+  final String? memberType; // "Client" | "Player"
+  final String? sport;
+  final int? jerseyNumber;
+  final List<String>? positions; // Position ObjectId strings
+
   const Client({
     required this.id,
     required this.clientName,
@@ -38,7 +46,14 @@ class Client {
     this.macAddress,
     this.leaseDate,
     this.isActive = false,
+    this.memberType,
+    this.sport,
+    this.jerseyNumber,
+    this.positions,
   });
+
+  /// True for members created as players (`memberType: "Player"`).
+  bool get isPlayer => (memberType ?? '').toLowerCase() == 'player';
 
   /// Display label: "Name - Nickname" (matches the web client picker).
   String get displayName =>
@@ -87,6 +102,12 @@ class Client {
       macAddress: json['macAddress']?.toString(),
       leaseDate: _toDate(json['leaseDate']),
       isActive: _toBool(json['isActive']),
+      memberType: json['memberType']?.toString(),
+      sport: json['sport']?.toString(),
+      jerseyNumber: _toInt(json['jerseyNumber']),
+      positions: json['positions'] is List
+          ? (json['positions'] as List).map((e) => e.toString()).toList()
+          : null,
     );
   }
 
@@ -126,42 +147,90 @@ class Client {
   }
 }
 
-/// Body for `POST /clients` (`CreateClientDto`). `age`, `height`, `weight`,
-/// `organizationId` and `organizationName` are required server-side.
+/// Body for `POST /clients` (`CreateClientDto`). The `memberType` discriminator
+/// selects a **clinic Client** (omit / "Client": `clientName` is auto-generated,
+/// `organizationName` builds it) or a **Player** (`memberType: "Player"`:
+/// `clientName` + `sport` required, `positions` are Position ObjectIds).
 class CreateClientRequest {
   final int age;
   final double height; // cm
   final double weight; // kg
   final int organizationId;
-  final String organizationName;
-  final String? clientName;
+  final String? memberType; // null / "Client" | "Player"
+  final String? organizationName; // clinic only (builds the auto name)
+  final String? clientName; // auto for clinic; required + stored as-is for player
   final String? nickname;
   final String? gender;
   final String? phone;
+  final String? primaryPractitioner; // clinic only
+  final String? sport; // player only (sport name)
+  final int? jerseyNumber; // player only
+  final List<String>? positions; // player only — Position ObjectId strings
 
   const CreateClientRequest({
     required this.age,
     required this.height,
     required this.weight,
     required this.organizationId,
-    required this.organizationName,
+    this.memberType,
+    this.organizationName,
     this.clientName,
     this.nickname,
     this.gender,
     this.phone,
+    this.primaryPractitioner,
+    this.sport,
+    this.jerseyNumber,
+    this.positions,
   });
 
+  /// Convenience for the university Add Player flow.
+  factory CreateClientRequest.player({
+    required String clientName,
+    required int organizationId,
+    required int age,
+    required double height,
+    required double weight,
+    required String sport,
+    String? gender,
+    String? nickname,
+    int? jerseyNumber,
+    List<String>? positions,
+  }) =>
+      CreateClientRequest(
+        memberType: 'Player',
+        clientName: clientName,
+        organizationId: organizationId,
+        age: age,
+        height: height,
+        weight: weight,
+        sport: sport,
+        gender: gender,
+        nickname: nickname,
+        jerseyNumber: jerseyNumber,
+        positions: positions,
+      );
+
   Map<String, dynamic> toJson() => {
+        if (memberType != null && memberType!.trim().isNotEmpty)
+          'memberType': memberType,
         'age': age,
         'height': height,
         'weight': weight,
         'organizationId': organizationId,
-        'organizationName': organizationName,
+        if (organizationName != null && organizationName!.trim().isNotEmpty)
+          'organizationName': organizationName,
         if (clientName != null && clientName!.trim().isNotEmpty)
           'clientName': clientName,
         if (nickname != null && nickname!.trim().isNotEmpty)
           'nickname': nickname,
         if (gender != null && gender!.trim().isNotEmpty) 'gender': gender,
         if (phone != null && phone!.trim().isNotEmpty) 'phone': phone,
+        if (primaryPractitioner != null &&
+            primaryPractitioner!.trim().isNotEmpty)
+          'primaryPractitioner': primaryPractitioner,
+        if (sport != null && sport!.trim().isNotEmpty) 'sport': sport,
+        if (jerseyNumber != null) 'jerseyNumber': jerseyNumber,
+        if (positions != null && positions!.isNotEmpty) 'positions': positions,
       };
 }

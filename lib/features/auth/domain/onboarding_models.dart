@@ -6,6 +6,19 @@
 //   4) PUT   {primary}/admin/user/accounts/{userId} — link org via addOrganisations (raw token)
 // See onboarding_remote_source.dart for the calls and onboarding_provider.submit().
 
+/// One option of the Account Type select on step 1, from
+/// `GET {node}user/account-types`. [id] is what gets sent as `account_type_id`;
+/// [name] is what the user sees.
+class AccountTypeOption {
+  final String id;
+  final String name;
+
+  const AccountTypeOption({required this.id, required this.name});
+
+  /// Falls back to the id so an option with no name is still selectable.
+  String get label => name.isEmpty ? id : name;
+}
+
 /// Step 1 — practitioner personal details.
 ///
 /// NOTE: [username] and [password] ARE sent on the create call (web parity — the
@@ -19,6 +32,9 @@ class PractitionerForm {
   final String email;
   final String phone;
   final String title; // practitionerType
+  /// Selected account-type id (an [AccountTypeOption.id]) — sent as
+  /// `account_type_id` on the final account-update call.
+  final String accountType;
   final String address;
   final String city;
   final String state;
@@ -34,6 +50,7 @@ class PractitionerForm {
     this.email = '',
     this.phone = '',
     this.title = '',
+    this.accountType = '',
     this.address = '',
     this.city = '',
     this.state = '',
@@ -52,6 +69,7 @@ class PractitionerForm {
     String? email,
     String? phone,
     String? title,
+    String? accountType,
     String? address,
     String? city,
     String? state,
@@ -67,6 +85,7 @@ class PractitionerForm {
       email: email ?? this.email,
       phone: phone ?? this.phone,
       title: title ?? this.title,
+      accountType: accountType ?? this.accountType,
       address: address ?? this.address,
       city: city ?? this.city,
       state: state ?? this.state,
@@ -96,6 +115,15 @@ class OnboardingCertification {
   });
 }
 
+/// A sport the org can offer, from `GET {node}sports`. [id] is the Mongo `_id`
+/// sent in `sportIds` when the organization is created.
+class SportOption {
+  final String id;
+  final String name;
+
+  const SportOption({required this.id, required this.name});
+}
+
 /// Step 3 — a single business (required, ≥1, repeatable).
 class OnboardingBusiness {
   final String name;
@@ -104,12 +132,17 @@ class OnboardingBusiness {
   final String contactNumber;
   final String address;
 
+  /// Sports offered, as [SportOption.id]s — university accounts only. Sent as
+  /// `sportIds` on org create, and omitted entirely when empty (web parity).
+  final List<String> sportIds;
+
   const OnboardingBusiness({
     required this.name,
     this.businessAge = '',
     this.email = '',
     this.contactNumber = '',
     this.address = '',
+    this.sportIds = const [],
   });
 }
 
@@ -120,6 +153,12 @@ const List<String> businessAgeOptions = <String>[
   '3-5 Years',
   '5+ Years',
 ];
+
+/// `account_type_id` in the shape the backend validates for: an INTEGER.
+/// `user/account-types` returns ids as strings ("1"), so parse them. A
+/// non-numeric id is passed through unchanged, so the server reports a real
+/// error instead of us silently sending something wrong.
+Object _accountTypeId(String raw) => int.tryParse(raw.trim()) ?? raw.trim();
 
 /// Call 1 — body for `POST {node}/practitioners/onboarding` (create account).
 /// Exact web shape (web `createPractitioner`): username + password + dateOfBirth
@@ -139,6 +178,10 @@ Map<String, dynamic> buildCreatePractitionerJson(PractitionerForm form) {
     'state': form.state,
     'zip': form.zip,
     'dateOfBirth': form.dateOfBirth,
+    // Required by the Node DTO as an integer. The web reference omits it here
+    // (it only sends it on the account-update call), which makes its create
+    // request fail validation — so this deliberately diverges from the web.
+    'account_type_id': _accountTypeId(form.accountType),
     'licenses': const <Map<String, dynamic>>[],
     'euaAccepted': true,
   };
@@ -153,6 +196,10 @@ Map<String, dynamic> buildOrganizationJson(OnboardingBusiness primaryBusiness) {
     'address': primaryBusiness.address,
     'age': primaryBusiness.businessAge,
     'phone': primaryBusiness.contactNumber,
+    // Omit the key entirely when nothing is selected (web parity) — the DTO
+    // rejects unknown/empty extras rather than ignoring them.
+    if (primaryBusiness.sportIds.isNotEmpty)
+      'sportIds': primaryBusiness.sportIds,
   };
 }
 
@@ -180,6 +227,7 @@ Map<String, dynamic> buildAccountUpdateJson(
     'state': form.state,
     'zip': form.zip,
     'country': form.country,
+    'account_type_id': _accountTypeId(form.accountType),
     'isEnabled': true,
     'isAccountNonLocked': true,
     'expirationDateAccount': null,

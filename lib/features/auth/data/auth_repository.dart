@@ -54,8 +54,11 @@ class AuthRepository {
     Object? lastError;
 
     for (var attempt = 0; attempt < 2; attempt++) {
-      final delayMs = attempt == 0 ? 500 : 1000;
-      await Future<void>.delayed(Duration(milliseconds: delayMs));
+      // Only wait as a retry backoff after a failure — the happy path fetches
+      // the profile immediately (previously every login slept 500ms here).
+      if (attempt > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 1000));
+      }
 
       final storedToken = await _secureStorage.getAccessToken();
       print("TOKEN AFTER SAVE [attempt ${attempt + 1}]: $storedToken");

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/providers/auth_provider.dart';
 import '../../features/auth/presentation/providers/client_auth_provider.dart';
+import '../../features/assistant/presentation/screens/assistant_screen.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
@@ -34,10 +35,10 @@ import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
 import '../../features/ai_report/presentation/screens/kinetic_chain_3d_screen.dart';
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
+import '../../features/clients/presentation/screens/users_screen.dart';
 import '../../features/clients/presentation/screens/client_detail_screen.dart';
 import '../../features/clients/presentation/screens/client_lease_screen.dart';
 import '../../features/client_session/presentation/screens/client_session_screen.dart';
-import '../../features/ai_hub/presentation/screens/ai_screen.dart';
 import '../constants/theme_constants.dart';
 import 'route_names.dart';
 import '../../features/auth/presentation/screens/select_organization_page.dart';
@@ -102,8 +103,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       return null;
     },
-    routes: 
-    [
+    routes: [
       GoRoute(
           path: RoutePaths.login,
           name: RouteNames.login,
@@ -137,10 +137,22 @@ final routerProvider = Provider<GoRouter>((ref) {
               path: RoutePaths.devices,
               name: RouteNames.devices,
               builder: (c, s) => const DeviceListScreen()),
+          GoRoute(
+              path: RoutePaths.assistant,
+              name: RouteNames.assistant,
+              builder: (c, s) =>
+                  AssistantScreen(intent: s.uri.queryParameters['intent'])),
           // GoRoute(
           //     path: RoutePaths.ai,
           //     name: RouteNames.ai,
           //     builder: (c, s) => const AiScreen()),
+          GoRoute(
+              path: RoutePaths.users,
+              name: RouteNames.users,
+              builder: (c, s) => const UsersScreen()),
+          // Still routable on its own (deep links, "see all history" pushes);
+          // the nav tab now opens the Users screen, whose History segment
+          // renders this same list.
           GoRoute(
               path: RoutePaths.history,
               name: RouteNames.history,
@@ -410,8 +422,13 @@ class _AppShell extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     int idx = 0;
     if (location.startsWith(RoutePaths.devices)) idx = 1;
-    if (location.startsWith(RoutePaths.ai)) idx = 2;
-    if (location.startsWith(RoutePaths.history)) idx = 3;
+    if (location.startsWith(RoutePaths.assistant)) idx = 2;
+    // /history still resolves to the Users tab — its History segment is where
+    // that list now lives.
+    if (location.startsWith(RoutePaths.users) ||
+        location.startsWith(RoutePaths.history)) {
+      idx = 3;
+    }
     if (location.startsWith(RoutePaths.settings)) idx = 4;
 
     // Backend-driven live feed (same source as the History → Live tab) so the
@@ -452,24 +469,26 @@ class _AppShell extends ConsumerWidget {
                     active: idx == 0,
                     onTap: () => context.go(RoutePaths.protocols)),
                 _NavTab(
-                    icon: Icons.bluetooth_outlined,
-                    activeIcon: Icons.bluetooth_connected_rounded,
-                    label: 'Devices',
+                    icon: Icons.bolt_outlined,
+                    activeIcon: Icons.bolt_rounded,
+                    label: 'Session',
                     active: idx == 1,
-                    onTap: () => context.go(RoutePaths.devices)),
-                // _NavTab(
-                //     icon: Icons.auto_awesome_outlined,
-                //     activeIcon: Icons.auto_awesome_rounded,
-                //     label: 'AI',
-                //     active: idx == 2,
-                //     onTap: () => context.go(RoutePaths.ai)),
-                _NavTab(
-                    icon: Icons.history_outlined,
-                    activeIcon: Icons.history_rounded,
-                    label: 'History',
-                    active: idx == 3,
+                    // Live runs surface on the Session Plan screen (above
+                    // Select User), so the running-session badge points here.
                     badgeCount: activeBackgroundCount,
-                    onTap: () => context.go(RoutePaths.history)),
+                    onTap: () => context.go(RoutePaths.devices)),
+                _NavTab(
+                    icon: Icons.auto_awesome_outlined,
+                    activeIcon: Icons.auto_awesome_rounded,
+                    label: 'Assistant',
+                    active: idx == 2,
+                    onTap: () => context.go(RoutePaths.assistant)),
+                _NavTab(
+                    icon: Icons.people_outline_rounded,
+                    activeIcon: Icons.people_alt_rounded,
+                    label: 'Users',
+                    active: idx == 3,
+                    onTap: () => context.go(RoutePaths.users)),
                 _NavTab(
                     icon: Icons.settings_outlined,
                     activeIcon: Icons.settings_rounded,

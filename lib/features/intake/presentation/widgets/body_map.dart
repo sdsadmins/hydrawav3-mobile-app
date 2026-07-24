@@ -230,6 +230,18 @@ ui.Path _parseSvgPath(String d) {
 
 // --- Region data (exact paths from web `bodyMap.tsx`) ----------------------
 
+/// Every body-map region name (front + back views), de-duped and in display
+/// order. Bilateral/shared parts (e.g. "Right Shoulder", "Head") appear once.
+/// Used by the Assistant's discomfort-area picker.
+final List<String> kBodyMapAreas = () {
+  final seen = <String>{};
+  final out = <String>[];
+  for (final r in [..._frontRegions, ..._backRegions]) {
+    if (seen.add(r.name.toLowerCase())) out.add(r.name);
+  }
+  return out;
+}();
+
 class _Region {
   final String name;
   final String d;

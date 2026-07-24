@@ -7,13 +7,17 @@ import '../../../core/network/dio_client.dart';
 import '../domain/auth_models.dart';
 
 final authRemoteSourceProvider = Provider<AuthRemoteSource>((ref) {
-  return AuthRemoteSource(ref.read(djangoDioProvider));
+  return AuthRemoteSource(
+    ref.read(djangoDioProvider),
+    ref.read(nodeDioProvider),
+  );
 });
 
 class AuthRemoteSource {
-  final Dio _dio;
+  final Dio _dio; // Django backend (auth, password, organizations)
+  final Dio _nodeDio; // Node backend (profile fetch)
 
-  AuthRemoteSource(this._dio);
+  AuthRemoteSource(this._dio, this._nodeDio);
 
   Future<AuthTokens> login(LoginRequest request) async {
     try {
@@ -64,7 +68,7 @@ class AuthRemoteSource {
 
   Future<UserProfile> getProfile() async {
     try {
-      final response = await _dio.get(ApiEndpoints.profileMe);
+      final response = await _nodeDio.get(ApiEndpoints.profileMeNode);
       // return UserProfile.fromJson(response.data);
       final data = response.data;
       print("GET PROFILE RESPONSE: ${response.data}");

@@ -2,7 +2,11 @@ class ApiEndpoints {
   ApiEndpoints._();
 
 //   Auth
-  static const String profileMe = "/profile/me";
+  static const String profileMe = "user/profile/me";
+  // Profile served by the Node backend. No leading slash so it appends to the
+  // Node base URL path (which ends in `.../hydrawav/v1/`) → `.../user/profile/me`;
+  // a leading slash would drop the base path and hit the host root instead.
+  static const String profileMeNode = 'user/profile/me';
   static const String changePassword = "/profile/me/password";
   static const String forgotPassword = "/profile/me/forget-password";
 
@@ -16,10 +20,10 @@ class ApiEndpoints {
   // Base URLs
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
-  static const String nodeBaseUrl =
-      'https://api.hydrawav3.studio/api/hydrawav/v1/';
+  // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
+  static const String nodeBaseUrl = 'https://1dba-2409-40f2-7-816e-7586-3806-4e29-7e45.ngrok-free.app/hydrawav/v1/';
 
-  ///static const String nodeBaseUrl = 'https://6141-2401-4900-939b-c510-21c9-de96-7c0b-8093.ngrok-free.app/hydrawav/v1/';
+  // static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -59,6 +63,30 @@ class ApiEndpoints {
   // placements + recommended protocol per area. Relative (no leading slash).
   static String treatmentPlanByBodyPart(String bodyPartName) =>
       'treatment-plans/body-part/${Uri.encodeComponent(bodyPartName)}';
+
+  // RAG pad placement (Node Nest) — the recovery guided-assessment flow posts
+  // an AssessmentPayload `{ state, learningCases, persist }` and gets the
+  // Sun/Moon pad-placement plan back (ref: hydrawav3-ai `getRagPadPlacement`).
+  static const String padPlacementSession = 'ai-padplacement/placement-session';
+
+  // Sports (Node) — the org's sport mappings (sport + positions) for the Add
+  // Player form. `GET organizations/:orgId/sports` → { organizationId, data:
+  // [{ mappingId, sport, positions, isActive }] }. Relative (no leading slash).
+  static String orgSports(String orgId) => 'organizations/$orgId/sports';
+
+  // Practitioner onboarding (Node). The web moved these three off Django onto
+  // the Node backend under `user/*` (ref: hydrawav3-ai `actions/action.ts` —
+  // getAccountTypes / createPractitionerOnboarding / createOrganization /
+  // updateUserAccount). Relative (no leading slash) so they append to the Node
+  // base URL path. The certificate upload is the one call still on Django.
+  static const String onboardingAccountTypes = 'user/account-types';
+  static const String onboardingCreate = 'user/onboarding';
+  static const String onboardingOrganizations = 'user/organizations';
+  static String onboardingAccountById(String id) => 'user/accounts/$id';
+
+  /// Sports catalogue used by the onboarding Business step (`sportIds`).
+  /// Requires auth — onboarding calls it with the token from the create step.
+  static const String sports = 'sports';
 
   // Notifications (Node) — the AI-report processor writes one when a report
   // finishes generating (web parity: actions/notification.ts). List per user +

@@ -16,6 +16,7 @@ class RouteNames {
   static const String devices = 'devices';
   static const String ai = 'ai';
   static const String history = 'history';
+  static const String users = 'users';
   static const String settings = 'settings';
 
   // Protocol sub-routes
@@ -56,6 +57,9 @@ class RouteNames {
   // Paid features
   static const String presets = 'presets';
   static const String chat = 'chat';
+
+  // Assistant (suggestion-led chat)
+  static const String assistant = 'assistant';
 }
 
 class RoutePaths {
@@ -76,6 +80,7 @@ class RoutePaths {
   static const String devices = '/devices';
   static const String ai = '/ai-hub';
   static const String history = '/history';
+  static const String users = '/users';
   static const String settings = '/settings';
 
   // Sub-routes
@@ -98,4 +103,5 @@ class RoutePaths {
   static const String subscription = '/settings/subscription';
   static const String presets = '/presets';
   static const String chat = '/chat';
+  static const String assistant = '/assistant';
 }

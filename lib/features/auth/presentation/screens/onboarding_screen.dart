@@ -43,6 +43,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _zip = TextEditingController();
   final _country = TextEditingController();
   String? _dob; // yyyy-MM-dd (date of birth)
+  String? _accountType; // AccountTypeOption.id
+  /// Name of the selected account type, captured at selection time. Kept here
+  /// rather than re-read from [accountTypesProvider] later: that provider is
+  /// autoDispose, so by the time the Business step asks, nothing is watching it
+  /// and it has already been torn down.
+  String? _accountTypeName;
   bool _obscurePassword = true;
 
   // Step 2 — certification draft.
@@ -58,13 +64,34 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _bizContact = TextEditingController();
   final _bizAddress = TextEditingController();
   String? _bizAge;
+  final _bizSports = <String>{}; // selected SportOption ids (university only)
+
+  /// True when the account type picked on step 1 is the university one. Matched
+  /// on the option's NAME, not its id, since ids are per-environment.
+  bool get _isUniversityAccount =>
+      (_accountTypeName ?? '').toUpperCase() == 'UNIVERSITY';
 
   @override
   void dispose() {
     for (final c in [
-      _firstName, _lastName, _username, _password, _email, _phone, _title,
-      _address, _city, _state, _zip, _country, _certName, _certOrg,
-      _bizName, _bizEmail, _bizContact, _bizAddress,
+      _firstName,
+      _lastName,
+      _username,
+      _password,
+      _email,
+      _phone,
+      _title,
+      _address,
+      _city,
+      _state,
+      _zip,
+      _country,
+      _certName,
+      _certOrg,
+      _bizName,
+      _bizEmail,
+      _bizContact,
+      _bizAddress,
     ]) {
       c.dispose();
     }
@@ -79,6 +106,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         email: _email.text.trim(),
         phone: _phone.text.trim(),
         title: _title.text.trim(),
+        accountType: _accountType ?? '',
         address: _address.text.trim(),
         city: _city.text.trim(),
         state: _state.text.trim(),
@@ -87,16 +115,32 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         dateOfBirth: _dob ?? '',
       );
 
-  void _onPrimary() {
+  Future<void> _onPrimary() async {
     final controller = ref.read(onboardingControllerProvider.notifier);
-    final step = ref.read(onboardingControllerProvider).currentStep;
+    final state = ref.read(onboardingControllerProvider);
+    final step = state.currentStep;
     switch (step) {
       case 0:
-        if (controller.validateStep1(_buildForm())) {
-          controller.next();
-        } else {
+        if (!controller.validateStep1(_buildForm())) {
           _snack('Please complete the required fields.', error: true);
+          return;
         }
+        if (!state.euaAccepted) {
+          _snack('Please accept the End User Agreement.', error: true);
+          return;
+        }
+        // Creating the account here (not at submit) is what makes the sports
+        // list reachable on the Business step — it needs the returned token.
+        // Safe to re-enter: the controller creates at most once.
+        if (!await controller.createAccount()) {
+          _snack(
+            ref.read(onboardingControllerProvider).error ??
+                'Could not create your account.',
+            error: true,
+          );
+          return;
+        }
+        controller.next();
         break;
       case 1:
         controller.next();
@@ -178,9 +222,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       transitionBuilder: (child, anim) => FadeTransition(
                         opacity: anim,
                         child: SlideTransition(
-                          position:
-                              Tween(begin: const Offset(0.05, 0), end: Offset.zero)
-                                  .animate(anim),
+                          position: Tween(
+                                  begin: const Offset(0.05, 0),
+                                  end: Offset.zero)
+                              .animate(anim),
                           child: child,
                         ),
                       ),
@@ -284,9 +329,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 width: 18,
                 height: 2,
                 margin: const EdgeInsets.only(bottom: 18),
-                color: i < current
-                    ? ThemeConstants.accent
-                    : ThemeConstants.border,
+                color:
+                    i < current ? ThemeConstants.accent : ThemeConstants.border,
               ),
           ],
         ],
@@ -401,6 +445,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             req: true,
             hint: 'e.g. Physiotherapist',
             err: s.step1Errors['title']),
+        _accountTypeField(s.step1Errors['accountType']),
         _field(_address, 'Address',
             req: true, hint: '123 Main St', err: s.step1Errors['address']),
         Row(children: [
@@ -424,14 +469,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: _field(_country, 'Country',
                   req: true, hint: 'USA', err: s.step1Errors['country'])),
         ]),
-        _dateField('Date of Birth', _dob,
-            (v) => setState(() => _dob = v), req: true),
+        _dateField('Date of Birth', _dob, (v) => setState(() => _dob = v),
+            req: true),
         if (s.step1Errors['dateOfBirth'] != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(s.step1Errors['dateOfBirth']!,
                 style: TextStyle(fontSize: 12, color: ThemeConstants.error)),
           ),
+        _euaBlock(s),
       ],
     );
   }
@@ -533,6 +579,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             hint: '(555) 765-4321', keyboard: TextInputType.phone),
         _field(_bizAddress, 'Address (street, city, state, zip)',
             hint: '456 Clinic Ave, Los Angeles, CA, 90001'),
+        if (_isUniversityAccount) _sportsPicker(s),
         const SizedBox(height: 4),
         _filePickTile(
           label: s.businessLogoName ?? 'Business Logo (Optional)',
@@ -564,6 +611,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 subtitle: [
                   if (e.value.businessAge.isNotEmpty) e.value.businessAge,
                   if (e.value.email.isNotEmpty) e.value.email,
+                  if (e.value.sportIds.isNotEmpty)
+                    _sportNames(s, e.value.sportIds),
                 ].join('  ·  '),
                 onRemove: () => ref
                     .read(onboardingControllerProvider.notifier)
@@ -571,6 +620,109 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               )),
         ],
       ],
+    );
+  }
+
+  /// Display names for saved [sportIds]; an id with no matching sport is
+  /// skipped rather than shown raw.
+  String _sportNames(OnboardingState s, List<String> sportIds) {
+    final names = <String>[];
+    for (final id in sportIds) {
+      for (final sport in s.sports) {
+        if (sport.id == id) {
+          names.add(sport.name);
+          break;
+        }
+      }
+    }
+    return names.join(', ');
+  }
+
+  /// University-only: the sports this business offers, sent as `sportIds` when
+  /// the organization is created. The list is fetched with the token from the
+  /// step-1 account creation, so it's empty if that fetch failed — optional
+  /// either way, so onboarding is never blocked on it.
+  Widget _sportsPicker(OnboardingState s) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _label('Sports Offered (Optional)', false),
+          const SizedBox(height: 8),
+          if (s.sports.isEmpty)
+            Row(
+              children: [
+                Expanded(
+                  child: Text('No sports available to select.',
+                      style: TextStyle(
+                          fontSize: 13, color: ThemeConstants.textTertiary)),
+                ),
+                TextButton(
+                  onPressed: () => ref
+                      .read(onboardingControllerProvider.notifier)
+                      .reloadSports(),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text('Retry',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.accent)),
+                ),
+              ],
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final sport in s.sports)
+                  _sportChip(
+                    label: sport.name,
+                    selected: _bizSports.contains(sport.id),
+                    onTap: () => setState(() {
+                      if (!_bizSports.remove(sport.id))
+                        _bizSports.add(sport.id);
+                    }),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sportChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? ThemeConstants.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+            width: 1.4,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : ThemeConstants.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 
@@ -598,12 +750,16 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       email: email,
       contactNumber: contact,
       address: address,
+      sportIds: _isUniversityAccount ? _bizSports.toList() : const [],
     ));
     _bizName.clear();
     _bizEmail.clear();
     _bizContact.clear();
     _bizAddress.clear();
-    setState(() => _bizAge = null);
+    setState(() {
+      _bizAge = null;
+      _bizSports.clear();
+    });
   }
 
   Widget _step4(OnboardingState s) {
@@ -620,7 +776,25 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         _divider(),
         _reviewRow(Icons.storefront_rounded, 'Businesses',
             '${s.businesses.length} linked', null),
-        const SizedBox(height: 18),
+        _divider(),
+        _reviewRow(
+          Icons.verified_user_outlined,
+          'Agreement',
+          s.euaAccepted ? 'Accepted' : 'Not accepted',
+          null,
+        ),
+      ],
+    );
+  }
+
+  /// End User Agreement — read link + acceptance. Lives on step 1 because the
+  /// practitioner account is created when that step is completed, and the
+  /// create call reports whether the agreement was accepted.
+  Widget _euaBlock(OnboardingState s) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
         InkWell(
           onTap: () => _launch('https://www.hydrawav3.com/privacy'),
           borderRadius: BorderRadius.circular(8),
@@ -740,7 +914,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             keyboardType: keyboard,
             textInputAction: TextInputAction.next,
             style: TextStyle(color: ThemeConstants.textPrimary, fontSize: 14),
-            decoration: _inputDecoration(hint: hint, error: err, suffix: suffix),
+            decoration:
+                _inputDecoration(hint: hint, error: err, suffix: suffix),
           ),
         ],
       ),
@@ -768,7 +943,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  InputDecoration _inputDecoration({String? hint, String? error, Widget? suffix}) {
+  InputDecoration _inputDecoration(
+      {String? hint, String? error, Widget? suffix}) {
     OutlineInputBorder border(Color c, [double w = 1.4]) => OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: c, width: w),
@@ -780,13 +956,95 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       isDense: true,
       filled: true,
       fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.45),
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       suffixIcon: suffix,
       enabledBorder: border(ThemeConstants.border),
       focusedBorder: border(ThemeConstants.accent, 1.6),
       errorBorder: border(ThemeConstants.error),
       focusedErrorBorder: border(ThemeConstants.error, 1.6),
+    );
+  }
+
+  /// Step-1 Account Type select. Options come from the public
+  /// `user/account-types` endpoint; the selected value is the option's id,
+  /// which is submitted as `account_type_id`.
+  Widget _accountTypeField(String? err) {
+    final options = ref.watch(accountTypesProvider);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _label('Account Type', true),
+          const SizedBox(height: 6),
+          options.when(
+            loading: () => DropdownButtonFormField<String>(
+              initialValue: null,
+              isDense: true,
+              items: const [],
+              onChanged: null,
+              decoration: _inputDecoration(hint: 'Loading…', error: err),
+            ),
+            error: (e, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: null,
+                  isDense: true,
+                  items: const [],
+                  onChanged: null,
+                  decoration: _inputDecoration(
+                      hint: 'Couldn\'t load account types', error: err),
+                ),
+                TextButton(
+                  onPressed: () => ref.invalidate(accountTypesProvider),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text('Retry',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.accent)),
+                ),
+              ],
+            ),
+            data: (types) {
+              // Drop a stale selection if the list ever comes back without it,
+              // otherwise the dropdown asserts on an unmatched value.
+              final value =
+                  types.any((t) => t.id == _accountType) ? _accountType : null;
+              return DropdownButtonFormField<String>(
+                initialValue: value,
+                isDense: true,
+                icon: Icon(Icons.keyboard_arrow_down_rounded,
+                    color: ThemeConstants.textTertiary),
+                dropdownColor: ThemeConstants.surface,
+                style:
+                    TextStyle(color: ThemeConstants.textPrimary, fontSize: 14),
+                decoration: _inputDecoration(hint: '-- Select --', error: err),
+                items: [
+                  for (final t in types)
+                    DropdownMenuItem(value: t.id, child: Text(t.label)),
+                ],
+                onChanged: (v) => setState(() {
+                  _accountType = v;
+                  _accountTypeName = types
+                      .where((t) => t.id == v)
+                      .map((t) => t.name)
+                      .firstOrNull;
+                  // A non-university account can't offer sports — drop any
+                  // selection made before the type was changed.
+                  if (!_isUniversityAccount) _bizSports.clear();
+                }),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -847,7 +1105,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             );
             if (picked != null) {
               String two(int n) => n.toString().padLeft(2, '0');
-              onPicked('${picked.year}-${two(picked.month)}-${two(picked.day)}');
+              onPicked(
+                  '${picked.year}-${two(picked.month)}-${two(picked.day)}');
             }
           },
           child: InputDecorator(
@@ -895,7 +1154,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         ),
         child: Row(
           children: [
-            Icon(hasFile ? Icons.check_circle_rounded : Icons.upload_file_rounded,
+            Icon(
+                hasFile
+                    ? Icons.check_circle_rounded
+                    : Icons.upload_file_rounded,
                 size: 18,
                 color: hasFile
                     ? ThemeConstants.accent
@@ -982,8 +1244,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          fontSize: 12,
-                          color: ThemeConstants.textSecondary)),
+                          fontSize: 12, color: ThemeConstants.textSecondary)),
               ],
             ),
           ),
@@ -1013,7 +1274,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 child: HwButton(
                   label: 'Back',
                   isOutlined: true,
-                  onPressed: s.isSubmitting
+                  onPressed: (s.isSubmitting || s.isCreatingAccount)
                       ? null
                       : () => ref
                           .read(onboardingControllerProvider.notifier)
@@ -1029,7 +1290,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 label: isLast
                     ? 'Submit application'
                     : (s.currentStep == 1 ? 'Skip / Next' : 'Continue'),
-                isLoading: s.isSubmitting,
+                // Step 1 provisions the account, so it has its own spinner.
+                isLoading: s.isSubmitting || s.isCreatingAccount,
                 onPressed: (isLast && !canSubmit) ? null : _onPrimary,
               ),
             ),
@@ -1069,8 +1331,18 @@ class _YearMonthDayPicker extends StatefulWidget {
 
 class _YearMonthDayPickerState extends State<_YearMonthDayPicker> {
   static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   // Row height used to estimate the initial year-grid scroll offset
   // (mainAxisExtent 48 + mainAxisSpacing 8).
@@ -1085,8 +1357,7 @@ class _YearMonthDayPickerState extends State<_YearMonthDayPicker> {
   @override
   void initState() {
     super.initState();
-    _year =
-        widget.initialDate.year.clamp(widget.firstYear, widget.lastYear);
+    _year = widget.initialDate.year.clamp(widget.firstYear, widget.lastYear);
     _month = widget.initialDate.month;
     _day = widget.initialDate.day;
     // Years are listed newest-first, so the selected year's row index is

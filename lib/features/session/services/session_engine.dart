@@ -43,8 +43,8 @@ final sessionEngineFamilyProvider =
 /// short forms (`w`/`fr`/`fv`/`s`) and the backend's long forms
 /// (`pad`/`faultReason`/`faultValue`/`telemetryState`) both resolve.
 class DeviceTelemetry {
-  final String? sun; // right pad: 'hot' | 'cold' | 'disabled'
-  final String? moon; // left pad: 'hot' | 'cold' | 'disabled'
+  final String? sun; // right pad (p2): 'hot' | 'cold' | 'disabled'
+  final String? moon; // left pad (p1): 'hot' | 'cold' | 'disabled'
   final String? warnCode; // 'pad_disconnect' | 'ntc_overheat'
   final String? faultReason; // 'overcurrent_spike' | 'overcurrent_sustained'
   final num? faultValue;
@@ -147,10 +147,12 @@ class DeviceTelemetry {
       return null;
     }
 
-    // Web parity (session.tsx maps `devicedata.p1.l` / `p2.l`): the firmware's
-    // compact frame carries pad state under p1/p2, and the web reads the LED
-    // color field `l` ("red"/"blue") — sun ← p1.l, moon ← p2.l — falling back to
-    // the backend's sun/moon ('hot'/'cold'/'disabled') when p1/p2 are absent.
+    // The firmware's compact frame carries per-pad state under p1/p2, with the
+    // LED color field `l` ("red"/"blue"). Per hardware: p1 is the LEFT pad
+    // (moon) and p2 is the RIGHT pad (sun) — so moon ← p1.l, sun ← p2.l. (This
+    // intentionally swaps the web's session.tsx mapping, which had sun ← p1.l /
+    // moon ← p2.l.) Falls back to the backend's sun/moon
+    // ('hot'/'cold'/'disabled') when p1/p2 are absent.
     String? padLed(String key) {
       final p = merged[key];
       if (p is Map && p['l'] is String) {
@@ -161,8 +163,8 @@ class DeviceTelemetry {
     }
 
     return DeviceTelemetry(
-      sun: str(['sun']) ?? padLed('p1'),
-      moon: str(['moon']) ?? padLed('p2'),
+      sun: str(['sun']) ?? padLed('p2'),
+      moon: str(['moon']) ?? padLed('p1'),
       warnCode: str(['pad', 'w']),
       faultReason: str(['faultReason', 'fr']),
       faultValue: number(['faultValue', 'fv']),

@@ -3,241 +3,123 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
-import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../../session/domain/active_session_model.dart';
 import '../../../session/domain/pending_session_outcome_model.dart';
-import '../../../session/presentation/providers/active_sessions_provider.dart';
-import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/pending_outcomes_provider.dart';
 import '../../../session/presentation/widgets/post_session_outcomes_sheet.dart';
-import '../../../session/services/session_sync_service.dart';
-
-enum _HistoryTab { live, history }
 
 enum _HistoryFilter { all, guest }
 
 class HistoryListScreen extends ConsumerStatefulWidget {
-  const HistoryListScreen({super.key});
+  /// Rendered as a tab inside the Users screen rather than as its own page:
+  /// drops the Scaffold and the "Session History" title (the host page already
+  /// has a header) and keeps the summary chips + list.
+  final bool embedded;
+
+  const HistoryListScreen({super.key, this.embedded = false});
 
   @override
   ConsumerState<HistoryListScreen> createState() => _HistoryListScreenState();
 }
 
 class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
-  _HistoryTab _selectedTab = _HistoryTab.live;
   _HistoryFilter _historyFilter = _HistoryFilter.all;
   bool _outcomesSheetOpen = false;
 
   @override
   void initState() {
     super.initState();
-    // Defensively ensure the org-wide live feed is running (idempotent if the
-    // app bootstrap already started it) so the Live tab reflects the backend.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final orgId = ref.read(authStateProvider).selectedOrgId;
-      if (orgId != null && orgId.isNotEmpty) {
-        ref.read(liveSessionsProvider.notifier).start(orgId);
-      }
       // Retry any answered-but-unsynced outcome POSTs (best-effort).
       ref.read(pendingOutcomesProvider.notifier).drainSyncPending();
     });
   }
 
-  /// A session stays on the Live tab as long as it's still present in the
-  /// backend live feed and hasn't been stopped — that includes the fully-paused
-  /// case AND the completed case. Completed sessions are intentionally kept
-  /// (not auto-cleared) so the user can still open them and hit Stop All to send
-  /// the backend stop and remove them from the feed. They only disappear once
-  /// the backend drops them (after Stop All).
-  bool _isVisibleStatus(SessionStatus status) {
-    return status == SessionStatus.running ||
-        status == SessionStatus.paused ||
-        status == SessionStatus.completed;
-  }
-
-  bool _isVisibleActiveSession(ActiveSession session) {
-    if (_isVisibleStatus(session.status)) {
-      return true;
-    }
-    for (final deviceId in session.deviceIds) {
-      final deviceStatus =
-          session.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (_isVisibleStatus(deviceStatus)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final allActiveSessions = ref.watch(liveSessionsProvider);
-
     // Sessions still awaiting a post-session review (unanswered only). Rendered
-    // as "Needs review" cards that persist until the user answers or skips —
-    // even after the backend drops the live card. Answered-but-unsynced entries
-    // are excluded (they retry silently and never re-appear).
+    // as "Needs review" cards pinned above the saved history, persisting until
+    // the user answers or skips. Answered-but-unsynced entries are excluded
+    // (they retry silently and never re-appear).
+    //
+    // No auto-prompt (web parity): the sheet opens on tap, or via the session
+    // screen's Stop All / Done.
     final pendingReviews = ref
         .watch(pendingOutcomesProvider)
         .where((e) => e.answers == null)
-        .toList();
-    final pendingIds = {for (final p in pendingReviews) p.sessionId};
-
-    // Keep only genuinely live sessions (running on top, older below), and drop
-    // any that already have a needs-review card so a session shows once.
-    final runningSessions = allActiveSessions
-        .where(_isVisibleActiveSession)
-        .where((s) => !pendingIds.contains(s.id))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    // No auto-prompt (web parity): pending client sessions surface as tap-to-
-    // answer "Needs review" cards on the Live tab; the sheet opens on tap or via
-    // the session screen's Stop All / Done.
-
     final sessionsAsync = ref.watch(allSessionsProvider);
-    final savedSessions = sessionsAsync.asData?.value ?? const <SessionHistoryItem>[];
+    final savedSessions =
+        sessionsAsync.asData?.value ?? const <SessionHistoryItem>[];
     final trackedMinutes = savedSessions.fold<int>(
       0,
       (sum, s) => sum + (_intakeDurationSeconds(s) ~/ 60),
     );
 
-    return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AnimatedEntrance(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Session History',
-                        style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w700,
-                            color: ThemeConstants.textPrimary,
-                            letterSpacing: -0.5)),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      _SummaryChip(
-                          value: '${runningSessions.length}',
-                          label: 'Live',
-                          icon: Icons.play_circle_outline_rounded),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          value: '${savedSessions.length}',
-                          label: 'History',
-                          icon: Icons.history_rounded),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          value: '${trackedMinutes}m',
-                          label: 'Tracked',
-                          icon: Icons.timer_outlined),
-                    ]),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: ThemeConstants.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _HistoryTabButton(
-                              label: 'Live Session',
-                              icon: Icons.bolt_rounded,
-                              selected: _selectedTab == _HistoryTab.live,
-                              onTap: () => setState(
-                                () => _selectedTab = _HistoryTab.live,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: _HistoryTabButton(
-                              label: 'History',
-                              icon: Icons.history_rounded,
-                              selected: _selectedTab == _HistoryTab.history,
-                              onTap: () => setState(
-                                () => _selectedTab = _HistoryTab.history,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+    final content = Padding(
+      padding: widget.embedded
+          ? const EdgeInsets.fromLTRB(16, 0, 16, 0)
+          : const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AnimatedEntrance(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!widget.embedded) ...[
+                  Text('Session History',
+                      style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: ThemeConstants.textPrimary,
+                          letterSpacing: -0.5)),
+                  const SizedBox(height: 12),
+                ],
+                Row(children: [
+                  _SummaryChip(
+                      value: '${savedSessions.length}',
+                      label: 'History',
+                      icon: Icons.history_rounded),
+                  const SizedBox(width: 8),
+                  _SummaryChip(
+                      value: '${trackedMinutes}m',
+                      label: 'Tracked',
+                      icon: Icons.timer_outlined),
+                  if (pendingReviews.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    _SummaryChip(
+                        value: '${pendingReviews.length}',
+                        label: 'To review',
+                        icon: Icons.rate_review_outlined),
                   ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: _selectedTab == _HistoryTab.live
-                    ? _buildLiveSessions(runningSessions, pendingReviews)
-                    : _buildHistorySessions(sessionsAsync),
-              ),
-            ],
+                ]),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: _buildHistorySessions(sessionsAsync, pendingReviews),
+          ),
+        ],
       ),
     );
-  }
 
-  Widget _buildLiveSessions(
-    List<ActiveSession> runningSessions,
-    List<PendingSessionOutcome> pendingReviews,
-  ) {
-    if (runningSessions.isEmpty && pendingReviews.isEmpty) {
-      return const _EmptyHistoryState(
-        title: 'No live sessions',
-        subtitle: 'Start a session to see it appear here while it is running.',
-        icon: Icons.play_disabled_rounded,
-      );
-    }
+    if (widget.embedded) return content;
 
-    // Needs-review cards are pinned above the live sessions.
-    final reviews = [...pendingReviews]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final total = reviews.length + runningSessions.length;
-
-    return ListView.separated(
-      physics: const ClampingScrollPhysics(),
-      itemCount: total,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        if (index < reviews.length) {
-          final entry = reviews[index];
-          return AnimatedEntrance(
-            index: index,
-            child: _NeedsReviewCard(
-              entry: entry,
-              onTap: () => _reviewOutcomes(entry),
-            ),
-          );
-        }
-        final session = runningSessions[index - reviews.length];
-        return AnimatedEntrance(
-          index: index,
-          child: _ActiveSessionCard(
-            session: session,
-            canOpenLive: _isVisibleActiveSession(session),
-          ),
-        );
-      },
+    return Scaffold(
+      backgroundColor: ThemeConstants.background,
+      body: SafeArea(child: content),
     );
   }
 
   /// Show the outcomes sheet for [entry], then finalize (single `/intake` POST
   /// with answers, or a bare log on Skip/dismiss). Removing the entry drops its
-  /// "Needs review" card from the Live tab.
+  /// "Needs review" card from the list.
   Future<void> _reviewOutcomes(PendingSessionOutcome entry) async {
     if (_outcomesSheetOpen) return;
     _outcomesSheetOpen = true;
@@ -255,8 +137,29 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     }
   }
 
+  /// Any unanswered "Needs review" cards, pinned above the saved history and
+  /// shown whatever the guest/all filter is — they're prompts to act on, not
+  /// history rows.
+  List<Widget> _reviewCards(List<PendingSessionOutcome> pendingReviews) {
+    return [
+      for (var i = 0; i < pendingReviews.length; i++)
+        AnimatedEntrance(
+          index: i,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _NeedsReviewCard(
+              entry: pendingReviews[i],
+              onTap: () => _reviewOutcomes(pendingReviews[i]),
+            ),
+          ),
+        ),
+    ];
+  }
+
   Widget _buildHistorySessions(
-      AsyncValue<List<SessionHistoryItem>> sessionsAsync) {
+    AsyncValue<List<SessionHistoryItem>> sessionsAsync,
+    List<PendingSessionOutcome> pendingReviews,
+  ) {
     return Column(
       children: [
         _HistoryFilterToggle(
@@ -266,11 +169,15 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
         const SizedBox(height: 10),
         Expanded(
           child: sessionsAsync.when(
-            loading: () => ListView.separated(
+            loading: () => ListView(
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: 7,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (_, __) => const _HistoryCardSkeleton(),
+              children: [
+                ..._reviewCards(pendingReviews),
+                for (var i = 0; i < 7; i++) ...[
+                  const _HistoryCardSkeleton(),
+                  const SizedBox(height: 8),
+                ],
+              ],
             ),
             error: (error, _) => _EmptyHistoryState(
               title: 'Couldn\'t load history',
@@ -300,6 +207,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
+                      ..._reviewCards(pendingReviews),
                       const SizedBox(height: 40),
                       _EmptyHistoryState(
                         title: _historyFilter == _HistoryFilter.guest
@@ -318,16 +226,18 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
               return RefreshIndicator(
                 color: ThemeConstants.accent,
                 onRefresh: () => ref.refresh(allSessionsProvider.future),
-                child: ListView.separated(
+                child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    return AnimatedEntrance(
-                      index: index,
-                      child: _HistorySessionCard(session: filtered[index]),
-                    );
-                  },
+                  children: [
+                    ..._reviewCards(pendingReviews),
+                    for (var i = 0; i < filtered.length; i++) ...[
+                      AnimatedEntrance(
+                        index: pendingReviews.length + i,
+                        child: _HistorySessionCard(session: filtered[i]),
+                      ),
+                      if (i < filtered.length - 1) const SizedBox(height: 8),
+                    ],
+                  ],
                 ),
               );
             },
@@ -364,411 +274,6 @@ String _formatHistoryDuration(int seconds) {
   if (hours > 0) return '${hours}h ${minutes}m';
   if (minutes > 0) return '${minutes}m';
   return '${safeSeconds}s';
-}
-
-class _ActiveSessionCard extends ConsumerWidget {
-  final ActiveSession session;
-  final bool canOpenLive;
-  const _ActiveSessionCard({required this.session, required this.canOpenLive});
-
-  /// Effective per-device status for the card. Prefers the backend per-device
-  /// status (live feed), falls back to the session status, and treats a device
-  /// whose backend countdown has reached 0 as completed even if the still-
-  /// running session hasn't flipped that device's status yet.
-  SessionStatus _effectiveDeviceStatus(int index) {
-    final id = session.deviceIds[index];
-    final live = index < session.liveDevices.length
-        ? session.liveDevices[index]
-        : null;
-    final raw = live?.status ?? session.deviceStatuses[id] ?? session.status;
-    final remaining = live?.remainingSeconds;
-    if (raw == SessionStatus.running && remaining != null && remaining <= 0) {
-      return SessionStatus.completed;
-    }
-    return raw;
-  }
-
-  /// Per-device countdown to display. Normal/foreign runs use the backend
-  /// `remainingSeconds` verbatim. For an OWN Protocol Plus run the backend
-  /// resets each device's clock on every sub-protocol switch (its
-  /// `remainingSeconds` jumps back up to the whole-sequence total), so derive a
-  /// continuous countdown from the non-resetting whole-sequence total
-  /// ([LiveDeviceState.totalDurationSeconds]) and the run's start instead —
-  /// matching the continuous timer on the live session screen.
-  int? _displayRemainingSeconds({
-    required LiveDeviceState? live,
-    required bool isPlusOwnRun,
-    required DateTime plusStart,
-  }) {
-    final backend = live?.remainingSeconds;
-    if (!isPlusOwnRun) return backend;
-    final total = live?.totalDurationSeconds ?? 0;
-    if (total <= 0) return backend;
-    final elapsed = DateTime.now().difference(plusStart).inSeconds;
-    final remaining = total - elapsed;
-    return remaining < 0 ? 0 : remaining;
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // session.status is the ActiveSession SessionStatus enum — compare against
-    // that, not session_model's (the cross-enum compare was always false, so the
-    // card always read 'Running').
-    final effectiveDeviceStatuses = [
-      for (var i = 0; i < session.deviceIds.length; i++)
-        _effectiveDeviceStatus(i),
-    ];
-    // Once every device has finished, the card's main badge should read
-    // Completed too, instead of the stale session-level "Running".
-    final allCompleted = effectiveDeviceStatuses.isNotEmpty &&
-        effectiveDeviceStatuses.every((s) => s == SessionStatus.completed);
-    final status = allCompleted
-        ? 'Completed'
-        : (session.status == SessionStatus.paused ? 'Paused' : 'Running');
-
-    // Control gating (parity with web):
-    //   • own run        → tap to open the live screen (full control).
-    //   • foreign WiFi    → remote-controllable via the cloud broker (no open).
-    //   • foreign BLE     → read-only (can't reach a BLE device we aren't bonded to).
-    final isWifi = session.transport == 'wifi';
-    final canRemoteControl = !session.isOwn && isWifi;
-    // Resolve the LOCAL active session this backend run maps to (own runs only);
-    // re-opening must target the real local engine, not the backend sessionId.
-    final localId = ref.read(ownBackendToLocalSessionProvider)[session.id];
-    ActiveSession? localSession;
-    if (localId != null) {
-      for (final s in ref.read(activeSessionsProvider)) {
-        if (s.id == localId) {
-          localSession = s;
-          break;
-        }
-      }
-    }
-    final canOpen = session.isOwn && canOpenLive && localSession != null;
-
-    // Protocol Plus countdown fix (parity with the live session screen): the
-    // backend resets each device's clock on every sub-protocol switch while
-    // keeping totalDurationSeconds at the WHOLE-sequence total, so its
-    // `remainingSeconds` jumps back up to the full length at each switch. For an
-    // OWN Plus run, derive a continuous countdown from the (non-resetting)
-    // whole-sequence total and the run's start instead. Plus bindings live on
-    // the resolved local session (own run) but may also be on this feed item.
-    final plusBindings =
-        (localSession?.protocolPlusBindings.isNotEmpty ?? false)
-            ? localSession!.protocolPlusBindings
-            : session.protocolPlusBindings;
-    final isPlusOwnRun = session.isOwn && plusBindings.isNotEmpty;
-    final plusStart = localSession?.createdAt ?? session.createdAt;
-
-    return GradientCard(
-      onTap: () {
-        // Own run → open the local live screen against the real engine.
-        final local = localSession;
-        if (canOpen && local != null) {
-          context.pushNamed(
-            RouteNames.session,
-            extra: {
-              'sessionId': local.id,
-              'protocolId': local.protocolId,
-              'deviceIds': local.deviceIds,
-              'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
-              'advancedSettings': {},
-              'advancedSettingsByDevice': {},
-              'delayedDeviceId': null,
-              'protocolByDeviceId': {},
-              'skipEngineBootstrap': false,
-              'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
-              // Restore Protocol Plus wiring so Stop cancels the server schedule.
-              if (local.protocolPlusBindings.isNotEmpty) ...{
-                'protocolPlusBindings': local.protocolPlusBindings,
-                'protocolPlusId':
-                    local.protocolPlusBindings.first['plusId'] ?? '',
-              },
-            },
-          );
-          return;
-        }
-        // Every other case opens the live REMOTE VIEW (no local engine, no
-        // restart; display comes from the backend feed). This covers foreign
-        // WiFi (full broker control), foreign BLE (Pause All / Stop All routed
-        // through the backend — we can't reach the pads, but we can stop &
-        // clear the session), and an own run whose local engine is already
-        // gone (e.g. completed). The session-wide Pause All / Stop All live on
-        // that screen's top control card.
-        context.pushNamed(
-          RouteNames.session,
-          extra: {
-            'remoteView': true,
-            'backendSessionId': session.id,
-            'sessionId': session.id,
-            'protocolId': '',
-            'deviceIds': session.deviceIds,
-            'transport': session.transport,
-            'skipEngineBootstrap': true,
-          },
-        );
-      },
-      padding: const EdgeInsets.all(16),
-      showShadow: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: ThemeConstants.accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  Icons.devices_rounded,
-                  color: ThemeConstants.accent,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      // Protocol Plus run: show the sequence/template name
-                      // (e.g. "1. Deep-Tension Recovery"), not the current
-                      // sub-protocol. Falls back to the protocol name otherwise.
-                      session.protocolPlusName.isNotEmpty
-                          ? session.protocolPlusName
-                          : session.protocolName,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${session.deviceIds.length} device(s) • ${session.transport.toUpperCase()}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: ThemeConstants.textTertiary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Started ${_formatDate(session.createdAt)}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: ThemeConstants.textTertiary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: (session.status == SessionStatus.paused
-                          ? ThemeConstants.warning
-                          : ThemeConstants.success)
-                      .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: session.status == SessionStatus.paused
-                        ? ThemeConstants.warning
-                        : ThemeConstants.success,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: ThemeConstants.surface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: ThemeConstants.border),
-            ),
-            child: Column(
-              children: List.generate(session.deviceIds.length, (index) {
-                final id = session.deviceIds[index];
-                final name = session.deviceNames[id] ?? 'Device ${index + 1}';
-                final live = index < session.liveDevices.length
-                    ? session.liveDevices[index]
-                    : null;
-                final remaining = _displayRemainingSeconds(
-                  live: live,
-                  isPlusOwnRun: isPlusOwnRun,
-                  plusStart: plusStart,
-                );
-                final deviceStatus = _effectiveDeviceStatus(index);
-                final statusColor = switch (deviceStatus) {
-                  SessionStatus.paused => ThemeConstants.warning,
-                  SessionStatus.running => ThemeConstants.success,
-                  SessionStatus.completed => ThemeConstants.success,
-                  SessionStatus.stopped => ThemeConstants.textTertiary,
-                  SessionStatus.idle => ThemeConstants.textTertiary,
-                };
-                final statusLabel = switch (deviceStatus) {
-                  SessionStatus.paused => 'Paused',
-                  SessionStatus.running => 'Running',
-                  SessionStatus.completed => 'Completed',
-                  SessionStatus.stopped => 'Stopped',
-                  SessionStatus.idle => 'Idle',
-                };
-
-                return Padding(
-                  padding: EdgeInsets.only(
-                      bottom: index == session.deviceIds.length - 1 ? 0 : 8),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: statusColor,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: ThemeConstants.textPrimary,
-                          ),
-                        ),
-                      ),
-                      // Sun/moon pad colors straight from the backend
-                      // (web parity). Moon = left pad, Sun = right pad.
-                      if (live != null) ...[
-                        _PadDot(
-                          icon: Icons.nightlight_round,
-                          color: _padColor(live.moon),
-                        ),
-                        const SizedBox(width: 6),
-                        _PadDot(
-                          icon: Icons.wb_sunny_rounded,
-                          color: _padColor(live.sun),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      // Per-device countdown straight from the backend (never
-                      // computed on-device). Hidden when not provided.
-                      if (remaining != null && remaining > 0) ...[
-                        Text(
-                          _formatRemaining(remaining),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: ThemeConstants.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      Text(
-                        statusLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: statusColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ),
-          ),
-          if (!session.isOwn) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Icon(
-                  Icons.touch_app_outlined,
-                  size: 14,
-                  color: ThemeConstants.textTertiary,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  canRemoteControl
-                      ? 'Tap to open & control'
-                      : 'Tap to open & stop (BLE on another device)',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
-
-    if (difference.inMinutes < 60) {
-      return '${difference.inMinutes}m ago';
-    } else if (difference.inHours < 24) {
-      return '${difference.inHours}h ago';
-    } else {
-      return '${date.day}/${date.month}/${date.year}';
-    }
-  }
-}
-
-String _formatRemaining(int seconds) {
-  final s = seconds < 0 ? 0 : seconds;
-  final m = s ~/ 60;
-  final r = s % 60;
-  return '${m.toString().padLeft(2, '0')}:${r.toString().padLeft(2, '0')}';
-}
-
-/// Web-parity pad colors (Hydrawav3-ai liveSession.tsx): hot/red → red,
-/// cold/blue → blue, anything else (disabled/off/empty) → grey.
-Color _padColor(String? v) {
-  if (v == null) return Colors.grey;
-  final s = v.toLowerCase().trim();
-  if (s.contains('hot') || s == 'red') return Colors.red;
-  if (s.contains('cold') || s == 'blue') return Colors.blue;
-  return Colors.grey;
-}
-
-/// A labelled pad chip (Moon = left pad, Sun = right pad) coloured from the
-/// backend sun/moon string.
-class _PadDot extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  const _PadDot({required this.icon, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        shape: BoxShape.circle,
-        border: Border.all(color: color.withValues(alpha: 0.6)),
-      ),
-      child: Icon(icon, size: 12, color: color),
-    );
-  }
 }
 
 class _SummaryChip extends StatelessWidget {
@@ -809,73 +314,6 @@ class _SummaryChip extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 10, color: ThemeConstants.textTertiary)),
                 ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryTabButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _HistoryTabButton({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          // Match the Devices list segmented control: dark slate selected
-          // segment with cream text/icons (web-parity), not an accent tint.
-          color: selected
-              ? ThemeConstants.segmentActiveBg
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: ThemeConstants.segmentActiveBg
-                        .withValues(alpha: 0.22),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 17,
-              color:
-                  selected ? ThemeConstants.onNav : ThemeConstants.textSecondary,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: selected
-                    ? ThemeConstants.onNav
-                    : ThemeConstants.textSecondary,
               ),
             ),
           ],
@@ -1019,9 +457,11 @@ class _HistorySessionCard extends StatelessWidget {
         .where((name) => name.isNotEmpty)
         .toSet()
         .length;
-    final durationLabel = _formatHistoryDuration(_intakeDurationSeconds(session));
-    final dateLabel =
-        session.createdAt != null ? _formatHistoryDate(session.createdAt!) : '—';
+    final durationLabel =
+        _formatHistoryDuration(_intakeDurationSeconds(session));
+    final dateLabel = session.createdAt != null
+        ? _formatHistoryDate(session.createdAt!)
+        : '—';
     final meta = StringBuffer('$dateLabel  •  $durationLabel');
     if (deviceCount > 0) {
       meta.write('  •  $deviceCount device(s)');
@@ -1145,7 +585,9 @@ class _NeedsReviewCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    qCount > 0 ? 'Needs review • $qCount question(s)' : 'Needs review',
+                    qCount > 0
+                        ? 'Needs review • $qCount question(s)'
+                        : 'Needs review',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
@@ -1156,8 +598,7 @@ class _NeedsReviewCard extends StatelessWidget {
               ],
             ),
           ),
-          Icon(Icons.chevron_right_rounded,
-              color: ThemeConstants.textTertiary),
+          Icon(Icons.chevron_right_rounded, color: ThemeConstants.textTertiary),
         ],
       ),
     );

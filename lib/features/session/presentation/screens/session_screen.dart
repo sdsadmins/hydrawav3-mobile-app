@@ -25,6 +25,7 @@ import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
+import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
 import '../../../session/data/session_repository.dart';
@@ -178,6 +179,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// One-shot guard so the normal-run backend stop POST fires at most once.
   bool _normalServerStopped = false;
+
+  /// One-shot guard so the session-setup reset (clears the guided-assessment
+  /// area of focus so Start is disabled again) fires at most once per terminal.
+  bool _setupResetAfterStop = false;
 
   /// One-shot guard for the pad-poll diagnostic log.
   bool _padDiagLogged = false;
@@ -1504,6 +1509,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       ref
           .read(sessionEngineFamilyProvider(_engineKey).notifier)
           .enqueuePendingOutcome();
+      // On Stop All (or any terminal), clear the per-session intake so the
+      // session setup resets — in Client mode this empties the area of focus,
+      // which disables "Start Session" until a new assessment is done. Safe:
+      // the outcomes sheet finalizes off the engine's snapshot, not this state.
+      if (!_setupResetAfterStop) {
+        _setupResetAfterStop = true;
+        ref.read(guidedAssessmentProvider.notifier).reset();
+      }
     }
 
     if (_terminalSessionCleanupInFlight) return;
@@ -3119,9 +3132,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   static bool _strEqIc(String a, String b) =>
       a.toLowerCase().trim() == b.toLowerCase().trim();
 
-  /// Same rules as web `DeviceTimer` Moon icon (left pad). Accepts both the
+  /// Same rules as web `DeviceTimer` Moon icon (left pad = p1). Accepts both the
   /// backend vocabulary ('hot'/'cold'/'leftHotRed'/'leftColdBlue') and the BLE
-  /// frame's LED color ('red'/'blue', from p2.l) so live telemetry colors match.
+  /// frame's LED color ('red'/'blue', from p1.l) so live telemetry colors match.
   Color _webMoonPadColor(String? moon) {
     if (moon == null || moon.isEmpty) return Colors.grey;
     final m = moon.trim();
@@ -3136,8 +3149,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return Colors.grey;
   }
 
-  /// Same rules as web `DeviceTimer` Sun icon (right pad). Accepts 'red'/'blue'
-  /// (from p1.l) in addition to the backend 'hot'/'cold' vocabulary.
+  /// Same rules as web `DeviceTimer` Sun icon (right pad = p2). Accepts
+  /// 'red'/'blue' (from p2.l) in addition to the backend 'hot'/'cold' vocabulary.
   Color _webSunPadColor(String? sun) {
     if (sun == null || sun.isEmpty) return Colors.grey;
     final s = sun.trim();

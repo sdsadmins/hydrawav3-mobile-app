@@ -48,6 +48,9 @@ class UserProfile {
   final String? state;
   final String? dob;
 
+  /// The organization's type from `profile/me` (e.g. "UNIVERSITY", "CLINIC").
+  final String? organizationType;
+
   const UserProfile({
     this.id,
     this.username,
@@ -62,6 +65,7 @@ class UserProfile {
     this.country,
     this.state,
     this.dob,
+    this.organizationType,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -95,6 +99,7 @@ class UserProfile {
         country: json['country'] as String?,
         state: json['state'] as String?,
         dob: json['dateOfBirth'] as String?,
+        organizationType: json['organizationType']?.toString(),
       );
 
   String get displayName {

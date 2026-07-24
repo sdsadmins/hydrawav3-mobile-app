@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,6 +21,17 @@ class OnboardingState {
   final bool submitted;
   final String? error;
 
+  /// Set once step 1 has created the practitioner. The token authorizes the
+  /// sports fetch and the remaining submit calls; both are kept so stepping
+  /// back and forward never creates a second account.
+  final String? practitionerId;
+  final String? authToken;
+  final bool isCreatingAccount;
+
+  /// Sports offered by the platform, loaded right after the account is created
+  /// (the endpoint needs a token). Empty until then, or if the fetch fails.
+  final List<SportOption> sports;
+
   /// Per-field errors for step 1 (keyed by field name).
   final Map<String, String> step1Errors;
 
@@ -34,7 +47,15 @@ class OnboardingState {
     this.submitted = false,
     this.error,
     this.step1Errors = const {},
+    this.practitionerId,
+    this.authToken,
+    this.isCreatingAccount = false,
+    this.sports = const [],
   });
+
+  /// True once step 1 has provisioned the account and handed back a token.
+  bool get hasAccount =>
+      (practitionerId?.isNotEmpty ?? false) && (authToken?.isNotEmpty ?? false);
 
   bool get hasBusinessLogo =>
       businessLogoPath != null && businessLogoPath!.isNotEmpty;
@@ -52,22 +73,39 @@ class OnboardingState {
     bool? submitted,
     String? error,
     Map<String, String>? step1Errors,
+    String? practitionerId,
+    String? authToken,
+    bool? isCreatingAccount,
+    List<SportOption>? sports,
   }) {
     return OnboardingState(
       currentStep: currentStep ?? this.currentStep,
       form: form ?? this.form,
       certifications: certifications ?? this.certifications,
       businesses: businesses ?? this.businesses,
-      businessLogoPath: clearLogo ? null : (businessLogoPath ?? this.businessLogoPath),
-      businessLogoName: clearLogo ? null : (businessLogoName ?? this.businessLogoName),
+      businessLogoPath:
+          clearLogo ? null : (businessLogoPath ?? this.businessLogoPath),
+      businessLogoName:
+          clearLogo ? null : (businessLogoName ?? this.businessLogoName),
       euaAccepted: euaAccepted ?? this.euaAccepted,
       isSubmitting: isSubmitting ?? this.isSubmitting,
       submitted: submitted ?? this.submitted,
       error: error,
       step1Errors: step1Errors ?? this.step1Errors,
+      practitionerId: practitionerId ?? this.practitionerId,
+      authToken: authToken ?? this.authToken,
+      isCreatingAccount: isCreatingAccount ?? this.isCreatingAccount,
+      sports: sports ?? this.sports,
     );
   }
 }
+
+/// Options for the step-1 Account Type select (`GET {node}user/account-types`).
+/// Public endpoint — fetched before the practitioner account exists.
+final accountTypesProvider =
+    FutureProvider.autoDispose<List<AccountTypeOption>>((ref) {
+  return ref.read(onboardingRemoteSourceProvider).getAccountTypes();
+});
 
 final onboardingControllerProvider =
     StateNotifierProvider.autoDispose<OnboardingController, OnboardingState>(
@@ -98,6 +136,7 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     req('email', f.email);
     req('phone', f.phone);
     req('title', f.title);
+    req('accountType', f.accountType);
     req('address', f.address);
     req('city', f.city);
     req('state', f.state);
@@ -119,6 +158,63 @@ class OnboardingController extends StateNotifier<OnboardingState> {
   }
 
   bool isValidEmail(String email) => _emailRe.hasMatch(email);
+
+  /// Provision the practitioner account (submit call 1) when leaving step 1, so
+  /// the token it returns can authorize the sports fetch the Business step
+  /// needs. Creates ONCE — stepping back to step 1 and forward again reuses the
+  /// existing account instead of creating a duplicate (web parity).
+  ///
+  /// Returns true when the account exists afterwards.
+  Future<bool> createAccount() async {
+    if (state.hasAccount) return true;
+    if (state.isCreatingAccount) return false;
+
+    state = state.copyWith(isCreatingAccount: true, error: null);
+    try {
+      final created = await _ref
+          .read(onboardingRemoteSourceProvider)
+          .createPractitioner(buildCreatePractitionerJson(state.form));
+      state = state.copyWith(
+        isCreatingAccount: false,
+        practitionerId: created.userId,
+        authToken: created.token,
+      );
+      // Best-effort: onboarding continues (without sport selection) if this
+      // fails — the org is simply created with no sportIds.
+      unawaited(_loadSports(created.token));
+      return true;
+    } on ServerException catch (e) {
+      state = state.copyWith(isCreatingAccount: false, error: e.message);
+      return false;
+    } catch (e) {
+      appLogger.e('Onboarding: account create error: $e');
+      state = state.copyWith(
+        isCreatingAccount: false,
+        error: 'Something went wrong. Please try again.',
+      );
+      return false;
+    }
+  }
+
+  /// Re-run the sports fetch with the token from step 1 — the picker offers
+  /// this when the list came back empty (a failed fetch looks identical to a
+  /// genuinely empty catalogue otherwise).
+  Future<void> reloadSports() async {
+    final token = state.authToken;
+    if (token == null || token.isEmpty) return;
+    await _loadSports(token);
+  }
+
+  Future<void> _loadSports(String token) async {
+    try {
+      final sports =
+          await _ref.read(onboardingRemoteSourceProvider).getSports(token);
+      if (!mounted) return;
+      state = state.copyWith(sports: sports, error: state.error);
+    } catch (e) {
+      appLogger.w('Onboarding: sports fetch failed (ignored): $e');
+    }
+  }
 
   // ── Step 2: certifications ──────────────────────────────────────────────────
   void addCertification(OnboardingCertification cert) {
@@ -199,27 +295,29 @@ class OnboardingController extends StateNotifier<OnboardingState> {
       return;
     }
 
+    // 1) The account is normally already created (step 1 does it, so sports can
+    // load). Falls back to creating here if that hasn't happened.
+    if (!state.hasAccount && !await createAccount()) return;
+    final userId = state.practitionerId!;
+    final token = state.authToken!;
+
     state = state.copyWith(isSubmitting: true, error: null);
     try {
       final remote = _ref.read(onboardingRemoteSourceProvider);
       final form = state.form;
 
-      // 1) Create the practitioner account → userId + token (authorizes 2–4).
-      final created =
-          await remote.createPractitioner(buildCreatePractitionerJson(form));
-
       // 2) Create the business / organization from the first business.
       final orgId = await remote.createOrganization(
         buildOrganizationJson(state.businesses.first),
-        created.token,
+        token,
       );
 
       // 3) Upload certificate documents (optional, best-effort — web parity).
       for (final cert in state.certifications) {
         await remote.uploadCertificate(
-          userId: created.userId,
+          userId: userId,
           cert: cert,
-          token: created.token,
+          token: token,
         );
       }
 
@@ -227,9 +325,9 @@ class OnboardingController extends StateNotifier<OnboardingState> {
       // `addOrganisations: [Number(orgId)]`, so pass a numeric id when possible.
       final Object orgIdValue = int.tryParse(orgId) ?? orgId;
       await remote.updateUserAccount(
-        created.userId,
+        userId,
         buildAccountUpdateJson(form, orgIdValue),
-        created.token,
+        token,
       );
 
       state = state.copyWith(isSubmitting: false, submitted: true);
