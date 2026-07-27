@@ -10,15 +10,42 @@ import '../../../payments/data/payment_repository.dart';
 import '../../data/organization_repository.dart';
 import '../providers/auth_provider.dart';
 
+/// Every organization the signed-in practitioner belongs to. Shared by this
+/// page and the More screen's org switcher — there is exactly one declaration.
+///
+/// The endpoint has returned both a bare list and a paginated envelope across
+/// backend versions, so normalize both shapes rather than assuming one.
 final organizationProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   final dio = ref.read(djangoDioProvider);
   final response = await dio.get('/admin/organizations');
-  return List<Map<String, dynamic>>.from(response.data);
+  final data = response.data;
+
+  List<dynamic>? rows;
+  if (data is List) {
+    rows = data;
+  } else if (data is Map<String, dynamic>) {
+    rows = (data['results'] ?? data['data']) as List<dynamic>?;
+    // A single org can come back unwrapped.
+    rows ??= [data];
+  }
+  if (rows == null) {
+    throw Exception('Unexpected organizations response: ${data.runtimeType}');
+  }
+  return rows
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
 });
 
 class SelectOrganizationPage extends ConsumerStatefulWidget {
-  const SelectOrganizationPage({super.key});
+  /// Show the create-organization form even when the practitioner already
+  /// belongs to one. Set by `/select-organization?create=1`, which is where
+  /// the Hub's "Add organization" action lands — without it that action would
+  /// dead-end on the picker.
+  final bool startInCreateMode;
+
+  const SelectOrganizationPage({super.key, this.startInCreateMode = false});
 
   @override
   ConsumerState<SelectOrganizationPage> createState() =>
@@ -90,7 +117,7 @@ class _SelectOrganizationPageState
                       padding: const EdgeInsets.all(20),
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 420),
-                        child: orgs.isEmpty
+                        child: orgs.isEmpty || widget.startInCreateMode
                             ? _buildCreateOrg()
                             : _buildOrgList(orgs),
                       ),

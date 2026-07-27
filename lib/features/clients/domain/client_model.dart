@@ -121,28 +121,50 @@ class Client {
       (leaseId != null && leaseId!.isNotEmpty) &&
       (macAddress != null && macAddress!.isNotEmpty);
 
+  /// Copies every field by default.
+  ///
+  /// This used to carry only the lease fields, silently dropping `memberType`,
+  /// `sport`, `jerseyNumber` and `positions` — so any caller that copied a
+  /// player turned them into an unclassified client. It was harmless while the
+  /// only callers were the four lease operations; it is not harmless now that
+  /// profiles can be edited.
   Client copyWith({
+    String? clientName,
+    String? nickname,
+    int? age,
+    String? gender,
+    double? height,
+    double? weight,
+    String? phone,
     String? leaseId,
     bool? leaseActive,
     String? macAddress,
     DateTime? leaseDate,
     bool? isActive,
+    String? memberType,
+    String? sport,
+    int? jerseyNumber,
+    List<String>? positions,
   }) {
     return Client(
       id: id,
-      clientName: clientName,
-      nickname: nickname,
-      age: age,
-      gender: gender,
-      height: height,
-      weight: weight,
-      phone: phone,
+      clientName: clientName ?? this.clientName,
+      nickname: nickname ?? this.nickname,
+      age: age ?? this.age,
+      gender: gender ?? this.gender,
+      height: height ?? this.height,
+      weight: weight ?? this.weight,
+      phone: phone ?? this.phone,
       organizationId: organizationId,
       leaseId: leaseId ?? this.leaseId,
       leaseActive: leaseActive ?? this.leaseActive,
       macAddress: macAddress ?? this.macAddress,
       leaseDate: leaseDate ?? this.leaseDate,
       isActive: isActive ?? this.isActive,
+      memberType: memberType ?? this.memberType,
+      sport: sport ?? this.sport,
+      jerseyNumber: jerseyNumber ?? this.jerseyNumber,
+      positions: positions ?? this.positions,
     );
   }
 }

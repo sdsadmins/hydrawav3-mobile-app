@@ -106,6 +106,8 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/icons/svg/
+    # Handoff icon set (`IC` in the UI spec) — see core/theme/widgets/hw_icon.dart
+    - assets/icons/hw/
     - assets/fonts/
     - assets/animations/
     # Offline 3D kinetic-chain viewer (three.js bundle + GLB + Draco decoder).

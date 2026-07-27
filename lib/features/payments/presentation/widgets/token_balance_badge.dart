@@ -1,65 +1,68 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/theme/widgets/hw_icon.dart';
+import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../providers/token_balance_provider.dart';
 import 'token_details_sheet.dart';
 
-/// Small `Tokens` pill mirroring the web header. Red when the balance runs low
-/// (< 80, same threshold as the web), otherwise the app accent. Hidden until the
-/// balance is known. Tapping opens the token details sheet (override with [onTap]).
+/// The plan badge in a screen's top bar — the UI spec's `.tokenbadge`
+/// (styles.css:372, `tokenBadgeHTML()` at app.js:2240).
+///
+/// Reads **"Enterprise"** for any package plan, whatever the product is called
+/// ("Pro+", "Pro Team", …) — the pill names the category, and the product's own
+/// name heads the plan sheet behind it. Never a raw credit count; the balance
+/// and usage live one tap away. Tan-soft pill, copper-on-surface text, a
+/// diamond glyph and a caret.
 class TokenBalanceBadge extends ConsumerWidget {
   final VoidCallback? onTap;
   const TokenBalanceBadge({super.key, this.onTap});
 
-  static const double _lowThreshold = 80;
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final balance = ref.watch(tokenBalanceProvider);
-    if (balance == null) return const SizedBox.shrink();
+    final p = RefPalette.of(context);
+    final plan = ref.watch(currentPlanProvider).valueOrNull;
 
-    final isLow = balance < _lowThreshold;
-    final color = isLow ? Colors.red.shade600 : ThemeConstants.accent;
+    // Nothing to name yet — stay out of the way rather than show a placeholder.
+    final label = plan?.badgeLabel.trim();
+    if (label == null || label.isEmpty) return const SizedBox.shrink();
 
-    return InkWell(
+    return HwPress(
+      scale: 0.9,
       onTap: onTap ?? () => showTokenDetailsSheet(context),
-      borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withValues(alpha: 0.5)),
+          color: p.tanSoft,
+          borderRadius: BorderRadius.circular(HwRadius.pill),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Tokens',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: color.withValues(alpha: 0.8),
-                  ),
+            Text(
+              '◈ ',
+              style: TextStyle(
+                fontSize: HwType.cap,
+                fontWeight: FontWeight.w800,
+                color: p.copperInk,
+              ),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  fontWeight: FontWeight.w800,
+                  color: p.copperInk,
                 ),
-                Text(
-                  balance.toStringAsFixed(0),
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: color,
-                    height: 1.1,
-                  ),
-                ),
-              ],
+              ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: color),
+            HwIcon(HwIcons.caret, size: 12, color: p.copperInk),
           ],
         ),
       ),

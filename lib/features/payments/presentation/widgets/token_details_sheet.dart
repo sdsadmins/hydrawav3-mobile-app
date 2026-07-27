@@ -1,23 +1,45 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../data/payment_repository.dart';
 import '../../domain/plan_model.dart';
 import '../providers/token_balance_provider.dart';
 
-/// Show the token balance / plan breakdown bottom sheet (web parity: the header
-/// "Plan Usage" dropdown). Usable from any screen that has the token chip.
+/// The plan / session-credits sheet behind the token badge, ported from the UI
+/// spec's `tokenSheet()` (app.js:2245).
+///
+/// Two shapes, exactly as the spec splits them: an **Enterprise** package shows
+/// what's left of the team's allowance, while **pay-as-you-go** shows a credit
+/// balance. Copy rule from the integration plan §3: tokens are "session
+/// credits" in anything customer-facing.
 void showTokenDetailsSheet(BuildContext context) {
   showModalBottomSheet<void>(
     context: context,
-    backgroundColor: ThemeConstants.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    // Shown from inside the ShellRoute, whose Navigator stops at the Scaffold
+    // body — without this the sheet renders behind the bottom nav.
+    useRootNavigator: true,
     builder: (_) => const _TokenDetailsSheet(),
   );
+}
+
+/// Package plans are billed in session hours; everything else in credits.
+/// The rule lives on the model so the badge and this sheet can't disagree.
+bool _isEnterprise(SubscriptionPlan? plan) => plan?.isEnterprisePlan ?? false;
+
+/// Seconds → "2 h 30 min", matching the spec's `hoursLeftStr()`.
+String _sessionTimeLeft(int seconds) {
+  final totalMin = (seconds / 60).round();
+  final h = totalMin ~/ 60;
+  final m = totalMin % 60;
+  if (h > 0 && m > 0) return '$h h $m min';
+  if (h > 0) return '$h h';
+  return '$m min';
 }
 
 class _TokenDetailsSheet extends ConsumerWidget {
@@ -25,383 +47,327 @@ class _TokenDetailsSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final auth = ref.watch(authStateProvider);
-    final orgId = auth.selectedOrgId ?? auth.user?.organizationId;
-    final orgName = auth.selectedOrgName;
-    final liveTokens = ref.watch(tokenBalanceProvider);
-    final accent = ThemeConstants.accent;
+    final p = RefPalette.of(context);
+    final planAsync = ref.watch(currentPlanProvider);
+    final plan = planAsync.valueOrNull;
+    // The socket-backed balance wins over the plan snapshot when both exist.
+    final tokens = ref.watch(tokenBalanceProvider) ?? plan?.remainingTokens;
+    // The period's token grant, which every usage bar measures against.
+    final grant = ref.watch(planTokenGrantProvider).valueOrNull;
 
     return SafeArea(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-          child: FutureBuilder<SubscriptionPlan>(
-            future: orgId == null
-                ? null
-                : ref.read(paymentRepositoryProvider).getCurrentPlan(orgId),
-            builder: (ctx, snap) {
-              final plan = snap.data;
-              final tokens = liveTokens ?? plan?.remainingTokens;
-              final loading = snap.connectionState == ConnectionState.waiting;
-              final low = tokens != null && tokens < 80;
-              final heroColor = low ? Colors.red.shade600 : accent;
-              final ph = loading ? '…' : '—';
-
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.border,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+      top: false,
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.82,
+        ),
+        decoration: BoxDecoration(
+          color: p.bg,
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 8, bottom: 16),
+              decoration: BoxDecoration(
+                color: p.line,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 0),
+                child: planAsync.isLoading && plan == null
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    : _isEnterprise(plan)
+                        ? _EnterpriseBody(plan: plan!, grant: grant)
+                        : _CreditsBody(
+                            tokens: tokens, plan: plan, grant: grant),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, HwSpace.s4, 18, HwSpace.s2),
+              child: _PrimaryButton(
+                label: _isEnterprise(plan)
+                    ? 'Full plan & usage'
+                    : 'Top up credits',
+                onTap: () {
+                  final router = GoRouter.of(context);
+                  Navigator.pop(context);
+                  router.push(RoutePaths.subscription);
+                },
+              ),
+            ),
+            HwPress(
+              onTap: () => Navigator.pop(context),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 14),
+                child: Text(
+                  'Close',
+                  style: TextStyle(
+                    fontSize: HwType.cap,
+                    fontWeight: FontWeight.w600,
+                    color: p.ink3,
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Token Balance',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: ThemeConstants.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // ── Hero balance card ──
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          heroColor.withValues(alpha: 0.18),
-                          heroColor.withValues(alpha: 0.06),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                      border:
-                          Border.all(color: heroColor.withValues(alpha: 0.25)),
-                    ),
-                    child: IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _HeroStat(
-                              label: 'Tokens available',
-                              value: tokens != null
-                                  ? tokens.toStringAsFixed(0)
-                                  : '—',
-                              valueColor: heroColor,
-                              labelColor: heroColor.withValues(alpha: 0.9),
-                            ),
-                          ),
-                          _HeroVDivider(color: heroColor),
-                          Expanded(
-                            child: _HeroStat(
-                              label: 'Plan usage',
-                              value: plan?.name ?? ph,
-                              valueColor: accent,
-                              labelColor: ThemeConstants.textSecondary,
-                            ),
-                          ),
-                          _HeroVDivider(color: heroColor),
-                          Expanded(
-                            child: _HeroStat(
-                              label: 'Status',
-                              value: plan?.status ?? ph,
-                              valueColor: plan?.status != null
-                                  ? _statusColor(plan!.status!)
-                                  : ThemeConstants.textTertiary,
-                              labelColor: ThemeConstants.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // ── Usage stat cards ──
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.play_circle_outline_rounded,
-                          // The sessions quota (derived from
-                          // `sessionDurationSeconds`) is shown as hours +
-                          // minutes rather than raw minutes. Fall back to the
-                          // legacy per-session count if a backend still returns
-                          // `sessionsAvailable` instead.
-                          label: plan?.sessionDurationSeconds != null
-                              ? 'Session time'
-                              : 'Sessions left',
-                          value: plan?.sessionDurationSeconds != null
-                              ? _fmtSessionTime(plan!.sessionDurationSeconds!)
-                              : (plan?.sessionsAvailable?.toString() ?? ph),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _StatCard(
-                          icon: Icons.auto_awesome_rounded,
-                          label: 'AI reports left',
-                          value: plan?.aiReportsAvailable?.toString() ?? ph,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-
-                  // ── Org / renewal info card ──
-                  Container(
-                    decoration: BoxDecoration(
-                      color: ThemeConstants.background,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: ThemeConstants.border),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    child: Column(
-                      children: [
-                        _TokenDetailRow(
-                            label: 'Organization', value: orgName ?? ph),
-                        const _SheetDivider(),
-                        _TokenDetailRow(
-                          // Max devices this plan can run at once (0 = unlimited).
-                          label: 'Devices you can run',
-                          value: plan == null
-                              ? ph
-                              : (plan.deviceLimit == null
-                                  ? ph
-                                  : (plan.deviceLimit == 0
-                                      ? 'Unlimited'
-                                      : plan.deviceLimit.toString())),
-                        ),
-                        if (plan?.currentPeriodEnd != null) ...[
-                          const _SheetDivider(),
-                          _TokenDetailRow(
-                            label: 'Renews on',
-                            value: _fmtDate(plan!.currentPeriodEnd!),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
 
-  static Color _statusColor(String status) {
-    final s = status.toLowerCase();
-    if (s.contains('active')) return ThemeConstants.success;
-    if (s.contains('free')) return ThemeConstants.accent;
-    return ThemeConstants.textTertiary;
+// ---------------------------------------------------------------------------
+// Enterprise — a package billed in session hours
+// ---------------------------------------------------------------------------
+
+class _EnterpriseBody extends ConsumerWidget {
+  final SubscriptionPlan plan;
+  final double? grant;
+  const _EnterpriseBody({required this.plan, required this.grant});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final org = ref.watch(authStateProvider).selectedOrgName;
+    final seconds = plan.sessionDurationSeconds;
+    final reports = plan.aiReportsAvailable;
+    final devices = plan.deviceLimit;
+    // One pool drives every gauge, so one fraction fills every bar.
+    final fraction = plan.fractionOfGrant(grant);
+    final secondsTotal = plan.totalForGrant(seconds, grant);
+    final reportsTotal = plan.totalForGrant(reports, grant);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '${plan.name} · Enterprise',
+          style: TextStyle(
+            fontSize: HwType.lg,
+            fontWeight: FontWeight.w700,
+            color: p.ink,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          org == null || org.isEmpty
+              ? "Your team's package"
+              : "$org · your team's package",
+          style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+        ),
+        const SizedBox(height: HwSpace.s3),
+
+        // Session time left — pill, usage bar, "X of Y used" line.
+        HwCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HwCardHeader(
+                'Session time left',
+                trailing: HwPill(
+                  seconds == null ? '—' : _sessionTimeLeft(seconds),
+                  tone: HwPillTone.copper,
+                  tabular: true,
+                ),
+              ),
+              if (fraction != null) ...[
+                const SizedBox(height: 7),
+                HwBar(fraction),
+              ],
+              const SizedBox(height: 6),
+              Text(
+                _hoursUsedLine(seconds, secondsTotal, devices),
+                style: TextStyle(fontSize: HwType.eyebrow, color: p.ink2),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: HwSpace.s2),
+
+        HwCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HwCardHeader(
+                'Full Mobility Reports left',
+                trailing: HwPill(
+                  reports?.toString() ?? '—',
+                  tone: HwPillTone.info,
+                  tabular: true,
+                ),
+              ),
+              if (fraction != null) ...[
+                const SizedBox(height: 7),
+                HwBar(fraction, gradient: HwBar.infoToGood),
+              ],
+              const SizedBox(height: 6),
+              Text(
+                reportsTotal != null && reports != null
+                    ? '${reportsTotal.round() - reports} of '
+                        '${reportsTotal.round()} AI reports used this period'
+                    : 'AI reports available on this package',
+                style: TextStyle(fontSize: HwType.eyebrow, color: p.ink2),
+              ),
+            ],
+          ),
+        ),
+
+        if (plan.currentPeriodEnd != null) ...[
+          const SizedBox(height: HwSpace.s3),
+          Text(
+            'Renews on ${_fmtDate(plan.currentPeriodEnd!)}',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+          ),
+        ],
+      ],
+    );
   }
 
-  /// Format a session-time quota (seconds) as "Xh Ym" (e.g. 9000s → "2h 30m").
-  static String _fmtSessionTime(num seconds) {
-    final totalMin = (seconds / 60).round();
-    final h = totalMin ~/ 60;
-    final m = totalMin % 60;
-    if (h > 0 && m > 0) return '${h}h ${m}m';
-    if (h > 0) return '${h}h';
-    return '${m}m';
+  /// The spec's line: "12.5 of 40 device-hours used · 6 units". Falls back to
+  /// just the unit count while the allowance is unknown.
+  static String _hoursUsedLine(int? left, num? total, int? devices) {
+    final unitsSuffix = devices == null
+        ? ''
+        : (devices == 0
+            ? ' · unlimited units'
+            : ' · $devices unit${devices == 1 ? '' : 's'}');
+
+    if (total == null || left == null) {
+      return devices == null
+          ? 'Device-hours are shared across your team'
+          : 'Device-hours are shared across your team$unitsSuffix';
+    }
+
+    String hrs(num seconds) {
+      final h = seconds / 3600;
+      // 12.5 reads better than 12.50, and 40 better than 40.0.
+      return h == h.roundToDouble()
+          ? h.round().toString()
+          : h.toStringAsFixed(1);
+    }
+
+    return '${hrs(total - left)} of ${hrs(total)} device-hours '
+        'used$unitsSuffix';
   }
 
   static String _fmtDate(DateTime d) {
-    final local = d.toLocal();
-    final m = local.month.toString().padLeft(2, '0');
-    final day = local.day.toString().padLeft(2, '0');
-    return '$day/$m/${local.year}';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final l = d.toLocal();
+    return '${months[l.month - 1]} ${l.day}, ${l.year}';
   }
 }
 
-/// Usage stat tile (Sessions left / AI reports left).
-class _StatCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  const _StatCard({
-    required this.icon,
-    required this.label,
-    required this.value,
+// ---------------------------------------------------------------------------
+// Pay-as-you-go — a session-credit balance
+// ---------------------------------------------------------------------------
+
+class _CreditsBody extends StatelessWidget {
+  final double? tokens;
+  final SubscriptionPlan? plan;
+  final double? grant;
+  const _CreditsBody({
+    required this.tokens,
+    required this.plan,
+    required this.grant,
   });
 
   @override
   Widget build(BuildContext context) {
-    final accent = ThemeConstants.accent;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: ThemeConstants.background,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: ThemeConstants.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, size: 16, color: accent),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: ThemeConstants.textPrimary,
-                    height: 1.1,
-                  ),
-                ),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+    final p = RefPalette.of(context);
+    final total = plan?.tokensTotal ?? grant;
+    final fraction = plan?.fractionOfGrant(total);
 
-/// A label/value row in the info card.
-class _TokenDetailRow extends StatelessWidget {
-  final String label;
-  final String value;
-  const _TokenDetailRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 14,
-              color: ThemeConstants.textSecondary,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: ThemeConstants.textPrimary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SheetDivider extends StatelessWidget {
-  const _SheetDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return Divider(height: 1, thickness: 1, color: ThemeConstants.border);
-  }
-}
-
-/// One column of the hero card: a small label over a bold value.
-class _HeroStat extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color valueColor;
-  final Color labelColor;
-  const _HeroStat({
-    required this.label,
-    required this.value,
-    required this.valueColor,
-    required this.labelColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          'Session credits',
           style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: labelColor,
+            fontSize: HwType.lg,
+            fontWeight: FontWeight.w700,
+            color: p.ink,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w900,
-            color: valueColor,
-            letterSpacing: -0.5,
-            height: 1,
+        const SizedBox(height: HwSpace.s3),
+        Center(
+          child: Text(
+            tokens == null ? '—' : tokens!.round().toString(),
+            style: TextStyle(
+              fontSize: 52,
+              fontWeight: FontWeight.w800,
+              height: 1,
+              letterSpacing: -1.5,
+              color: p.copperInk,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          total == null
+              ? '1 credit ≈ one ~9-min session'
+              : 'of ${total.round()} this month · 1 credit ≈ one ~9-min session',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+        ),
+        const SizedBox(height: HwSpace.s3),
+        if (fraction != null) ...[
+          HwBar(fraction),
+          const SizedBox(height: HwSpace.s2),
+        ],
+        Text(
+          'Credits are shared across every practitioner in this organization.',
+          textAlign: TextAlign.center,
+          style:
+              TextStyle(fontSize: HwType.cap, height: 1.5, color: p.ink2),
         ),
       ],
     );
   }
 }
 
-/// Thin vertical separator between hero columns.
-class _HeroVDivider extends StatelessWidget {
-  final Color color;
-  const _HeroVDivider({required this.color});
+class _PrimaryButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _PrimaryButton({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 1,
-      margin: const EdgeInsets.symmetric(horizontal: 12),
-      color: color.withValues(alpha: 0.2),
+    final p = RefPalette.of(context);
+    return HwPress(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          gradient: p.sunGrad,
+          borderRadius: BorderRadius.circular(HwRadius.sm),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: HwType.sm,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

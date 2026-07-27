@@ -29,6 +29,28 @@ final allSessionsProvider =
       .toList();
 });
 
+/// One client's sessions, newest first (`GET /intake/client/:clientId`).
+///
+/// Unlike [allSessionsProvider] this is **not** filtered to the signed-in
+/// practitioner — a client's history is theirs regardless of who ran each
+/// session, which is what a portfolio needs to show.
+final clientHistoryProvider =
+    FutureProvider.autoDispose.family<List<SessionHistoryItem>, String>(
+        (ref, clientId) async {
+  if (clientId.isEmpty) return const [];
+  final list =
+      await ref.read(historyRepositoryProvider).getClientHistory(clientId);
+  list.sort((a, b) {
+    final ad = a.createdAt;
+    final bd = b.createdAt;
+    if (ad == null && bd == null) return 0;
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    return bd.compareTo(ad);
+  });
+  return list;
+});
+
 class HistoryRepository {
   final HistoryRemoteSource _remoteSource;
   final AppDatabase _db;

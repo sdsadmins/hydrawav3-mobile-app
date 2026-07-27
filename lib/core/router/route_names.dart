@@ -12,6 +12,7 @@ class RouteNames {
   static const String onboarding = 'onboarding';
   static const selectOrganization = 'selectOrganization';
   // Main tabs
+  static const String home = 'home';
   static const String protocols = 'protocols';
   static const String devices = 'devices';
   static const String ai = 'ai';
@@ -49,10 +50,11 @@ class RouteNames {
   // History sub-routes
   static const String sessionDetail = 'session-detail';
 
-  // Settings sub-routes
-  static const String profileEdit = 'profile-edit';
-  static const String changePassword = 'change-password';
+  // Settings sub-routes. Edit profile and Change password are bottom sheets
+  // (the UI spec's `profileSheet()` / `passwordSheet()`), not routes.
   static const String subscription = 'subscription';
+  static const String notifications = 'notifications';
+  static const String legal = 'legal';
 
   // Paid features
   static const String presets = 'presets';
@@ -76,6 +78,9 @@ class RoutePaths {
   static const String onboarding = '/onboarding';
 
   // Main tabs
+  /// The Hub — nav tab 0. The protocol catalogue lives on at [protocols] and is
+  /// reached from More → Protocol Library, per the UI spec.
+  static const String home = '/home';
   static const String protocols = '/protocols';
   static const String devices = '/devices';
   static const String ai = '/ai-hub';
@@ -98,9 +103,9 @@ class RoutePaths {
   static const String deviceRegister = '/devices/register';
   static const String deviceDetail = '/devices/:id';
   static const String sessionDetail = '/history/:id';
-  static const String profileEdit = '/settings/profile';
-  static const String changePassword = '/settings/password';
   static const String subscription = '/settings/subscription';
+  static const String notifications = '/notifications';
+  static const String legal = '/legal';
   static const String presets = '/presets';
   static const String chat = '/chat';
   static const String assistant = '/assistant';

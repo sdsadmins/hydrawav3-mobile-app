@@ -1,85 +1,42 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/api_endpoints.dart';
 import '../../../../core/constants/app_constants.dart';
-import '../../../../core/constants/legal_content.dart';
-import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/network/dio_client.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
+import '../../../../core/theme/widgets/hw_icon.dart';
+import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../../core/utils/logger.dart';
-// import '../../../../core/utils/log_export.dart'; // TEMP-LOG-EXPORT (hidden for release)
-import '../../../../core/theme/widgets/premium.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../../../core/network/dio_client.dart'; // ✅ ADD
+import '../../../auth/presentation/screens/select_organization_page.dart'
+    show organizationProvider;
+import '../../../ble/domain/ble_device_model.dart';
+import '../../../ble/presentation/providers/ble_connection_provider.dart';
+import '../../../devices/presentation/providers/wifi_devices_provider.dart';
+import '../../../home/presentation/providers/hub_prefs_provider.dart';
+import '../../../musics/presentation/providers/music_provider.dart';
+import '../../../notifications/presentation/providers/notification_provider.dart';
+import '../../../payments/presentation/providers/token_balance_provider.dart';
+import '../../../protocols/presentation/providers/protocol_provider.dart';
+import '../widgets/account_sheets.dart';
 
-final organizationProvider =
-    FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  try {
-    final dio = ref.read(djangoDioProvider);
-    final response = await dio.get('/admin/organizations');
-
-    // Debug: Print response data
-    print('ORG RESPONSE: ${response.data}');
-    print('ORG RESPONSE TYPE: ${response.data.runtimeType}');
-
-    List<Map<String, dynamic>> orgs = [];
-
-    // Handle different response formats more robustly
-    if (response.data is List) {
-      // Direct list response
-      orgs = List<Map<String, dynamic>>.from(
-          response.data.map((item) => Map<String, dynamic>.from(item)));
-    } else if (response.data is Map) {
-      // Check for common pagination patterns
-      final data = response.data as Map<String, dynamic>;
-      if (data['results'] is List) {
-        orgs = List<Map<String, dynamic>>.from((data['results'] as List)
-            .map((item) => Map<String, dynamic>.from(item)));
-      } else if (data['data'] is List) {
-        orgs = List<Map<String, dynamic>>.from((data['data'] as List)
-            .map((item) => Map<String, dynamic>.from(item)));
-      } else {
-        // Try to convert the entire map to a list with one item
-        orgs = [Map<String, dynamic>.from(data)];
-      }
-    } else {
-      throw Exception(
-          'Unexpected response format: ${response.data.runtimeType}');
-    }
-
-    print('PROCESSED ORGS COUNT: ${orgs.length}');
-    print('PROCESSED ORGS: $orgs');
-
-    return orgs;
-  } catch (e) {
-    // Handle DioException and other errors
-    print('ORG ERROR: $e');
-    print('ORG ERROR TYPE: ${e.runtimeType}');
-    throw Exception('Failed to load organizations: ${e.toString()}');
-  }
-});
-
+/// The **More** tab — account, organizations, library, devices, session
+/// defaults and settings, ported from the UI handoff spec's `renderMore`.
+///
+/// The class name stays `SettingsScreen` because the router, deep links and
+/// `/settings/*` sub-routes all reference it; only the surface is new.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
-  Future<void> _openExternalUrl(BuildContext context, String url) async {
-    final launched = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
-
-    if (!launched && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to open the link right now.'),
-        ),
-      );
-    }
-  }
+  // -------------------------------------------------------------------------
+  // Account deletion (unchanged behaviour)
+  // -------------------------------------------------------------------------
 
   /// Normalize an account/profile response into a single mutable map.
   Map<String, dynamic> _accountMap(dynamic data) {
@@ -93,10 +50,10 @@ class SettingsScreen extends ConsumerWidget {
     throw Exception('Unexpected account response shape: ${data.runtimeType}');
   }
 
-  /// Soft-delete the signed-in user's account. Pulls the full profile from
-  /// `/profile/me` (which carries firstName/lastName/dateOfBirth/country/state/
-  /// city/address/address2/zip/phone/mail/companyId/userName/…), resends it
-  /// unchanged except for `deleted: true`, then the caller logs the user out.
+  /// Soft-delete the signed-in user's account. Pulls the full profile from the
+  /// account endpoint (which carries firstName/lastName/dateOfBirth/country/
+  /// state/city/address/address2/zip/phone/mail/companyId/userName/…), resends
+  /// it unchanged except for `deleted: true`, then the caller logs the user out.
   Future<void> _deleteAccount(WidgetRef ref, String userId) async {
     final dio = ref.read(djangoDioProvider);
     final endpoint = ApiEndpoints.userAccountById(userId);
@@ -104,35 +61,27 @@ class SettingsScreen extends ConsumerWidget {
     appLogger.i('DeleteAccount: ▶ start (userId=$userId)');
 
     // /profile/me only returns a thin subset (and uses `email`, not `mail`).
-    // The account endpoint returns the FULL object (mail/userName/address/zip/
-    // organisations/…), so we fetch it and resend it complete with deleted=true.
+    // The account endpoint returns the FULL object, so fetch it and resend it
+    // complete with deleted=true.
     final res = await dio.get(endpoint);
-    appLogger.i('DeleteAccount: ⇐ GET $endpoint → ${res.statusCode}\n'
-        '${res.data}');
+    appLogger.i('DeleteAccount: ⇐ GET $endpoint → ${res.statusCode}');
     final account = _accountMap(res.data);
-
     account['deleted'] = true;
-    appLogger.i('DeleteAccount: ⇒ PUT $endpoint\n'
-        'keys=${account.keys.toList()}\n'
-        'payload=$account');
 
     try {
       final putRes = await dio.put(endpoint, data: account);
-      appLogger.i('DeleteAccount: ⇐ PUT $endpoint → ${putRes.statusCode}\n'
-          '${putRes.data}');
-      appLogger.i('DeleteAccount: ✅ account deleted (userId=$userId)');
+      appLogger.i('DeleteAccount: ⇐ PUT $endpoint → ${putRes.statusCode}');
     } on DioException catch (e) {
       appLogger.e('DeleteAccount: ❌ PUT $endpoint '
           'status=${e.response?.statusCode}\n'
-          'SERVER BODY: ${e.response?.data}\n'
-          'SENT PAYLOAD: $account');
+          'SERVER BODY: ${e.response?.data}');
       rethrow;
     }
   }
 
-  /// Confirm, delete the account, then log the user out.
   Future<void> _confirmAndDeleteAccount(
       BuildContext context, WidgetRef ref) async {
+    final p = RefPalette.of(context);
     final userId = ref.read(authStateProvider).user?.id;
     if (userId == null || userId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -144,15 +93,12 @@ class SettingsScreen extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: ThemeConstants.surface,
-        title: Text(
-          'Delete Account',
-          style: TextStyle(color: ThemeConstants.textPrimary),
-        ),
+        backgroundColor: p.card,
+        title: Text('Delete account', style: TextStyle(color: p.ink)),
         content: Text(
           'This permanently deletes your account and logs you out. '
           'This action cannot be undone.',
-          style: TextStyle(color: ThemeConstants.textSecondary),
+          style: TextStyle(color: p.ink2),
         ),
         actions: [
           TextButton(
@@ -161,7 +107,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(foregroundColor: p.low),
             child: const Text('Delete'),
           ),
         ],
@@ -180,7 +126,6 @@ class SettingsScreen extends ConsumerWidget {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop(); // close loader
       }
-      // Log out — the router's auth guard returns the user to the login screen.
       appLogger.i('DeleteAccount: logging out after deletion');
       await ref.read(authStateProvider.notifier).logout();
       ref.invalidate(organizationProvider);
@@ -192,7 +137,7 @@ class SettingsScreen extends ConsumerWidget {
     } catch (e, st) {
       appLogger.e('DeleteAccount: ❌ failed for userId=$userId: $e\n$st');
       if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop(); // close loader
+        Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to delete account: $e')),
         );
@@ -200,319 +145,140 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  void _showOrganizationBottomSheet(
-    BuildContext context,
-    WidgetRef ref,
-    AsyncValue<List<Map<String, dynamic>>> orgAsync,
-    AuthState auth,
-  ) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: ThemeConstants.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(top: 8),
-              decoration: BoxDecoration(
-                color: ThemeConstants.border,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Select Organization',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: ThemeConstants.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Choose the organization you want to work with',
-              style: TextStyle(
-                fontSize: 14,
-                color: ThemeConstants.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 20),
-            orgAsync.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(40),
-                child: CircularProgressIndicator(),
-              ),
-              error: (error, _) => Padding(
-                padding: const EdgeInsets.all(20),
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+
+    return Scaffold(
+      backgroundColor: p.bg,
+      body: CustomScrollView(
+        physics: const ClampingScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 108),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(
-                      Icons.error_outline_rounded,
-                      color: ThemeConstants.error,
-                      size: 48,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Failed to load organizations',
-                      style: TextStyle(
-                        color: ThemeConstants.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      error.toString().contains('DioException')
-                          ? 'Network error. Please check your connection.'
-                          : 'Please try again later.',
-                      style: TextStyle(
-                        color: ThemeConstants.textSecondary,
-                        fontSize: 14,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: () async {
-                        Navigator.pop(context);
-                        // Invalidate and wait for refresh
+                    _pageTitle(context),
+                    const _AccountCard(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _OrganizationsSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _AppearanceSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _PlanSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _LibrarySection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _DevicesSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _SessionDefaultsSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _SupportSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    const _ComingOnlineSection(),
+                    const SizedBox(height: HwSpace.s5),
+                    _BrandFooter(
+                        onVersionTap: () => _showReleaseNotes(context)),
+                    const SizedBox(height: HwSpace.s4),
+                    _DangerButton(
+                      icon: null,
+                      // The spec's label is "Sign out — preview onboarding
+                      // flow"; the trailing clause is demo-harness wording.
+                      label: 'Sign out',
+                      onTap: () async {
+                        await ref.read(authStateProvider.notifier).logout();
                         ref.invalidate(organizationProvider);
-
-                        // Wait a bit for provider to refresh, then re-open
-                        await Future.delayed(const Duration(milliseconds: 300));
-
-                        if (context.mounted) {
-                          _showOrganizationBottomSheet(
-                              context,
-                              ref,
-                              ref.watch(organizationProvider),
-                              ref.read(authStateProvider));
-                        }
                       },
-                      icon: Icon(Icons.refresh_rounded, size: 18),
-                      label: Text('Retry'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: ThemeConstants.accent,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
+                    ),
+                    const SizedBox(height: HwSpace.s3),
+                    _DangerButton(
+                      icon: HwIcons.trash,
+                      label: 'Delete account',
+                      onTap: () => _confirmAndDeleteAccount(context, ref),
                     ),
                   ],
                 ),
               ),
-              data: (orgs) {
-                return ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                  itemCount: orgs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final org = orgs[index];
-                    final orgId = org['id'].toString();
-                    final isSelected = orgId == auth.selectedOrgId;
-
-                    return GestureDetector(
-                      onTap: () async {
-                        Navigator.pop(context);
-
-                        // Update organization without redirecting
-                        await ref
-                            .read(authStateProvider.notifier)
-                            .setOrganization(
-                              orgId,
-                              org['name'] ?? 'Organization',
-                            );
-
-                        // Show success message
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Switched to ${org['name']}'),
-                              backgroundColor: ThemeConstants.accent,
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? ThemeConstants.accent.withValues(alpha: 0.1)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isSelected
-                                ? ThemeConstants.accent
-                                : ThemeConstants.border,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? ThemeConstants.accent
-                                        .withValues(alpha: 0.2)
-                                    : ThemeConstants.surface,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                Icons.business_rounded,
-                                size: 20,
-                                color: isSelected
-                                    ? ThemeConstants.accent
-                                    : ThemeConstants.textSecondary,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    org['name'] ?? 'Organization',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: isSelected
-                                          ? ThemeConstants.accent
-                                          : ThemeConstants.textPrimary,
-                                    ),
-                                  ),
-                                  if (org['description'] != null) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      org['description'],
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: ThemeConstants.textSecondary,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            if (isSelected)
-                              Icon(
-                                Icons.check_circle_rounded,
-                                color: ThemeConstants.accent,
-                                size: 20,
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  void _showInfoSheet(
-    BuildContext context, {
-    required String title,
-    String? subtitle,
-    required List<InfoSheetSection> sections,
-  }) {
+  Widget _pageTitle(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(2, 12, 2, HwSpace.s4),
+        child: Text(
+          'More',
+          style: TextStyle(
+            fontSize: HwType.xxl,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.48,
+            color: RefPalette.of(context).ink,
+          ),
+        ),
+      );
+
+  // -------------------------------------------------------------------------
+  // Sheets
+  // -------------------------------------------------------------------------
+
+  void _showReleaseNotes(BuildContext context) {
+    final p = RefPalette.of(context);
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => FractionallySizedBox(
-        heightFactor: 0.92,
+        heightFactor: 0.8,
         child: Container(
           decoration: BoxDecoration(
-            color: ThemeConstants.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            color: p.card,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
           ),
           child: Column(
             children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(top: 8),
-                decoration: BoxDecoration(
-                  color: ThemeConstants.border,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+              const _SheetHandle(),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      title,
+                      'Release notes',
                       style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: ThemeConstants.textPrimary,
+                        fontSize: HwType.xl,
+                        fontWeight: FontWeight.w700,
+                        color: p.ink,
                       ),
                     ),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: ThemeConstants.textSecondary,
-                        ),
-                      ),
-                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      'Version ${AppConstants.appVersion}',
+                      style: TextStyle(fontSize: HwType.base, color: p.ink2),
+                    ),
                   ],
                 ),
               ),
-              Divider(
-                height: 1,
-                color: ThemeConstants.border.withValues(alpha: 0.5),
-              ),
               Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                  itemCount: sections.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 18),
-                  itemBuilder: (context, index) =>
-                      _InfoSheetSection(section: sections[index]),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: ThemeConstants.accent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: const Text('Close'),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Text(
+                    AppConstants.releaseNotes,
+                    style: TextStyle(
+                        fontSize: HwType.sm, height: 1.6, color: p.ink2),
                   ),
                 ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                child: _SheetCloseButton(),
               ),
             ],
           ),
@@ -520,372 +286,78 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1 · Account
+// ---------------------------------------------------------------------------
+
+class _AccountCard extends ConsumerWidget {
+  const _AccountCard();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
     final user = ref.watch(authStateProvider).user;
-    final auth = ref.watch(authStateProvider); // ✅ ADD
-    final orgAsync = ref.watch(organizationProvider); // ✅ ADD
-    final themeMode = ref.watch(themeModeProvider);
-    final isDarkMode = themeMode == ThemeMode.dark;
-    return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      body: CustomScrollView(
-        physics: const ClampingScrollPhysics(),
-        slivers: [
-          // Gradient header with profile
-          SliverToBoxAdapter(
-            child: Container(
-              decoration: BoxDecoration(color: ThemeConstants.background),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                  child: AnimatedEntrance(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Settings',
-                            style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w700,
-                                color: ThemeConstants.textPrimary,
-                                letterSpacing: -0.5)),
-                        const SizedBox(height: 16),
-                        // Profile card
-                        GradientCard(
-                          showGlow: true,
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 50,
-                                height: 50,
-                                decoration: BoxDecoration(
-                                  color: ThemeConstants.accent
-                                      .withValues(alpha: 0.14),
-                                  borderRadius: BorderRadius.circular(14),
-                                  boxShadow: [
-                                    BoxShadow(
-                                        color: ThemeConstants.accent
-                                            .withValues(alpha: 0.25),
-                                        blurRadius: 10)
-                                  ],
-                                ),
-                                child: Center(
-                                    child: Text(
-                                  user?.displayName.isNotEmpty == true
-                                      ? user!.displayName[0].toUpperCase()
-                                      : 'U',
-                                  style: TextStyle(
-                                      color: ThemeConstants.textPrimary,
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w700),
-                                )),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                  child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(user?.displayName ?? 'User',
-                                      style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: ThemeConstants.textPrimary)),
-                                  if (user?.email != null)
-                                    Text(user!.email!,
-                                        style: TextStyle(
-                                            fontSize: 13,
-                                            color:
-                                                ThemeConstants.textTertiary)),
-                                ],
-                              )),
-                              Icon(Icons.chevron_right_rounded,
-                                  color: ThemeConstants.textTertiary, size: 20),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+    final name = (user?.displayName ?? '').trim();
+    final initials = name.isEmpty
+        ? 'U'
+        : name
+            .split(RegExp(r'\s+'))
+            .where((w) => w.isNotEmpty)
+            .take(2)
+            .map((w) => w.characters.first.toUpperCase())
+            .join();
+
+    // Non-interactive, per the spec — editing lives in Settings & support.
+    return HwCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              gradient: p.sunGrad,
+              borderRadius: BorderRadius.circular(HwRadius.md),
+            ),
+            child: Center(
+              child: Text(
+                initials,
+                style: const TextStyle(
+                  fontSize: HwType.md,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
                 ),
               ),
             ),
           ),
-
-          // Settings sections
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-            sliver: SliverList(
-              delegate: SliverChildListDelegate([
-                // Account
-                AnimatedEntrance(
-                    index: 1,
-                    child: _SettingsGroup(title: 'ACCOUNT', items: [
-                      _Item(Icons.person_outline_rounded, 'Edit Profile',
-                          onTap: () => context.push(RoutePaths.profileEdit)),
-                      _Item(Icons.lock_outline_rounded, 'Change Password',
-                          onTap: () => context.push(RoutePaths.changePassword)),
-                      // Coming soon — hidden for now
-                      // _Item(Icons.fingerprint_rounded, 'Biometric Login',
-                      //     trailing: _comingSoonBadge()),
-                    ])),
-                const SizedBox(height: 16),
-
-                // Appearance
-                AnimatedEntrance(
-                    index: 1,
-                    child: _SettingsGroup(title: 'APPEARANCE', items: [
-                      _Item(Icons.dark_mode_outlined, 'Dark Mode',
-                          trailing: Switch.adaptive(
-                              value: isDarkMode,
-                              onChanged: (value) => ref
-                                  .read(themeModeProvider.notifier)
-                                  .toggleDarkMode(value),
-                              activeColor: ThemeConstants.accent)),
-                    ])),
-                const SizedBox(height: 16),
-
-                // Device
-                AnimatedEntrance(
-                    index: 2,
-                    child: _SettingsGroup(title: 'DEVICE', items: [
-                      _Item(
-                          Icons.app_registration_rounded, 'Device Registration',
-                          onTap: () => context.push(RoutePaths.deviceRegister)),
-                      // Coming soon — hidden for now
-                      // _Item(Icons.verified_user_outlined, 'Warranty Status',
-                      //     trailing: _comingSoonBadge()),
-                    ])),
-                const SizedBox(height: 16),
-
-                // General
-                AnimatedEntrance(
-                    index: 3,
-                    child: _SettingsGroup(title: 'GENERAL', items: [
-                      _Item(Icons.assignment_outlined, 'Client AI Reports',
-                          onTap: () =>
-                              context.push(RoutePaths.aiReportClients)),
-                      // Coming soon — hidden for now
-                      // _Item(Icons.notifications_outlined, 'Notifications',
-                      //     trailing: _comingSoonBadge()),
-                      _Item(
-                        Icons.shield_outlined,
-                        'Privacy & Security',
-                        onTap: () => _showInfoSheet(
-                          context,
-                          title: 'Privacy & Security',
-                          subtitle: 'How Hydrawav3 handles permissions and account protection.',
-                          sections: LegalContent.privacyAndSecuritySections,
-                        ),
-                      ),
-                      _Item(Icons.help_outline_rounded, 'Help & Support',
-                          onTap: () => _openExternalUrl(
-                              context, 'https://www.hydrawav3.com/help-center')),
-                      // Coming soon — hidden for now
-                      // _Item(Icons.payment_outlined, 'Payment Methods',
-                      //     trailing: _comingSoonBadge()),
-                    ])),
-                const SizedBox(height: 16),
-
-                // TEMP-LOG-EXPORT: internal-test diagnostics — share the on-disk
-                // log file so we can debug field issues (e.g. Protocol Plus
-                // switching). Hidden from the UI for release; re-enable this
-                // block when field diagnostics are needed again.
-                // AnimatedEntrance(
-                //     index: 3,
-                //     child: _SettingsGroup(title: 'DIAGNOSTICS', items: [
-                //       _Item(Icons.bug_report_outlined, 'Share Logs',
-                //           onTap: () async {
-                //         final ok = await shareLogFile();
-                //         if (!ok && context.mounted) {
-                //           ScaffoldMessenger.of(context).showSnackBar(
-                //             const SnackBar(content: Text('No logs to share yet.')),
-                //           );
-                //         }
-                //       }),
-                //     ])),
-                // const SizedBox(height: 16),
-
-                // Legal
-                AnimatedEntrance(
-                    index: 4,
-                    child: _SettingsGroup(title: 'LEGAL', items: [
-                      _Item(
-                        Icons.privacy_tip_outlined,
-                        'Privacy Policy',
-                        onTap: () => _openExternalUrl(
-                            context, 'https://www.hydrawav3.com/privacy'),
-                      ),
-                      _Item(
-                        Icons.description_outlined,
-                        'Terms & Conditions',
-                        onTap: () => _showInfoSheet(
-                          context,
-                          title: 'Terms & Conditions',
-                          subtitle: 'Rules and responsibilities for using the Hydrawav3 app.',
-                          sections: LegalContent.termsAndConditionsSections,
-                        ),
-                      ),
-                      _Item(
-                        Icons.copyright_outlined,
-                        'Acknowledgements',
-                        onTap: () => _showInfoSheet(
-                          context,
-                          title: 'Acknowledgements',
-                          subtitle: 'Open-source and third-party content used in this app.',
-                          sections: LegalContent.acknowledgementsSections,
-                        ),
-                      ),
-                    ])),
-                const SizedBox(height: 20),
-                const SizedBox(height: 16),
-
-                /// ✅ SWITCH ORGANIZATION (NEW SECTION)
-                AnimatedEntrance(
-                  index: 5,
-                  child: _SettingsGroup(
-                    title: 'ORGANIZATION',
-                    items: [
-                      _Item(
-                        Icons.business_rounded,
-                        'Switch Organization',
-                        onTap: () => _showOrganizationBottomSheet(context, ref,
-                            ref.watch(organizationProvider), auth),
-                        trailing: orgAsync.when(
-                          loading: () => const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          error: (_, __) =>
-                              Icon(Icons.error, color: Colors.red),
-                          data: (orgs) {
-                            String orgName = 'None';
-                            if (auth.selectedOrgId != null) {
-                              try {
-                                final currentOrg = orgs.firstWhere(
-                                  (org) =>
-                                      org['id'].toString() ==
-                                      auth.selectedOrgId,
-                                );
-                                orgName = currentOrg['name'] ?? 'Unknown';
-                              } catch (e) {
-                                orgName = 'Not Found';
-                              }
-                            }
-                            return Text(
-                              orgName,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: ThemeConstants.textSecondary,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
+          const SizedBox(width: HwSpace.s3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name.isEmpty ? 'Your account' : name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: HwType.md,
+                    fontWeight: FontWeight.w700,
+                    color: p.ink,
                   ),
                 ),
-                const SizedBox(height: 20),
-                // Delete Account (destructive) — placed after Organization.
-                AnimatedEntrance(
-                  index: 6,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: Colors.red.withValues(alpha: 0.2),
-                        width: 1,
-                      ),
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () => _confirmAndDeleteAccount(context, ref),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.delete_forever_rounded,
-                                color: Colors.red,
-                                size: 20,
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                'Delete Account',
-                                style: TextStyle(
-                                  color: Colors.red,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 15,
-                                  letterSpacing: 0.3,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                if (user?.email != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '${user!.email} · one login',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                   ),
-                ),
-                const SizedBox(height: 16),
-                // Logout
-                AnimatedEntrance(
-                    index: 6,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Colors.red.withValues(alpha: 0.2),
-                          width: 1,
-                        ),
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () async {
-                            await ref.read(authStateProvider.notifier).logout();
-                            // Clear organization provider cache to fetch fresh data on next login
-                            ref.invalidate(organizationProvider);
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            child: const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.logout_rounded,
-                                  color: Colors.red,
-                                  size: 20,
-                                ),
-                                SizedBox(width: 10),
-                                Text(
-                                  'Log Out',
-                                  style: TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    )),
-                const SizedBox(height: 16),
-
-                // About
-                AnimatedEntrance(index: 7, child: _AboutSection()),
-              ]),
+                ],
+              ],
             ),
           ),
         ],
@@ -894,126 +366,296 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-class _AboutSection extends StatelessWidget {
-  const _AboutSection();
+// ---------------------------------------------------------------------------
+// 2 · Your organizations
+// ---------------------------------------------------------------------------
+
+class _OrganizationsSection extends ConsumerWidget {
+  const _OrganizationsSection();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final auth = ref.watch(authStateProvider);
+    final orgs = ref.watch(organizationProvider);
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SectionHeader(title: 'ABOUT'),
-        Container(
-          decoration: BoxDecoration(
-            color: ThemeConstants.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: ThemeConstants.border),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.06),
-                blurRadius: 6,
-                offset: const Offset(0, 1),
+        Row(
+          children: [
+            const Expanded(child: HwEyebrow('Your organizations')),
+            orgs.maybeWhen(
+              data: (list) => Text(
+                '${list.length} org${list.length == 1 ? '' : 's'} · tap to switch',
+                style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
               ),
-            ],
+              orElse: () => const SizedBox.shrink(),
+            ),
+          ],
+        ),
+        orgs.when(
+          loading: () => HwCard(
+            child: Text(
+              'Loading organizations…',
+              style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+            ),
           ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => _showReleaseNotes(context),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-              child: Row(
-                children: [
-                  Icon(Icons.info_outline_rounded,
-                      color: ThemeConstants.accent, size: 20),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Text(
-                      '${AppConstants.appVersion} • Build ${AppConstants.buildNumber}',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: ThemeConstants.textPrimary,
-                        fontWeight: FontWeight.w600,
-                      ),
+          error: (e, _) => HwCard(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Couldn\'t load your organizations.',
+                    style: TextStyle(fontSize: HwType.cap, color: p.ink2),
+                  ),
+                ),
+                HwPress(
+                  onTap: () => ref.invalidate(organizationProvider),
+                  child: Text(
+                    'Retry',
+                    style: TextStyle(
+                      fontSize: HwType.cap,
+                      fontWeight: FontWeight.w700,
+                      color: p.copperInk,
                     ),
                   ),
-                  Icon(Icons.chevron_right_rounded,
-                      color: ThemeConstants.textTertiary, size: 18),
-                ],
-              ),
+                ),
+              ],
+            ),
+          ),
+          data: (list) => Column(
+            children: [
+              for (final org in list)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: HwSpace.s2),
+                  child: _OrgCard(
+                    org: org,
+                    active: org['id'].toString() == auth.selectedOrgId,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: HwSpace.s1),
+        // Copper ghost button, per the spec's org list footer.
+        HwPress(
+          onTap: () => context.push('/select-organization?create=1'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(HwRadius.sm),
+              border: Border.all(color: p.copper, width: 1.5),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                HwIcon(HwIcons.building, size: 15, color: p.copperInk),
+                const SizedBox(width: HwSpace.s2),
+                Text(
+                  'Add organization',
+                  style: TextStyle(
+                    fontSize: HwType.sm,
+                    fontWeight: FontWeight.w700,
+                    color: p.copperInk,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ],
     );
   }
+}
 
-  void _showReleaseNotes(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: ThemeConstants.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(top: 8),
-              decoration: BoxDecoration(
-                color: ThemeConstants.border,
-                borderRadius: BorderRadius.circular(2),
+class _OrgCard extends ConsumerWidget {
+  final Map<String, dynamic> org;
+  final bool active;
+  const _OrgCard({required this.org, required this.active});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final name = (org['name'] ?? 'Organization').toString();
+
+    return HwCard(
+      accented: active,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      onTap: active
+          ? null
+          : () async {
+              await ref
+                  .read(authStateProvider.notifier)
+                  .setOrganization(org['id'].toString(), name);
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Switched to $name')),
+              );
+            },
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: active ? p.tanSoft : p.bg2,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Center(
+              child: HwIcon(
+                HwIcons.building,
+                size: 20,
+                color: active ? p.copperInk : p.ink3,
               ),
             ),
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Release Notes',
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          color: ThemeConstants.textPrimary)),
-                  const SizedBox(height: 6),
-                  Text('Version ${AppConstants.appVersion}',
-                      style: TextStyle(
-                          fontSize: 14, color: ThemeConstants.textSecondary)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Text(AppConstants.releaseNotes,
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: ThemeConstants.textPrimary,
-                        height: 1.6)),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: ThemeConstants.accent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
+          ),
+          const SizedBox(width: HwSpace.s3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: HwType.md,
+                    fontWeight: FontWeight.w700,
+                    color: p.ink,
                   ),
-                  child: Text('Close'),
                 ),
+                if (org['description'] != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    org['description'].toString(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (active) const HwPill('Active', tone: HwPillTone.copper),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3 · Appearance
+// ---------------------------------------------------------------------------
+
+class _AppearanceSection extends ConsumerWidget {
+  const _AppearanceSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final dark = ref.watch(themeModeProvider) == ThemeMode.dark;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Appearance'),
+        HwCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HwCardHeader(
+                'Theme',
+                trailing: Text(
+                  'light is the default',
+                  style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                ),
+              ),
+              const SizedBox(height: HwSpace.s3),
+              // Segmented control — the selected segment takes the navy hero
+              // fill, never a grey (Principles §5).
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: p.card,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: p.cardline, width: 1.5),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _Segment(
+                        icon: HwIcons.sun,
+                        label: 'Light',
+                        selected: !dark,
+                        onTap: () => ref
+                            .read(themeModeProvider.notifier)
+                            .toggleDarkMode(false),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: _Segment(
+                        icon: HwIcons.moon,
+                        label: 'Dark',
+                        selected: dark,
+                        onTap: () => ref
+                            .read(themeModeProvider.notifier)
+                            .toggleDarkMode(true),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Segment extends StatelessWidget {
+  final String icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _Segment({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final fg = selected ? const Color(0xFFF2E9E2) : p.ink3;
+
+    return HwPress(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: HwMotion.t2,
+        curve: HwMotion.ease,
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          gradient: selected ? p.heroGrad : null,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: selected ? p.shadow : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            HwIcon(icon, size: 16, color: fg),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: HwType.cap,
+                fontWeight: FontWeight.w700,
+                color: fg,
               ),
             ),
           ],
@@ -1023,43 +665,35 @@ class _AboutSection extends StatelessWidget {
   }
 }
 
-class _SettingsGroup extends StatelessWidget {
-  final String title;
-  final List<_Item> items;
-  const _SettingsGroup({required this.title, required this.items});
+// ---------------------------------------------------------------------------
+// 4 · Plan
+// ---------------------------------------------------------------------------
+
+class _PlanSection extends ConsumerWidget {
+  const _PlanSection();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final plan = ref.watch(currentPlanProvider).valueOrNull;
+    final tokens = ref.watch(tokenBalanceProvider);
+
+    final parts = <String>[
+      if (plan != null) plan.name,
+      if (tokens != null) '${tokens.round()} session credits left',
+    ];
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SectionHeader(title: title),
-        Container(
-          decoration: BoxDecoration(
-            color: ThemeConstants.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: ThemeConstants.border),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2))
-            ],
-          ),
-          child: Column(
-            children: items
-                .asMap()
-                .entries
-                .map((e) => Column(children: [
-                      e.value,
-                      if (e.key < items.length - 1)
-                        Divider(
-                            height: 1,
-                            indent: 52,
-                            color:
-                                ThemeConstants.border.withValues(alpha: 0.5)),
-                    ]))
-                .toList(),
+        const HwEyebrow('Plan'),
+        HwCard(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          child: HwRow(
+            title: 'Plan & usage',
+            subtitle: parts.isEmpty ? 'View your plan' : parts.join(' · '),
+            trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+            onTap: () => context.push(RoutePaths.subscription),
           ),
         ),
       ],
@@ -1067,149 +701,619 @@ class _SettingsGroup extends StatelessWidget {
   }
 }
 
-class _Item extends StatelessWidget {
-  final IconData icon;
+// ---------------------------------------------------------------------------
+// 5 · Library & intelligence
+// ---------------------------------------------------------------------------
+
+class _LibrarySection extends StatelessWidget {
+  const _LibrarySection();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Library & intelligence'),
+        HwRowGroup(children: [
+          _MoreRow(
+            icon: HwIcons.book,
+            title: 'Protocol Library',
+            subtitle: 'Stacks & protocols by session goal',
+            onTap: () => context.go(RoutePaths.protocols),
+          ),
+          _MoreRow(
+            icon: HwIcons.bot,
+            title: 'AI Hub',
+            subtitle: 'Chat, reports & guided assessment',
+            onTap: () => context.push(RoutePaths.ai),
+          ),
+          _MoreRow(
+            icon: HwIcons.clock,
+            title: 'History',
+            subtitle: 'Every session, every delta',
+            onTap: () => context.go(RoutePaths.history),
+          ),
+          _MoreRow(
+            icon: HwIcons.star,
+            title: 'Quick Presets',
+            subtitle: '3 saved one-tap setups',
+            onTap: () => context.push(RoutePaths.presets),
+          ),
+        ]),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6 · Devices
+// ---------------------------------------------------------------------------
+
+class _DevicesSection extends ConsumerWidget {
+  const _DevicesSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+
+    final wifi = ref.watch(wifiDevicesByOrgProvider).valueOrNull ?? const [];
+    final ble = ref.watch(bleConnectionStatesProvider).valueOrNull ?? const {};
+    final connected =
+        ble.values.where((s) => s == BleConnectionStatus.connected).length;
+    final total = wifi.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Devices'),
+        HwCard(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          child: HwRow(
+            leading: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: p.sunGrad,
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: const Center(
+                child: Text('〰',
+                    style: TextStyle(fontSize: HwType.md, color: Colors.white)),
+              ),
+            ),
+            title: 'Device Center',
+            subtitle: total == 0
+                ? 'Scan, register, rename & Wi-Fi setup'
+                : '$connected of $total units connected · scan, rename, '
+                    'Wi-Fi setup',
+            trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+            onTap: () => context.go(RoutePaths.devices),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7 · Session defaults
+// ---------------------------------------------------------------------------
+
+class _SessionDefaultsSection extends ConsumerWidget {
+  const _SessionDefaultsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final defaultId = ref.watch(defaultProtocolIdProvider);
+    final labs = ref.watch(labsEnabledProvider);
+
+    final protocolName = defaultId == null
+        ? 'Not set'
+        : ref.watch(protocolDetailProvider(defaultId)).maybeWhen(
+              data: (d) => d.templateName,
+              orElse: () => '…',
+            );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Session defaults'),
+        HwRowGroup(children: [
+          _MoreRow(
+            icon: HwIcons.bolt,
+            title: 'Default protocol',
+            subtitle: 'Auto-selected on Quick Start & body-part pick — '
+                'yours to change',
+            trailing: HwPill(protocolName, tone: HwPillTone.copper),
+            onTap: () => _showDefaultProtocolSheet(context, ref),
+          ),
+          _MoreRow(
+            icon: HwIcons.note,
+            title: 'Default session music',
+            subtitle: 'Pre-selected on every session — change or turn off '
+                'per session anytime',
+            onTap: () => _showMusicSheet(context, ref),
+          ),
+          _MoreRow(
+            icon: HwIcons.flask,
+            title: 'Labs · Readiness Score',
+            // The spec's exact wording — the honesty caveat is the point.
+            subtitle: 'Experimental — breath-derived score under validation. '
+                'Numbers may change as the model improves.',
+            trailing: HwPill(labs ? 'On' : 'Off',
+                tone: labs ? HwPillTone.good : HwPillTone.ghost),
+            onTap: () => ref.read(labsEnabledProvider.notifier).toggle(),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  void _showDefaultProtocolSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _PickerSheet(
+        title: 'Default protocol',
+        subtitle: 'Used by Quick Start on the Hub.',
+        child: Consumer(
+          builder: (ctx, ref2, _) => ref2.watch(protocolListProvider).when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (e, _) => const _SheetMessage(
+                    'Couldn\'t load protocols. Check your connection and '
+                    'try again.'),
+                data: (list) {
+                  if (list.isEmpty) {
+                    return const _SheetMessage(
+                        'No protocols available for this organization yet.');
+                  }
+                  final selected = ref2.watch(defaultProtocolIdProvider);
+                  return Column(
+                    children: [
+                      for (final proto in list)
+                        _MoreRow(
+                          icon: HwIcons.bolt,
+                          title: proto.templateName,
+                          subtitle:
+                              '~${(proto.apiTotalDurationSeconds / 60).round()} min',
+                          trailing: proto.id == selected
+                              ? const HwPill('Default',
+                                  tone: HwPillTone.copper)
+                              : null,
+                          onTap: () {
+                            ref2
+                                .read(defaultProtocolIdProvider.notifier)
+                                .set(proto.id);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                    ],
+                  );
+                },
+              ),
+        ),
+      ),
+    );
+  }
+
+  void _showMusicSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _PickerSheet(
+        title: 'Session music',
+        subtitle: 'Pick a track per session from the live session screen.',
+        child: Consumer(
+          builder: (ctx, ref2, _) => ref2.watch(musicListProvider).when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (e, _) => const _SheetMessage(
+                    'Couldn\'t load the music library right now.'),
+                data: (list) => list.isEmpty
+                    ? const _SheetMessage('No tracks published yet.')
+                    : Column(
+                        children: [
+                          for (final track in list)
+                            _MoreRow(
+                              icon: HwIcons.note,
+                              title: track.name,
+                            ),
+                        ],
+                      ),
+              ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 8 · Settings & support
+// ---------------------------------------------------------------------------
+
+class _SupportSection extends ConsumerWidget {
+  const _SupportSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = RefPalette.of(context);
+    final unread = ref.watch(unreadNotificationCountProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Settings & support'),
+        HwRowGroup(children: [
+          _MoreRow(
+            icon: HwIcons.guest,
+            tintIcon: false,
+            title: 'Edit profile',
+            subtitle: 'Name, contact, date of birth, title',
+            onTap: () => showProfileSheet(context),
+          ),
+          _MoreRow(
+            icon: HwIcons.key,
+            title: 'Change password',
+            subtitle: 'Update your sign-in',
+            onTap: () => showPasswordSheet(context),
+          ),
+          _MoreRow(
+            icon: HwIcons.bell,
+            title: 'Notifications',
+            subtitle: 'Session, lease & report alerts',
+            trailing: unread > 0
+                ? HwPill('$unread new', tone: HwPillTone.low)
+                : HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+            onTap: () => context.push(RoutePaths.notifications),
+          ),
+          // The spec keeps privacy, help centre and credits behind one row —
+          // now its own screen, since the wellness statement and the
+          // Z-Anatomy attribution are obligations, not a menu.
+          _MoreRow(
+            icon: HwIcons.scale,
+            title: 'Legal & licenses',
+            subtitle: 'Privacy, help center, credits',
+            onTap: () => context.push(RoutePaths.legal),
+          ),
+        ]),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 9 · Coming online
+// ---------------------------------------------------------------------------
+
+class _ComingOnlineSection extends StatelessWidget {
+  const _ComingOnlineSection();
+
+  @override
+  Widget build(BuildContext context) {
+    // The spec carries a 20px emoji in the leading slot (app.js:1970) — it is
+    // what makes this group read like the others rather than a bare list.
+    const items = [
+      (
+        '🫁',
+        'Breath Sync + Endurance Breathing',
+        'Breathing-led protocols — the pacer becomes primary in live sessions.'
+      ),
+      (
+        '⇄',
+        'Mirror Placements',
+        'Live now as suggestion chips when a side is unavailable.'
+      ),
+      (
+        '🥗',
+        'Calming Recipes',
+        'Food-as-medicine recovery nutrition. Under review.'
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Coming online'),
+        HwRowGroup(
+          children: [
+            for (final item in items)
+              // Non-interactive by design — these are a roadmap, not rows.
+              HwRow(
+                leading: Text(item.$1, style: const TextStyle(fontSize: 20)),
+                title: item.$2,
+                subtitle: item.$3,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 10 · Brand footer
+// ---------------------------------------------------------------------------
+
+class _BrandFooter extends StatelessWidget {
+  final VoidCallback onVersionTap;
+  const _BrandFooter({required this.onVersionTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+
+    return HwCard(
+      onTap: onVersionTap,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 24,
+            child: SvgPicture.asset(
+              dark
+                  ? 'assets/images/Hydrawav3_White_Logo.svg'
+                  : 'assets/images/Hydrawav3_Black_Logo.svg',
+              fit: BoxFit.contain,
+            ),
+          ),
+          const SizedBox(height: HwSpace.s3),
+          Text(
+            'Performance-First. Recovery-Next.',
+            style: TextStyle(fontSize: HwType.eyebrow, color: p.ink2),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Reminding people the body has the power to heal itself.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: HwSpace.s3),
+            child: Divider(height: 1, color: p.divider),
+          ),
+          Text(
+            'Wellness & performance platform — not a medical device. Sessions '
+            'support readiness, recovery, and mobility; they do not treat, '
+            'cure, or diagnose.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+          ),
+          const SizedBox(height: HwSpace.s3),
+          Text(
+            '${AppConstants.appVersion} · BUILD ${AppConstants.buildNumber}',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: p.ink3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared bits
+// ---------------------------------------------------------------------------
+
+/// A hairline-separated stack of [_MoreRow]s inside one card.
+
+class _MoreRow extends StatelessWidget {
+  final String icon;
   final String title;
-  final VoidCallback? onTap;
+  final String? subtitle;
   final Widget? trailing;
-  final bool enabled;
-  const _Item(
-    this.icon,
-    this.title, {
-    this.onTap,
+  final VoidCallback? onTap;
+
+  /// False for icons whose colour is baked in (the copper Guest mark).
+  final bool tintIcon;
+
+  const _MoreRow({
+    required this.icon,
+    required this.title,
+    this.subtitle,
     this.trailing,
-    // ignore: unused_element_parameter
-    this.enabled = true,
+    this.onTap,
+    this.tintIcon = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    final canTap = enabled && onTap != null;
-    return InkWell(
-      onTap: canTap ? onTap : null,
-      borderRadius: BorderRadius.circular(14),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        child: Row(children: [
-          Icon(
-            icon,
-            color: enabled
-                ? ThemeConstants.accent
-                : ThemeConstants.textTertiary,
-            size: 20,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-              child: Text(title,
-                  style: TextStyle(
-                      fontSize: 14,
-                      color: enabled
-                          ? ThemeConstants.textPrimary
-                          : ThemeConstants.textSecondary))),
-          trailing ??
-              (canTap
-                  ? Icon(Icons.chevron_right_rounded,
-                      color: ThemeConstants.textTertiary, size: 18)
-                  : const SizedBox.shrink()),
-        ]),
+    final p = RefPalette.of(context);
+    return HwRow(
+      leading: HwIcon(icon, size: 19, color: tintIcon ? p.copperInk : null),
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing ??
+          (onTap == null
+              ? null
+              : HwIcon(HwIcons.chev, size: 18, color: p.ink3)),
+      onTap: onTap,
+    );
+  }
+}
+
+class _DangerButton extends StatelessWidget {
+  final String? icon;
+  final String label;
+  final VoidCallback onTap;
+  const _DangerButton(
+      {required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return HwPress(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(HwRadius.sm),
+          border: Border.all(color: p.low, width: 1.5),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              HwIcon(icon!, size: 16, color: p.low),
+              const SizedBox(width: HwSpace.s2),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: HwType.sm,
+                fontWeight: FontWeight.w700,
+                color: p.low,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _InfoSheetSection extends StatelessWidget {
-  final InfoSheetSection section;
-
-  const _InfoSheetSection({required this.section});
+class _SheetHandle extends StatelessWidget {
+  const _SheetHandle();
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          section.heading,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: ThemeConstants.textPrimary,
-          ),
+    return Container(
+      width: 40,
+      height: 4,
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: RefPalette.of(context).line,
+        borderRadius: BorderRadius.circular(2),
+      ),
+    );
+  }
+}
+
+class _SheetCloseButton extends StatelessWidget {
+  const _SheetCloseButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return HwPress(
+      onTap: () => Navigator.pop(context),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          gradient: p.sunGrad,
+          borderRadius: BorderRadius.circular(HwRadius.sm),
         ),
-        if (section.paragraphs.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          ...section.paragraphs.map(
-            (paragraph) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                paragraph,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.55,
-                  color: ThemeConstants.textSecondary,
-                ),
-              ),
+        child: const Center(
+          child: Text(
+            'Close',
+            style: TextStyle(
+              fontSize: HwType.sm,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
             ),
           ),
-        ],
-        if (section.bullets.isNotEmpty) ...[
-          if (section.paragraphs.isEmpty) const SizedBox(height: 8),
-          ...section.bullets.map(
-            (bullet) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+        ),
+      ),
+    );
+  }
+}
+
+/// A bottom sheet that holds a scrollable list of choices.
+class _PickerSheet extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  const _PickerSheet({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return FractionallySizedBox(
+      heightFactor: 0.8,
+      child: Container(
+        decoration: BoxDecoration(
+          color: p.card,
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
+        ),
+        child: Column(
+          children: [
+            const _SheetHandle(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Container(
-                      width: 5,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.accent,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: HwType.xl,
+                      fontWeight: FontWeight.w700,
+                      color: p.ink,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      bullet,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1.55,
-                        color: ThemeConstants.textSecondary,
-                      ),
-                    ),
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: HwType.base, color: p.ink2),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
-      ],
+            Divider(height: 1, color: p.line),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                child: child,
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: _SheetCloseButton(),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-// ignore: unused_element
-Widget _comingSoonBadge() {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(
-      color: ThemeConstants.accent.withValues(alpha: 0.16),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(
-        color: ThemeConstants.accent.withValues(alpha: 0.3),
-        width: 0.5,
+class _SheetMessage extends StatelessWidget {
+  final String text;
+  const _SheetMessage(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: HwType.sm,
+          height: 1.5,
+          color: RefPalette.of(context).ink2,
+        ),
       ),
-    ),
-    child: Text(
-      'Coming Soon',
-      style: TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w600,
-        color: ThemeConstants.accent,
-      ),
-    ),
-  );
+    );
+  }
 }
+

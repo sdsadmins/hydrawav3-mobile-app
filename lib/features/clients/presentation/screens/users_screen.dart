@@ -7,8 +7,11 @@ import '../../../ai_report/presentation/widgets/client_reports_section.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../devices/presentation/providers/players_provider.dart';
 import '../../../devices/presentation/widgets/players_section.dart';
-import '../../../devices/presentation/widgets/ref_palette.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../history/data/history_repository.dart';
+import '../../../home/presentation/providers/hub_prefs_provider.dart';
+import '../../../home/presentation/widgets/hub_modules.dart';
+import '../../../notifications/presentation/providers/notification_provider.dart';
 import '../../../history/presentation/screens/history_list_screen.dart';
 import '../../domain/client_model.dart';
 import '../providers/client_providers.dart';
@@ -28,6 +31,13 @@ class UsersScreen extends ConsumerStatefulWidget {
 
 class _UsersScreenState extends ConsumerState<UsersScreen> {
   _UsersTab _tab = _UsersTab.users;
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   bool get _isUniversity =>
       (ref.watch(authStateProvider).user?.organizationType ?? '')
@@ -66,6 +76,36 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                           ),
                         ),
                       ),
+                      // Notification bell with an unread dot — the spec puts
+                      // it in this topbar (app.js:4268).
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          _IconBtn(
+                            icon: Icons.notifications_none_rounded,
+                            color: p.ink2,
+                            palette: p,
+                            onTap: () =>
+                                context.push(RoutePaths.notifications),
+                          ),
+                          if (ref.watch(unreadNotificationCountProvider) > 0)
+                            Positioned(
+                              top: 6,
+                              right: 6,
+                              child: Container(
+                                width: 9,
+                                height: 9,
+                                decoration: BoxDecoration(
+                                  color: p.low,
+                                  shape: BoxShape.circle,
+                                  border:
+                                      Border.all(color: p.card, width: 2),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(width: 8),
                       _IconBtn(
                         icon: Icons.add_rounded,
                         color: p.copperInk,
@@ -111,9 +151,25 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   ) {
     switch (_tab) {
       case _UsersTab.reports:
-        return const SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
-          child: ClientReportsSection(),
+        // No clientId here, so this lists the reports YOU generated rather
+        // than one client's. Say so — the segment sits in a Users tab and
+        // would otherwise read as per-client. A specific client's reports are
+        // on their profile.
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10, left: 2),
+                child: Text(
+                  'Reports you generated · open a user for theirs',
+                  style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                ),
+              ),
+              const ClientReportsSection(),
+            ],
+          ),
         );
       case _UsersTab.history:
         // The History screen renders without its own title/Scaffold here — the
@@ -145,13 +201,55 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       );
     }
 
-    // Session counts per user, from the same history feed the History tab
-    // shows. Absent (still loading / failed) → the row just omits the count.
+    // Session counts, today's prepped set, and the improvement rate — all
+    // derived from the one history feed the History tab already loads.
     final sessionCounts = <String, int>{};
+    final preppedToday = <String>{};
+    final scored = <String, int>{};
+    final improved = <String, int>{};
+    final now = DateTime.now();
+
     for (final s in ref.watch(allSessionsProvider).asData?.value ?? const []) {
       final id = s.clientId;
       if (id == null || id.isEmpty) continue;
       sessionCounts[id] = (sessionCounts[id] ?? 0) + 1;
+
+      final at = s.createdAt;
+      if (!s.isGuest &&
+          at != null &&
+          at.year == now.year &&
+          at.month == now.month &&
+          at.day == now.day) {
+        preppedToday.add(id);
+      }
+
+      for (final d in s.discomfortAreas) {
+        if (d.discomfortBefore == null || d.discomfortAfter == null) continue;
+        scored[id] = (scored[id] ?? 0) + 1;
+        if (d.discomfortAfter! < d.discomfortBefore!) {
+          improved[id] = (improved[id] ?? 0) + 1;
+        }
+      }
+    }
+
+    int? pulseFor(String id) {
+      final total = scored[id] ?? 0;
+      if (total == 0) return null; // unknown, not zero
+      return (((improved[id] ?? 0) / total) * 100).round();
+    }
+
+    final gameDay = ref.watch(gameDayActiveProvider);
+
+    // Search — `filteredClientsProvider` exists but is wired only into the
+    // legacy clients list, so filter locally against the same fields.
+    final query = _search.text.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      all = all
+          .where((c) =>
+              c.clientName.toLowerCase().contains(query) ||
+              (c.nickname?.toLowerCase().contains(query) ?? false) ||
+              (c.sport?.toLowerCase().contains(query) ?? false))
+          .toList();
     }
 
     // Position ObjectId → display name, from the org's sport mappings.
@@ -187,6 +285,28 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
+          _SearchField(
+            palette: p,
+            controller: _search,
+            hint: university ? 'Search users' : 'Search clients',
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 14),
+          // On game day the board belongs here too, not just on the Hub —
+          // this is the screen a coach works from while prepping the squad.
+          if (gameDay) ...[
+            const HubGameReadyCard(),
+            const SizedBox(height: 6),
+          ],
+          if (sortedKeys.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Text(
+                'Nobody matches "${_search.text.trim()}".',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: HwType.sm, color: p.ink2),
+              ),
+            ),
           for (final key in sortedKeys) ...[
             _GroupHeader(
               palette: p,
@@ -202,6 +322,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               university: university,
               sessionCounts: sessionCounts,
               positionNames: positionNames,
+              prepped: gameDay ? preppedToday : const <String>{},
+              pulseFor: pulseFor,
               onTap: (c) async {
                 await context.pushNamed(
                   RouteNames.clientDetail,
@@ -414,6 +536,10 @@ class _UserGroupCard extends StatelessWidget {
   final bool university;
   final Map<String, int> sessionCounts;
   final Map<String, String> positionNames;
+  /// Client ids already prepped today — empty unless game day is active.
+  final Set<String> prepped;
+  /// Share of this client's scored areas that improved, or null if none were.
+  final int? Function(String) pulseFor;
   final void Function(Client) onTap;
 
   const _UserGroupCard({
@@ -422,6 +548,8 @@ class _UserGroupCard extends StatelessWidget {
     required this.university,
     required this.sessionCounts,
     required this.positionNames,
+    required this.prepped,
+    required this.pulseFor,
     required this.onTap,
   });
 
@@ -475,9 +603,69 @@ class _UserGroupCard extends StatelessWidget {
               initials: _initials(clients[i].clientName),
               subline: _subline(clients[i]),
               sessions: sessionCounts[clients[i].id],
+              prepped: prepped.contains(clients[i].id),
+              showPrepped: prepped.isNotEmpty,
+              pulse: pulseFor(clients[i].id),
               onTap: () => onTap(clients[i]),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// `.searchbar` — styles.css:349. A filled pill, no border.
+class _SearchField extends StatelessWidget {
+  final RefPalette palette;
+  final TextEditingController controller;
+  final String hint;
+  final ValueChanged<String> onChanged;
+
+  const _SearchField({
+    required this.palette,
+    required this.controller,
+    required this.hint,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: p.bg2,
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.search_rounded, size: 18, color: p.ink3),
+          const SizedBox(width: 9),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              onChanged: onChanged,
+              textInputAction: TextInputAction.search,
+              style: TextStyle(fontSize: HwType.base, color: p.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: hint,
+                hintStyle:
+                    TextStyle(fontSize: HwType.base, color: p.ink3),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          if (controller.text.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                controller.clear();
+                onChanged('');
+              },
+              child: Icon(Icons.close_rounded, size: 18, color: p.ink3),
+            ),
         ],
       ),
     );
@@ -490,6 +678,9 @@ class _UserRow extends StatelessWidget {
   final String initials;
   final String subline;
   final int? sessions;
+  final bool prepped;
+  final bool showPrepped;
+  final int? pulse;
   final VoidCallback onTap;
 
   const _UserRow({
@@ -498,6 +689,9 @@ class _UserRow extends StatelessWidget {
     required this.initials,
     required this.subline,
     required this.sessions,
+    required this.prepped,
+    required this.showPrepped,
+    required this.pulse,
     required this.onTap,
   });
 
@@ -570,13 +764,35 @@ class _UserRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '$count ${count == 1 ? 'session' : 'sessions'}',
+                    [
+                      '$count ${count == 1 ? 'session' : 'sessions'}',
+                      // Unknown stays absent rather than showing a fake 0%.
+                      if (pulse != null) '$pulse% improved',
+                    ].join(' · '),
                     style: TextStyle(fontSize: 12, color: p.ink3),
                   ),
                 ],
               ),
             ),
-            Icon(Icons.chevron_right_rounded, size: 22, color: p.ink3),
+            if (showPrepped)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: prepped ? p.goodSoft : p.midSoft,
+                  borderRadius: BorderRadius.circular(HwRadius.pill),
+                ),
+                child: Text(
+                  prepped ? 'Prepped ✓' : 'To prep',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: prepped ? p.good : p.mid,
+                  ),
+                ),
+              )
+            else
+              Icon(Icons.chevron_right_rounded, size: 22, color: p.ink3),
           ],
         ),
       ),

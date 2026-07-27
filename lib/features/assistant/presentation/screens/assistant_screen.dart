@@ -171,6 +171,23 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     _messages.clear();
     _typing = false;
     _chipsVisible = true;
+
+    // Deep links that already know what they want skip the "performance or
+    // recovery?" question entirely. Without this, arriving from the Hub tiles
+    // or a player profile dropped you on the generic greeting and made you
+    // re-answer something you'd already chosen.
+    if (widget.intent == 'performance' || widget.intent == 'recovery') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (widget.intent == 'recovery') {
+          _onRecovery();
+        } else {
+          _onPerformance();
+        }
+      });
+      return;
+    }
+
     if (widget.intent == 'pads') {
       _messages.add(const _Msg(
         false,
@@ -293,6 +310,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   Future<void> _onPerformance() async {
     _recovery = false;
     _me('Performance');
+
+    // If the caller already picked someone — a player profile, or the Game
+    // Ready board — carry them through instead of asking again.
+    final preselected = ref.read(selectedClientProvider);
+    if (preselected != null &&
+        ref.read(sessionClientModeProvider) == ClientMode.client) {
+      _pickUser(preselected.displayName);
+      return;
+    }
+
     await _ai('Who are we prepping? Guest works too — no name needed.');
     final members = await _loadMembers();
     final uni = _isUniversity;
