@@ -1,0 +1,484 @@
+/// Models for the performance-protocols service — the `pad_protocols` corpus.
+///
+/// There are exactly two ways in to a pad set and both return the SAME payload
+/// shape ([PadSetPayload]):
+///   A. catalogue — disciplines → roles → chains → chain (only the last returns pads)
+///   B. query / chat — `performance-query/query` and `performance-chat/message`
+///
+/// Sun and Moon are a pair per set — that pair *is* the placement. Sets render in
+/// `set_index` order.
+library;
+
+/// A discipline row. The match key travels on the wire (`track`), the label goes
+/// on screen ("Track & Field") — bind dropdown values to [discipline] or
+/// matching breaks.
+class Discipline {
+  final String discipline;
+  final String displayName;
+
+  const Discipline({required this.discipline, this.displayName = ''});
+
+  String get label => displayName.trim().isEmpty ? discipline : displayName;
+
+  factory Discipline.fromJson(Map<String, dynamic> json) => Discipline(
+        discipline: (json['discipline'] ?? json['id'] ?? '').toString(),
+        displayName:
+            (json['display_name'] ?? json['displayName'] ?? '').toString(),
+      );
+
+  /// Accepts `[{discipline, display_name}]` or a bare `["tennis", …]` — the
+  /// service may author either, and a dropped list reads on screen as "this org
+  /// has no disciplines", which is a very different (and wrong) message.
+  static List<Discipline> listFrom(dynamic raw) {
+    final out = <Discipline>[];
+    for (final row in _rowsRaw(raw)) {
+      if (row is String) {
+        if (row.trim().isNotEmpty) out.add(Discipline(discipline: row.trim()));
+      } else if (row is Map) {
+        final d = Discipline.fromJson(Map<String, dynamic>.from(row));
+        if (d.discipline.trim().isNotEmpty) out.add(d);
+      }
+    }
+    return out;
+  }
+}
+
+/// A position authored for a discipline. The service may return bare strings or
+/// `{ role, display_name, subtype }` objects — both are accepted.
+class RoleOption {
+  final String role;
+  final String displayName;
+  final String? subtype;
+
+  const RoleOption({required this.role, this.displayName = '', this.subtype});
+
+  String get label => displayName.trim().isEmpty ? role : displayName;
+
+  factory RoleOption.fromJson(Map<String, dynamic> json) => RoleOption(
+        role: (json['role'] ?? json['name'] ?? json['position'] ?? '')
+            .toString(),
+        displayName:
+            (json['display_name'] ?? json['displayName'] ?? '').toString(),
+        subtype: _blankToNull(json['subtype']),
+      );
+
+  static List<RoleOption> listFrom(dynamic raw) {
+    final out = <RoleOption>[];
+    for (final row in _rowsRaw(raw)) {
+      if (row is String) {
+        if (row.trim().isNotEmpty) out.add(RoleOption(role: row));
+      } else if (row is Map) {
+        final r = RoleOption.fromJson(Map<String, dynamic>.from(row));
+        if (r.role.trim().isNotEmpty) out.add(r);
+      }
+    }
+    return out;
+  }
+}
+
+/// One entry in the chain MENU for a position. This list is not ranked and
+/// carries no scores — never label it "closest matches".
+class ChainSummary {
+  final String chainId;
+  final String name;
+  final String movement;
+  final String? subtype;
+
+  const ChainSummary({
+    required this.chainId,
+    this.name = '',
+    this.movement = '',
+    this.subtype,
+  });
+
+  String get label => name.trim().isEmpty ? chainId : name;
+
+  factory ChainSummary.fromJson(Map<String, dynamic> json) => ChainSummary(
+        chainId: (json['chain_id'] ?? json['chainId'] ?? json['id'] ?? '')
+            .toString(),
+        name: (json['name'] ?? json['chain_name'] ?? '').toString(),
+        movement: (json['movement'] ?? '').toString(),
+        subtype: _blankToNull(json['subtype']),
+      );
+
+  static List<ChainSummary> listFrom(dynamic raw) {
+    final out = <ChainSummary>[];
+    for (final row in _rowsRaw(raw)) {
+      if (row is String) {
+        // A bare id list — the label falls back to the id until the service
+        // sends names.
+        if (row.trim().isNotEmpty) out.add(ChainSummary(chainId: row.trim()));
+      } else if (row is Map) {
+        final c = ChainSummary.fromJson(Map<String, dynamic>.from(row));
+        if (c.chainId.trim().isNotEmpty) out.add(c);
+      }
+    }
+    return out;
+  }
+}
+
+/// The chain the pad set belongs to.
+class ChainInfo {
+  final String chainId;
+  final String name;
+  final String movement;
+  final String directionalMode;
+  final List<String> stressNodes;
+  final List<String> injuryRiskReduction;
+  final List<String> performanceRomBenefits;
+  final Map<String, dynamic> retrieval;
+
+  const ChainInfo({
+    this.chainId = '',
+    this.name = '',
+    this.movement = '',
+    this.directionalMode = '',
+    this.stressNodes = const [],
+    this.injuryRiskReduction = const [],
+    this.performanceRomBenefits = const [],
+    this.retrieval = const {},
+  });
+
+  factory ChainInfo.fromJson(Map<String, dynamic> json) => ChainInfo(
+        chainId: (json['chain_id'] ?? json['chainId'] ?? '').toString(),
+        name: (json['name'] ?? '').toString(),
+        movement: (json['movement'] ?? '').toString(),
+        directionalMode:
+            (json['directional_mode'] ?? json['directionalMode'] ?? '')
+                .toString(),
+        stressNodes: _strings(json['stress_nodes'] ?? json['stressNodes']),
+        injuryRiskReduction: _strings(
+            json['injury_risk_reduction'] ?? json['injuryRiskReduction']),
+        performanceRomBenefits: _strings(json['performance_rom_benefits'] ??
+            json['performanceRomBenefits']),
+        retrieval: json['retrieval'] is Map
+            ? Map<String, dynamic>.from(json['retrieval'] as Map)
+            : const {},
+      );
+
+  /// The `movement · directional_mode` subline used under the screen title.
+  String get subline =>
+      [movement, directionalMode].where((s) => s.trim().isNotEmpty).join(' · ');
+}
+
+/// One pad — half of a set. `sun` and `moon` share this shape.
+class Pad {
+  final String padLabel;
+  final String side;
+  final String plane;
+  final String positionAlongMuscle;
+  final String landmarkAnchor;
+  final String stackPosition;
+  final List<String> targetMuscles;
+  final String? proxyFor;
+
+  const Pad({
+    this.padLabel = '',
+    this.side = '',
+    this.plane = '',
+    this.positionAlongMuscle = '',
+    this.landmarkAnchor = '',
+    this.stackPosition = '',
+    this.targetMuscles = const [],
+    this.proxyFor,
+  });
+
+  factory Pad.fromJson(Map<String, dynamic> json) => Pad(
+        padLabel: (json['pad_label'] ?? json['padLabel'] ?? '').toString(),
+        side: (json['side'] ?? '').toString(),
+        plane: (json['plane'] ?? '').toString(),
+        positionAlongMuscle:
+            (json['position_along_muscle'] ?? json['positionAlongMuscle'] ?? '')
+                .toString(),
+        landmarkAnchor:
+            (json['landmark_anchor'] ?? json['landmarkAnchor'] ?? '')
+                .toString(),
+        stackPosition:
+            (json['stack_position'] ?? json['stackPosition'] ?? '').toString(),
+        targetMuscles:
+            _strings(json['target_muscles'] ?? json['targetMuscles']),
+        proxyFor: _blankToNull(json['proxy_for'] ?? json['proxyFor']),
+      );
+
+  /// "left" / "right" normalised for the 3D viewer, or null when unsided.
+  String? get sideKey {
+    final s = side.toLowerCase();
+    if (s.contains('left')) return 'left';
+    if (s.contains('right')) return 'right';
+    return null;
+  }
+
+  /// The written cue: everything the practitioner needs if 3D can't place it.
+  String get cue {
+    final parts = <String>[
+      if (padLabel.trim().isNotEmpty) padLabel.trim(),
+      if (landmarkAnchor.trim().isNotEmpty) landmarkAnchor.trim(),
+    ];
+    final detail = [plane, positionAlongMuscle]
+        .where((s) => s.trim().isNotEmpty)
+        .join(' · ');
+    final head = parts.join(' — ');
+    return detail.isEmpty ? head : '$head ($detail)';
+  }
+}
+
+/// A Sun+Moon pair. `role` is generator / transfer / terminus.
+class PadSet {
+  final int setIndex;
+  final String role;
+  final String placementLabel;
+  final String clinicalReasoning;
+  final Pad? sun;
+  final Pad? moon;
+
+  const PadSet({
+    this.setIndex = 1,
+    this.role = '',
+    this.placementLabel = '',
+    this.clinicalReasoning = '',
+    this.sun,
+    this.moon,
+  });
+
+  factory PadSet.fromJson(Map<String, dynamic> json) => PadSet(
+        setIndex: _int(json['set_index'] ?? json['setIndex'], 1),
+        role: (json['role'] ?? '').toString(),
+        placementLabel:
+            (json['placement_label'] ?? json['placementLabel'] ?? '')
+                .toString(),
+        clinicalReasoning:
+            (json['clinical_reasoning'] ?? json['clinicalReasoning'] ?? '')
+                .toString(),
+        sun: json['sun'] is Map
+            ? Pad.fromJson(Map<String, dynamic>.from(json['sun'] as Map))
+            : null,
+        moon: json['moon'] is Map
+            ? Pad.fromJson(Map<String, dynamic>.from(json['moon'] as Map))
+            : null,
+      );
+
+  String get title => placementLabel.trim().isEmpty
+      ? 'Set $setIndex'
+      : 'Set $setIndex · $placementLabel';
+}
+
+/// The pad-set payload — identical whether it came from the catalogue, a query,
+/// or a chat turn.
+///
+/// A blocked request answers a refusal envelope with `chain: null` and no pads;
+/// [isRefusal] is the only correct way to tell the two apart. Picking from the
+/// catalogue is NOT a way around the gate.
+class PadSetPayload {
+  final String discipline;
+  final String displayName;
+  final String role;
+  final String? subtype;
+  final ChainInfo? chain;
+  final List<PadSet> sets;
+  final String? refusalMessage;
+  final Map<String, dynamic> raw;
+
+  const PadSetPayload({
+    this.discipline = '',
+    this.displayName = '',
+    this.role = '',
+    this.subtype,
+    this.chain,
+    this.sets = const [],
+    this.refusalMessage,
+    this.raw = const {},
+  });
+
+  bool get isRefusal => chain == null || sets.isEmpty;
+
+  String get disciplineLabel =>
+      displayName.trim().isEmpty ? discipline : displayName;
+
+  /// "Tennis · Singles Player" — the placement-card subtitle.
+  String get contextLine => [disciplineLabel, role]
+      .where((s) => s.trim().isNotEmpty)
+      .join(' · ');
+
+  factory PadSetPayload.fromJson(Map<String, dynamic> json) {
+    final data = (json['data'] is Map)
+        ? Map<String, dynamic>.from(json['data'] as Map)
+        : json;
+    final rawSets = data['sets'];
+    final sets = rawSets is List
+        ? (rawSets
+            .whereType<Map>()
+            .map((e) => PadSet.fromJson(Map<String, dynamic>.from(e)))
+            .toList()
+          ..sort((a, b) => a.setIndex.compareTo(b.setIndex)))
+        : <PadSet>[];
+    return PadSetPayload(
+      discipline: (data['discipline'] ?? '').toString(),
+      displayName:
+          (data['display_name'] ?? data['displayName'] ?? '').toString(),
+      role: (data['role'] ?? '').toString(),
+      subtype: _blankToNull(data['subtype']),
+      chain: data['chain'] is Map
+          ? ChainInfo.fromJson(Map<String, dynamic>.from(data['chain'] as Map))
+          : null,
+      sets: sets,
+      refusalMessage: refusalMessageFrom(data),
+      raw: data,
+    );
+  }
+
+  /// The refusal text, whichever key the envelope used. Kept permissive on
+  /// purpose — the exact field isn't pinned down yet.
+  static String? refusalMessageFrom(Map<String, dynamic> json) {
+    for (final key in const [
+      'refusal',
+      'message',
+      'reply',
+      'reason',
+      'safety_message',
+      'safetyMessage',
+    ]) {
+      final v = json[key];
+      if (v is String && v.trim().isNotEmpty) return v.trim();
+      if (v is Map) {
+        final nested = refusalMessageFrom(Map<String, dynamic>.from(v));
+        if (nested != null) return nested;
+      }
+    }
+    return null;
+  }
+}
+
+/// One ranked hit from `performance-query/query` — chains WITH their pads, so a
+/// tap needs no second call. These do carry scores, so "best matches" is honest
+/// language here (unlike the catalogue menu).
+class RankedChain {
+  final double? score;
+  final PadSetPayload payload;
+
+  const RankedChain({this.score, required this.payload});
+
+  factory RankedChain.fromJson(Map<String, dynamic> json) => RankedChain(
+        score: _double(json['score'] ?? json['similarity'] ?? json['rank']),
+        payload: PadSetPayload.fromJson(json),
+      );
+
+  static List<RankedChain> listFrom(dynamic raw) => _rows(raw)
+      .map(RankedChain.fromJson)
+      .where((r) => !r.payload.isRefusal)
+      .toList();
+}
+
+/// A `performance-chat/message` reply. `render`/`results` are the query
+/// service's output verbatim, so the same pad UI renders both paths.
+class ChatReply {
+  final String reply;
+  final String intent;
+  final Map<String, dynamic> slots;
+  final List<String> needs;
+
+  /// The full catalogue for the resolved role — a MENU, not near-answers.
+  final List<ChainSummary> options;
+  final List<RankedChain> results;
+  final Map<String, dynamic> render;
+  final List<String> sources;
+  final Map<String, dynamic> raw;
+
+  const ChatReply({
+    this.reply = '',
+    this.intent = '',
+    this.slots = const {},
+    this.needs = const [],
+    this.options = const [],
+    this.results = const [],
+    this.render = const {},
+    this.sources = const [],
+    this.raw = const {},
+  });
+
+  bool get hasPads => results.isNotEmpty;
+
+  factory ChatReply.fromJson(Map<String, dynamic> json) {
+    final data = (json['data'] is Map)
+        ? Map<String, dynamic>.from(json['data'] as Map)
+        : json;
+    return ChatReply(
+      reply: (data['reply'] ?? data['message'] ?? '').toString(),
+      intent: (data['intent'] ?? '').toString(),
+      slots: data['slots'] is Map
+          ? Map<String, dynamic>.from(data['slots'] as Map)
+          : const {},
+      needs: _strings(data['needs']),
+      options: ChainSummary.listFrom(data['options']),
+      results: RankedChain.listFrom(data['results']),
+      render: data['render'] is Map
+          ? Map<String, dynamic>.from(data['render'] as Map)
+          : const {},
+      sources: _strings(data['sources']),
+      raw: data,
+    );
+  }
+}
+
+// ── shared parsing helpers ───────────────────────────────────────────────────
+
+const _kListKeys = [
+  'data',
+  'items',
+  'results',
+  'disciplines',
+  'roles',
+  'chains',
+  'options',
+];
+
+/// Finds the row list inside `[…]`, `{data: […]}`, or `{data: {chains: […]}}`.
+/// Returns **null** when the payload holds no list at all — the caller must not
+/// confuse that with an empty list. A dev tunnel serving an HTML interstitial,
+/// or a renamed field, both land here, and "no disciplines are authored" is the
+/// wrong thing to tell someone in that case.
+List<dynamic>? rowsOrNull(dynamic raw, {int depth = 0}) {
+  if (raw is List) return raw;
+  if (raw is Map && depth < 3) {
+    for (final key in _kListKeys) {
+      final v = raw[key];
+      if (v is List) return v;
+      if (v is Map) {
+        final nested = rowsOrNull(v, depth: depth + 1);
+        if (nested != null) return nested;
+      }
+    }
+  }
+  return null;
+}
+
+List<dynamic> _rowsRaw(dynamic raw) => rowsOrNull(raw) ?? const [];
+
+List<Map<String, dynamic>> _rows(dynamic raw) => _rowsRaw(raw)
+    .whereType<Map>()
+    .map((e) => Map<String, dynamic>.from(e))
+    .toList();
+
+List<String> _strings(dynamic raw) {
+  if (raw is List) {
+    return raw
+        .map((e) => e is Map
+            ? (e['name'] ?? e['muscle'] ?? e['label'] ?? '').toString()
+            : e.toString())
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+  if (raw is String && raw.trim().isNotEmpty) return [raw.trim()];
+  return const [];
+}
+
+String? _blankToNull(dynamic v) {
+  final s = v?.toString().trim();
+  return (s == null || s.isEmpty || s == 'null') ? null : s;
+}
+
+int _int(dynamic v, int fallback) =>
+    v is int ? v : int.tryParse(v?.toString() ?? '') ?? fallback;
+
+double? _double(dynamic v) =>
+    v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');

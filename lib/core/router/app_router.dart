@@ -8,6 +8,7 @@ import '../theme/widgets/hw_icon.dart';
 import '../../features/auth/presentation/providers/auth_provider.dart';
 import '../../features/auth/presentation/providers/client_auth_provider.dart';
 import '../../features/assistant/presentation/screens/assistant_screen.dart';
+import '../../features/performance_protocols/presentation/screens/performance_protocols_screen.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
@@ -175,6 +176,12 @@ final routerProvider = Provider<GoRouter>((ref) {
               name: RouteNames.assistant,
               builder: (c, s) =>
                   AssistantScreen(intent: s.uri.queryParameters['intent'])),
+          // The pad_protocols catalogue as dropdowns — the browsing counterpart
+          // to the Assistant's chip flow. Both end on the same pad map.
+          GoRoute(
+              path: RoutePaths.performanceProtocols,
+              name: RouteNames.performanceProtocols,
+              builder: (c, s) => const PerformanceProtocolsScreen()),
           GoRoute(
               path: RoutePaths.ai,
               name: RouteNames.ai,

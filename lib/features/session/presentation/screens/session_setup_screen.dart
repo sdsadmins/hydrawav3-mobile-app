@@ -12,6 +12,7 @@ import '../../../clients/presentation/widgets/client_selection_section.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../intake/presentation/widgets/guided_assessment_wizard.dart';
 import '../../../ble/data/ble_repository.dart';
+import '../../../performance_protocols/presentation/providers/performance_session_provider.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../presets/data/preset_repository.dart';
@@ -136,7 +137,36 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   void initState() {
     super.initState();
     _runDeviceIds.addAll(widget.deviceIds);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadDeviceNames());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadDeviceNames();
+      _applyPendingProtocol();
+    });
+  }
+
+  /// Pre-fills the protocol a placement flow handed off ("Go to Session" in the
+  /// Assistant / pad map — the UI spec's `startSessionFromFlow`). Consumed once
+  /// and cleared, so it never leaks into a later session, and it never overrides
+  /// a protocol the practitioner already picked for a device.
+  Future<void> _applyPendingProtocol() async {
+    final pendingId = ref.read(pendingSessionProtocolProvider);
+    if (pendingId == null || pendingId.isEmpty) return;
+    ref.read(pendingSessionProtocolProvider.notifier).state = null;
+
+    try {
+      final protocol = await ref.read(protocolDetailProvider(pendingId).future);
+      if (!mounted) return;
+      setState(() {
+        for (final deviceId in widget.deviceIds) {
+          if (_protocolIdByDeviceId.containsKey(deviceId)) continue;
+          _protocolIdByDeviceId[deviceId] = pendingId;
+          _selectedProtocolByDeviceId[deviceId] = protocol;
+          _settingsByDeviceId[deviceId] = _advancedDefaultsFromProtocol(protocol);
+          _showAdvancedByDeviceId[deviceId] = false;
+        }
+      });
+    } catch (_) {
+      // Gated or offline — the practitioner picks a protocol as usual.
+    }
   }
 
   Future<void> _loadDeviceNames() async {

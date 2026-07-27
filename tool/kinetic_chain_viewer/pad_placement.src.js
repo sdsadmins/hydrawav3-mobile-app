@@ -14,16 +14,29 @@
 // __webglError flags) mirrors the sibling `viewer.src.js` so both viewers behave
 // identically inside the WebView.
 //
-// Entry point Flutter calls: window.renderPadPlacement(markers) where `markers`
-// is the backend `markers` array from POST ai-padplacement/placement-session —
-// i.e. getMarkers(recommendation): [{ role:"sun"|"moon", zone, label, side,
-// surface, setIndex, setTitle, setting }].
-// Flags read by Flutter: window.__ready, window.__webglError.
+// Entry point Flutter calls: window.renderPadPlacement(markers).
+//
+// Two producers, one marker shape:
+//   • recovery — `markers` from POST ai-padplacement/placement-session, i.e.
+//     getMarkers(recommendation): [{ role, zone, label, side, surface,
+//     setIndex, setTitle, setting }]
+//   • performance — `PadPlacementViewData.markers()` (Dart), which adds
+//     `setColor` plus the tier-2 inputs `targetMuscles`, `plane` and
+//     `muscleOffset` for pads whose anchor isn't a calibrated zone.
+//
+// Bridge: window.setLabels, setView, setHighlight, zoomIn/zoomOut/resetView.
+// Flags read by Flutter: window.__ready, window.__webglError, window.__unmapped.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  buildMeshSideMap,
+  buildNormalizedLookup,
+  collectAllMeshNames,
+  resolveMuscleToMeshes,
+} from "./muscle_resolve.js";
 
 const MODEL_PATH = "z-anatomy-muscles.glb"; // relative to the localhost root
 
@@ -37,6 +50,7 @@ const COLORS = {
   sun: "#F59E0B",
   moon: "#6366F1",
   skin: "#d7a67b",
+  muscle: "#C08A62", // target-muscle tint behind the pads
 };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +201,11 @@ const LOCAL_PAD_LANDMARKS = {
 
 const PAD_LANDMARKS = { ...LOCAL_PAD_LANDMARKS, ...sharedPadLandmarks() };
 
+// Three tiers, in order: an explicit override, a calibrated zone, then the
+// target muscle's own geometry. Returns null when none of them resolve — the
+// caller then draws NOTHING. It used to fall back to `low_back_l23`, which put
+// an unrecognised anchor on the low back and showed a wrong placement with full
+// confidence.
 function resolveLandmark(marker) {
   const override = marker.landmarkOverride;
   if (Array.isArray(override?.position) && Array.isArray(override?.normal)) {
@@ -198,11 +217,86 @@ function resolveLandmark(marker) {
       mapped: true,
     };
   }
-  const zone = PAD_LANDMARKS[marker.zone] || PAD_LANDMARKS.low_back_l23;
+
+  const zone = PAD_LANDMARKS[marker.zone];
+  if (zone) {
+    return {
+      ...DEFAULT_LANDMARK,
+      ...(zone[marker.side] || zone.midline || zone.right || DEFAULT_LANDMARK),
+    };
+  }
+
+  return resolveFromMuscles(marker);
+}
+
+// Tier 2 — place the pad from the real mesh: take the centroid of the target
+// muscle(s), slide along the muscle's long axis by `muscleOffset` (proximal is
+// +, distal is -), push out along the direction `plane` implies, and let
+// snapToSurface() raycast it onto the skin.
+function resolveFromMuscles(marker) {
+  const names = Array.isArray(marker.targetMuscles) ? marker.targetMuscles : [];
+  if (!names.length || !modelScene || !allMeshNames.length) return null;
+
+  const side = marker.side === "left" || marker.side === "right"
+    ? marker.side
+    : null;
+
+  const box = new THREE.Box3();
+  let found = 0;
+  for (const name of names) {
+    // Give the resolver the side so it can pick the `.l` / `.r` mesh.
+    const query = side ? `${side} ${name}` : name;
+    const meshNames = resolveMuscleToMeshes(
+      query,
+      allMeshNames,
+      normalizedLookup,
+      meshSideMap,
+    );
+    for (const meshName of meshNames) {
+      const mesh = modelScene.getObjectByName(meshName);
+      if (!mesh) continue;
+      box.expandByObject(mesh);
+      found++;
+    }
+  }
+  if (!found || box.isEmpty()) return null;
+
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+
+  // Muscles run mostly head-to-toe, so the long axis is Y often enough that
+  // using it beats guessing an orientation per muscle.
+  const offset = typeof marker.muscleOffset === "number" ? marker.muscleOffset : 0;
+  center.y += offset * size.y * 0.5;
+
+  const normal = normalFromPlane(marker.plane, side, center);
   return {
     ...DEFAULT_LANDMARK,
-    ...(zone[marker.side] || zone.midline || zone.right || DEFAULT_LANDMARK),
+    position: [center.x, center.y, center.z],
+    normal,
+    region: names[0],
+    view: viewFromNormal(normal),
+    mapped: true,
   };
+}
+
+function normalFromPlane(plane, side, center) {
+  const p = (plane || "").toLowerCase();
+  const lateralSign = side === "left" ? 1 : -1; // +X is anatomical left here
+  if (p.includes("posterior") || p.includes("dorsal")) return [0, 0, -1];
+  if (p.includes("anterior") || p.includes("ventral")) return [0, 0, 1];
+  if (p.includes("lateral")) return [lateralSign, 0, 0.35];
+  if (p.includes("medial")) return [-lateralSign, 0, 0.35];
+  // No plane named: face outward from the midline, biased to the front.
+  return [center.x >= 0 ? 0.6 : -0.6, 0, 0.8];
+}
+
+function viewFromNormal(normal) {
+  if (normal[2] <= -0.5) return "back";
+  if (normal[2] >= 0.5) return "front";
+  return "side";
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +309,20 @@ let padGroup = null; // holds every pad + badge, cleared per render
 let labelsVisible = true;
 const raycaster = new THREE.Raycaster();
 
+// Mesh index for the tier-2 muscle-geometry path.
+let allMeshNames = [];
+let normalizedLookup = new Map();
+let meshSideMap = new Map();
+let skinMaterial = null;
+let highlightMaterial = null;
+let highlightedMuscles = [];
+
 window.__ready = false;
 window.__webglError = false;
 window.__markers = [];
+// `setIndex:role` keys for pads no tier could place. Flutter reads this and
+// badges those rows instead of implying a pad was drawn.
+window.__unmapped = [];
 
 function hasWebGL() {
   try {
@@ -319,7 +424,7 @@ function animate() {
 }
 
 function applySkin(root) {
-  const skin = new THREE.MeshStandardMaterial({
+  skinMaterial ??= new THREE.MeshStandardMaterial({
     color: COLORS.skin,
     roughness: 0.5,
     metalness: 0,
@@ -328,7 +433,38 @@ function applySkin(root) {
     side: THREE.DoubleSide,
   });
   root.traverse((o) => {
-    if (o.isMesh) o.material = skin;
+    if (o.isMesh) o.material = skinMaterial;
+  });
+}
+
+// Tint the pad's target muscles behind the discs — the GLB is per-muscle, so
+// "mid belly of the gluteus medius" can be shown, not just described.
+function applyHighlight() {
+  if (!modelScene) return;
+  highlightMaterial ??= new THREE.MeshStandardMaterial({
+    color: COLORS.muscle,
+    emissive: COLORS.muscle,
+    emissiveIntensity: 0.25,
+    roughness: 0.45,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+
+  const wanted = new Set();
+  for (const name of highlightedMuscles) {
+    for (const meshName of resolveMuscleToMeshes(
+      name,
+      allMeshNames,
+      normalizedLookup,
+      meshSideMap,
+    )) {
+      wanted.add(meshName);
+    }
+  }
+
+  modelScene.traverse((o) => {
+    if (!o.isMesh) return;
+    o.material = wanted.has(o.name) ? highlightMaterial : skinMaterial;
   });
 }
 
@@ -346,6 +482,10 @@ function loadModel() {
       fitBodyObject(modelScene);
       applySkin(modelScene);
       scene.add(modelScene);
+      // Index the meshes so a pad can be placed from muscle geometry (tier 2).
+      allMeshNames = collectAllMeshNames(modelScene);
+      normalizedLookup = buildNormalizedLookup(allMeshNames);
+      meshSideMap = buildMeshSideMap(modelScene);
       fitCameraToModel(modelScene);
       window.__ready = true;
       // Render anything Flutter injected before the model finished parsing.
@@ -419,14 +559,21 @@ function makePadTexture(role) {
   return tex;
 }
 
-function makeBadgeTexture(text, role) {
+function makeBadgeTexture(text, role, setColor) {
   const w = 256;
   const h = 128;
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
   const ctx = c.getContext("2d");
-  const color = role === "sun" ? COLORS.sun : COLORS.moon;
+  // The set colour when the caller supplies one (matches the app's set legend),
+  // otherwise the Sun/Moon hue as before.
+  const color =
+    typeof setColor === "string" && /^#[0-9a-f]{3,8}$/i.test(setColor)
+      ? setColor
+      : role === "sun"
+        ? COLORS.sun
+        : COLORS.moon;
   const r = 26;
   ctx.beginPath();
   ctx.moveTo(r, 0);
@@ -479,9 +626,21 @@ function orientToNormal(object, normal) {
   object.quaternion.copy(q);
 }
 
+function markerKey(marker) {
+  const setNo = Number.isFinite(marker.setIndex) ? marker.setIndex : 0;
+  return `${setNo}:${marker.role === "moon" ? "moon" : "sun"}`;
+}
+
 function addPad(marker) {
   const lm = resolveLandmark(marker);
   const role = marker.role === "moon" ? "moon" : "sun";
+  if (!lm) {
+    // Nothing resolved — report it and draw nothing. A pad in the wrong place
+    // reads as authoritative; a missing pad sends them to the written cue.
+    console.warn("[padPlacement] unmapped:", marker.zone, marker.targetMuscles);
+    window.__unmapped.push(markerKey(marker));
+    return;
+  }
   const snapped = snapToSurface(lm.position, lm.normal);
   const n = new THREE.Vector3(lm.normal[0], lm.normal[1], lm.normal[2]).normalize();
 
@@ -506,7 +665,9 @@ function addPad(marker) {
   const text = `${role === "sun" ? "S" : "M"}${setNo}`;
   const badge = new THREE.Sprite(
     new THREE.SpriteMaterial({
-      map: makeBadgeTexture(text, role),
+      // `setColor` keeps the badge in step with the set legend in the app
+      // chrome; without it Set 1 and Set 2 badges are indistinguishable.
+      map: makeBadgeTexture(text, role, marker.setColor),
       transparent: true,
       depthTest: false,
     }),
@@ -536,6 +697,7 @@ function clearPads() {
 function renderMarkers(markers) {
   if (!padGroup) return;
   clearPads();
+  window.__unmapped = [];
   (markers || []).forEach((m) => {
     try {
       addPad(m);
@@ -570,6 +732,12 @@ window.renderPadPlacement = function (markers) {
   window.__markers = Array.isArray(markers) ? markers : [];
   if (!window.__ready || !modelScene) return; // loadModel() replays it
   renderMarkers(window.__markers);
+};
+
+// Tint the pads' target muscles. Pass [] to go back to plain skin.
+window.setHighlight = function (muscles) {
+  highlightedMuscles = Array.isArray(muscles) ? muscles : [];
+  applyHighlight();
 };
 
 window.setLabels = function (on) {

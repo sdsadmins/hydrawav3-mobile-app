@@ -69,6 +69,70 @@ class ApiEndpoints {
   // Sun/Moon pad-placement plan back (ref: hydrawav3-ai `getRagPadPlacement`).
   static const String padPlacementSession = 'ai-padplacement/placement-session';
 
+  // Performance protocols (Node) — the pad_protocols corpus. Two ways in to the
+  // same pad-set payload: the catalogue (discipline → role → chain → chain) and
+  // the query/chat pair. Relative (no leading slash) so they append to the Node
+  // base URL path.
+  //
+  // The first three are metadata — cheap, cacheable, no safety gate. Only
+  // `perfChain` returns pads, and it runs the same `safety.guard()` as
+  // retrieval: on a block it answers a refusal envelope with `chain: null`, so
+  // callers must branch on that instead of assuming pads.
+  //
+  // `sessionId` rides on EVERY call: a tier-1 safety lock is per session, so
+  // without it an emergency named in turn 1 doesn't stick in turn 2. The user is
+  // resolved server-side from the token and is deliberately not accepted from
+  // the body.
+  static const String perfDisciplines = 'performance-protocols/disciplines';
+
+  static String perfRoles(String discipline, {String? sessionId}) =>
+      _perfUri('performance-protocols/roles', {
+        'discipline': discipline,
+        'sessionId': sessionId,
+      });
+
+  static String perfChains(
+    String discipline,
+    String role, {
+    String? subtype,
+    String? sessionId,
+  }) =>
+      _perfUri('performance-protocols/chains', {
+        'discipline': discipline,
+        'role': role,
+        'subtype': subtype,
+        'sessionId': sessionId,
+      });
+
+  /// ★ The pad set. Gated — see the note above.
+  static String perfChain(
+    String discipline,
+    String role,
+    String chainId, {
+    String? subtype,
+    required String sessionId,
+  }) =>
+      _perfUri('performance-protocols/chain', {
+        'discipline': discipline,
+        'role': role,
+        'chainId': chainId,
+        'subtype': subtype,
+        'sessionId': sessionId,
+      });
+
+  static const String perfQuery = 'performance-query/query';
+  static const String perfChat = 'performance-chat/message';
+
+  /// Builds `path?a=b&c=d`, dropping null/blank values and encoding the rest.
+  static String _perfUri(String path, Map<String, String?> params) {
+    final q = params.entries
+        .where((e) => (e.value ?? '').trim().isNotEmpty)
+        .map((e) =>
+            '${e.key}=${Uri.encodeQueryComponent(e.value!)}')
+        .join('&');
+    return q.isEmpty ? path : '$path?$q';
+  }
+
   // Sports (Node) — the org's sport mappings (sport + positions) for the Add
   // Player form. `GET organizations/:orgId/sports` → { organizationId, data:
   // [{ mappingId, sport, positions, isActive }] }. Relative (no leading slash).

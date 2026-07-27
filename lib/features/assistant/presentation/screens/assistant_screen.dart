@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/error/exceptions.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../clients/domain/client_model.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../clients/presentation/widgets/new_client_sheet.dart';
+import '../../../devices/presentation/providers/players_provider.dart';
 import '../../../devices/presentation/widgets/players_section.dart';
 import '../../../devices/presentation/widgets/ref_palette.dart';
 import '../../../intake/domain/intake_enums.dart';
@@ -15,6 +17,13 @@ import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../intake/presentation/widgets/body_map.dart';
 import '../../../pad_placement/data/pad_placement_remote_source.dart';
 import '../../../pad_placement/presentation/screens/pad_placement_3d_screen.dart';
+import '../../../performance_protocols/data/performance_remote_source.dart';
+import '../../../performance_protocols/domain/performance_models.dart';
+import '../../../performance_protocols/presentation/providers/performance_catalog_providers.dart';
+import '../../../performance_protocols/presentation/providers/performance_session_provider.dart';
+import '../../../performance_protocols/presentation/screens/go_to_session.dart';
+import '../../../performance_protocols/presentation/screens/pad_map_screen.dart';
+import '../../../performance_protocols/presentation/widgets/placement_card.dart';
 
 /// The "Assistant" page — a port of the cowork-os handoff `scr-chat` chat.
 /// Suggestion-led: AI / user bubbles + tappable chips. `intent == "pads"` (from
@@ -32,7 +41,17 @@ class _Msg {
   final bool isMe;
   final String text;
   final List<InlineSpan>? rich;
-  const _Msg(this.isMe, this.text, {this.rich});
+
+  /// When set, this entry renders as the spec's `.placecard` instead of a
+  /// bubble — the pad set the practitioner just landed on.
+  final PadSetPayload? placement;
+
+  const _Msg(this.isMe, this.text, {this.rich}) : placement = null;
+
+  const _Msg.card(this.placement)
+      : isMe = false,
+        text = '',
+        rich = null;
 }
 
 /// A range-of-motion movement test (parity with the guided-assessment
@@ -125,6 +144,19 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   // Manual-entry ROM: the next typed input becomes the movement test name.
   bool _awaitingManualRom = false;
   String? _manualRomArea;
+
+  // ── Performance flow state (the pad_protocols catalogue) ──────────────────
+  /// The client this prep is for; null = Guest.
+  Client? _perfClient;
+  String _perfWho = 'Guest';
+  String? _perfDiscipline;
+  String _perfDisciplineLabel = '';
+  String? _perfRole;
+  String? _perfSubtype;
+
+  /// Conversation memory for `performance-chat/message` — threaded back on every
+  /// turn, which is how the service remembers discipline/role across messages.
+  Map<String, dynamic> _slots = const {};
 
   // The guided-assessment questions, as chat steps (parity with the intake
   // panel's Area of Focus → Daily Activities steps).
@@ -296,6 +328,9 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
             then: _padChips,
           );
         }),
+        // The catalogue as dropdowns, for browsing rather than conversing.
+        _ChipAction(Icons.list_alt_rounded, 'Browse protocol chains',
+            () => context.push(RoutePaths.performanceProtocols)),
       ];
 
   List<_ChipAction> get _padChips => [
@@ -316,7 +351,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     final preselected = ref.read(selectedClientProvider);
     if (preselected != null &&
         ref.read(sessionClientModeProvider) == ClientMode.client) {
-      _pickUser(preselected.displayName);
+      _pickUser(preselected.displayName, client: preselected);
       return;
     }
 
@@ -329,7 +364,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           hot: true),
       for (final m in members)
         _ChipAction(Icons.person_outline_rounded, m.clientName,
-            () => _pickUser(m.clientName)),
+            () => _pickUser(m.clientName, client: m)),
       _ChipAction(
         uni ? Icons.person_add_alt_1_rounded : Icons.person_add_alt_1_rounded,
         uni ? 'Add player' : 'Add client',
@@ -340,9 +375,348 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     ]);
   }
 
-  void _pickUser(String name) {
+  void _pickUser(String name, {Client? client}) {
     _me(name);
-    _ai('Great — $name. Where’s the focus area?').then((_) => _showAreas());
+    _perfClient = client;
+    _perfWho = name;
+    _perfDiscipline = null;
+    _perfRole = null;
+    _perfSubtype = null;
+    _perfStartDiscipline();
+  }
+
+  // ── Performance: the pad_protocols catalogue (discipline → role → chain) ────
+  //
+  // Chip-for-chip the UI spec's `perfFlowSportAsk` → `perfFlowPosition` →
+  // `perfFlowPlacements`, with the catalogue endpoints behind it instead of the
+  // spec's seeded PLAYBOOK data.
+
+  Future<void> _perfStartDiscipline() async {
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final List<Discipline> disciplines;
+    try {
+      disciplines = await ref.read(disciplinesProvider.future);
+    } catch (e) {
+      return _failStep('Couldn’t load disciplines', _perfStartDiscipline, e);
+    }
+    if (!mounted) return;
+    setState(() => _typing = false);
+
+    // Reached only when the service answered with a real, empty list — a
+    // response we couldn't read throws above and lands in `_failStep`, so this
+    // never blames the account for a wiring problem.
+    if (disciplines.isEmpty) {
+      await _ai('No performance disciplines are authored for this account yet.');
+      _showChips([
+        _ChipAction(Icons.refresh_rounded, 'Try again', _perfStartDiscipline),
+        _ChipAction(Icons.waves_rounded, 'Recovery instead', _onRecovery),
+      ]);
+      return;
+    }
+
+    // The spec's fast path: the player's stored sport + position already resolve
+    // in the catalogue, so don't ask what we already know.
+    final fast = await _fastPathFor(disciplines);
+    if (fast != null) {
+      _me('${fast.$1.label} · ${fast.$2}');
+      _perfDiscipline = fast.$1.discipline;
+      _perfDisciplineLabel = fast.$1.label;
+      return _perfPickRole(fast.$2);
+    }
+
+    // A single discipline needs no question (spec: `keys.length === 1` skips).
+    if (disciplines.length == 1) {
+      _perfDiscipline = disciplines.first.discipline;
+      _perfDisciplineLabel = disciplines.first.label;
+      return _perfStartRole();
+    }
+
+    await _ai('What are we prepping for?');
+    _showChips([
+      for (final d in disciplines.take(8))
+        _ChipAction(Icons.sports_rounded, d.label, () {
+          _me(d.label);
+          _perfDiscipline = d.discipline;
+          _perfDisciplineLabel = d.label;
+          _perfStartRole();
+        }, hot: _matchesClientSport(d)),
+      if (disciplines.length > 8)
+        _ChipAction(Icons.grid_view_rounded, 'Browse all disciplines…',
+            () => _showDisciplineSheet(disciplines)),
+    ]);
+  }
+
+  Future<void> _perfStartRole() async {
+    final discipline = _perfDiscipline;
+    if (discipline == null) return _perfStartDiscipline();
+
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final List<RoleOption> roles;
+    try {
+      roles = await ref.read(rolesProvider(discipline).future);
+    } catch (e) {
+      return _failStep('Couldn’t load positions', _perfStartRole, e);
+    }
+    if (!mounted) return;
+    setState(() => _typing = false);
+
+    if (roles.isEmpty) {
+      await _ai('No positions are authored for $_perfDisciplineLabel yet.');
+      _showChips([
+        _ChipAction(Icons.edit_outlined, 'Pick another discipline',
+            _perfStartDiscipline),
+      ]);
+      return;
+    }
+
+    final clientPositions = await _clientPositionNames();
+    await _ai('Select the position or line group.');
+    _showChips([
+      for (final r in roles)
+        _ChipAction(Icons.groups_2_outlined, r.label, () {
+          _me(r.label);
+          _perfSubtype = r.subtype;
+          _perfPickRole(r.role);
+        },
+            hot: clientPositions
+                .any((p) => p.toLowerCase() == r.role.toLowerCase())),
+    ]);
+  }
+
+  Future<void> _perfPickRole(String role) async {
+    _perfRole = role;
+    final discipline = _perfDiscipline;
+    if (discipline == null) return _perfStartDiscipline();
+
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final List<ChainSummary> chains;
+    try {
+      chains = await ref.read(
+        chainsProvider(ChainsQuery(discipline, role, subtype: _perfSubtype))
+            .future,
+      );
+    } catch (e) {
+      return _failStep('Couldn’t load chains', () => _perfPickRole(role), e);
+    }
+    if (!mounted) return;
+    setState(() => _typing = false);
+
+    if (chains.isEmpty) {
+      await _ai('No chains are authored for $role yet.');
+      _showChips([
+        _ChipAction(
+            Icons.edit_outlined, 'Pick another position', _perfStartRole),
+      ]);
+      return;
+    }
+
+    // A MENU, not a ranking — these carry no scores, so no "closest match"
+    // language (the exact bug e5ef4f6 fixed).
+    await _ai('Here are the chains for $role.');
+    _showChips([
+      for (final c in chains)
+        _ChipAction(Icons.link_rounded, c.label, () {
+          _me(c.label);
+          _perfPads(c);
+        }),
+    ]);
+  }
+
+  Future<void> _perfPads(ChainSummary chain) async {
+    final discipline = _perfDiscipline;
+    final role = _perfRole;
+    if (discipline == null || role == null) return _perfStartDiscipline();
+
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    try {
+      final payload = await ref.read(performanceRemoteSourceProvider).chain(
+            discipline: discipline,
+            role: role,
+            chainId: chain.chainId,
+            subtype: _perfSubtype,
+            sessionId: ref.read(performanceSessionIdProvider),
+          );
+      if (!mounted) return;
+      setState(() => _typing = false);
+
+      // The catalogue runs the same safety guard as retrieval — a block answers
+      // `chain: null`, never pads.
+      if (payload.isRefusal) return _refusal(payload.refusalMessage);
+
+      await _showPlacement(payload);
+    } on PerformanceRefusal catch (r) {
+      if (!mounted) return;
+      setState(() => _typing = false);
+      _refusal(r.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _typing = false);
+      _failStep('Couldn’t load the pad set', () => _perfPads(chain), e);
+    }
+  }
+
+  /// The spec's `.placecard` + its delayed follow-up chips.
+  Future<void> _showPlacement(PadSetPayload payload) async {
+    final context = payload.contextLine;
+    await _ai('Placements ready for $_perfWho'
+        '${context.isEmpty ? '' : ' — $context'}.');
+    if (!mounted) return;
+    setState(() => _messages.add(_Msg.card(payload)));
+    _scrollToEnd();
+
+    // The spec delays these by ~600 ms so the card lands first.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.autorenew_rounded, 'Prep another user', _onPerformance),
+      _ChipAction(Icons.edit_outlined, 'Change position', _perfStartRole),
+    ]);
+  }
+
+  void _openPadMap(PadSetPayload payload) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PadMapScreen(
+          payload: payload,
+          clientName: _perfWho,
+        ),
+      ),
+    );
+  }
+
+  /// A safety-guard block: show what the service said, offer a way onward, and
+  /// never open the 3D view.
+  void _refusal(String? message) {
+    _messages.add(_Msg(
+      false,
+      message ??
+          'I can’t bring up a placement for that. If this is urgent, please '
+              'get in-person care.',
+    ));
+    setState(() {});
+    _scrollToEnd();
+    _showChips([
+      _ChipAction(Icons.link_rounded, 'Try another chain', _perfStartRole),
+      _ChipAction(Icons.waves_rounded, 'Recovery instead', _onRecovery),
+    ]);
+  }
+
+  /// [detail] carries the server's own words (wrong base URL, unreadable
+  /// payload, timeout) — without it every failure reads the same and there's
+  /// nothing to act on.
+  Future<void> _failStep(String message, VoidCallback retry,
+      [Object? detail]) async {
+    if (!mounted) return;
+    setState(() => _typing = false);
+    final because = detail == null ? '' : '\n\n${_reason(detail)}';
+    await _ai('$message — tap to retry.$because');
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.refresh_rounded, 'Try again', retry),
+      _ChipAction(Icons.home_rounded, 'Start over', () => setState(_initialize)),
+    ]);
+  }
+
+  static String _reason(Object error) {
+    if (error is ServerException) return error.message;
+    return error.toString();
+  }
+
+  void _showDisciplineSheet(List<Discipline> all) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _DisciplineSheet(
+        disciplines: all,
+        onPick: (d) {
+          Navigator.of(context).pop();
+          _me(d.label);
+          _perfDiscipline = d.discipline;
+          _perfDisciplineLabel = d.label;
+          _perfStartRole();
+        },
+      ),
+    );
+  }
+
+  bool _matchesClientSport(Discipline d) {
+    final sport = _perfClient?.sport?.trim().toLowerCase();
+    if (sport == null || sport.isEmpty) return false;
+    return d.label.toLowerCase() == sport ||
+        d.discipline.toLowerCase() == sport;
+  }
+
+  /// The player's position names, resolved from the org's sport mapping (the
+  /// client model stores Position ObjectIds, not names).
+  Future<List<String>> _clientPositionNames() async {
+    final ids = _perfClient?.positions ?? const [];
+    if (ids.isEmpty) return const [];
+    try {
+      final sports = await ref.read(orgSportsProvider.future);
+      final names = <String>[];
+      for (final sport in sports) {
+        for (final pos in sport.positions) {
+          if (ids.contains(pos.id)) names.add(pos.name);
+        }
+      }
+      return names;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// The spec's deterministic fast path: sport + position already on the
+  /// profile → skip both questions and go straight to chains.
+  Future<(Discipline, String)?> _fastPathFor(
+      List<Discipline> disciplines) async {
+    final client = _perfClient;
+    if (client == null) return null;
+    Discipline? discipline;
+    for (final d in disciplines) {
+      if (_matchesClientSport(d)) {
+        discipline = d;
+        break;
+      }
+    }
+    if (discipline == null) return null;
+
+    final positions = await _clientPositionNames();
+    if (positions.isEmpty) return null;
+    try {
+      final roles = await ref.read(rolesProvider(discipline.discipline).future);
+      for (final r in roles) {
+        for (final pos in positions) {
+          if (r.role.toLowerCase() == pos.toLowerCase()) {
+            _perfSubtype = r.subtype;
+            return (discipline, r.role);
+          }
+        }
+      }
+    } catch (_) {
+      // Fall back to asking.
+    }
+    return null;
   }
 
   // Recovery → pick a discomfort area, then a range-of-motion check.
@@ -366,11 +740,12 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     _me(name);
     if (_recovery) {
       await _showRoms(name);
-    } else {
-      // Performance path — left as-is (no ROM step, no API).
-      await _ai('Here’s a Sun & Moon pad placement for $name. Open the Devices '
-          'tab to load it and start the session.');
+      return;
     }
+    // Performance doesn't go by body area — it goes discipline → role → chain
+    // through the pad_protocols catalogue. Reachable only if an area chip is
+    // still on screen when the flow switched.
+    await _perfStartDiscipline();
   }
 
   // ── Recovery: range-of-motion step (guided-assessment tests) ────────────────
@@ -755,8 +1130,134 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return;
     }
     _me(text);
-    _ai('Got it. I’m a demo assistant for now — tap a suggestion above, or head '
-        'to the Devices tab to start a session.');
+    _perfChat(text);
+  }
+
+  // ── Typed text → performance-chat (the query path, conversationally) ────────
+
+  /// `POST performance-chat/message`. [_slots] is threaded back every turn —
+  /// that is the conversation memory, so a follow-up doesn't re-ask the
+  /// discipline. The reply's `render`/`results` are the query service's output
+  /// verbatim, so pads render through the same card as the catalogue path.
+  Future<void> _perfChat(String text) async {
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final ChatReply reply;
+    try {
+      reply = await ref.read(performanceRemoteSourceProvider).chatMessage(
+            message: text,
+            sessionId: ref.read(performanceSessionIdProvider),
+            slots: _slots,
+            screenAnswers: _screenAnswers(),
+          );
+    } on PerformanceRefusal catch (r) {
+      if (!mounted) return;
+      setState(() => _typing = false);
+      return _refusal(r.message);
+    } catch (e) {
+      return _failStep(
+          'Couldn’t reach the assistant', () => _perfChat(text), e);
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _typing = false;
+      if (reply.slots.isNotEmpty) _slots = reply.slots;
+    });
+    _adoptSlots(reply.slots);
+
+    if (reply.reply.trim().isNotEmpty) {
+      setState(() => _messages.add(_Msg(false, reply.reply.trim())));
+      _scrollToEnd();
+    } else if (reply.needs.isNotEmpty) {
+      await _ai('I need a bit more first: ${reply.needs.join(', ')}.');
+    }
+
+    if (reply.hasPads) {
+      final ranked = reply.results;
+      setState(() => _messages.add(_Msg.card(ranked.first.payload)));
+      _scrollToEnd();
+      _showChips([
+        // These DO carry scores, so ranking language is honest here.
+        for (final r in ranked.skip(1).take(3))
+          _ChipAction(
+            Icons.link_rounded,
+            r.payload.chain?.name ?? 'Another match',
+            () {
+              _me(r.payload.chain?.name ?? 'Another match');
+              setState(() => _messages.add(_Msg.card(r.payload)));
+              _scrollToEnd();
+            },
+          ),
+        _ChipAction(
+            Icons.autorenew_rounded, 'Prep a user instead', _onPerformance),
+      ]);
+      return;
+    }
+
+    if (reply.options.isNotEmpty) {
+      // A MENU for the resolved role — the whole catalogue, unscored. Calling
+      // these "closest matches" would be the bug e5ef4f6 fixed.
+      final role = _perfRole ?? (reply.slots['role']?.toString() ?? '');
+      await _ai(role.isEmpty
+          ? 'Here are the chains I have.'
+          : 'Here are the chains for $role.');
+      _showChips([
+        for (final c in reply.options)
+          _ChipAction(Icons.link_rounded, c.label, () {
+            _me(c.label);
+            _perfSubtype ??= c.subtype;
+            _perfPads(c);
+          }),
+      ]);
+      return;
+    }
+
+    if (reply.reply.trim().isEmpty && reply.needs.isEmpty) {
+      await _ai('I don’t have a placement for that yet. Try naming the sport '
+          'and position, or tap a suggestion.');
+    }
+    _showChips(_homeChips);
+  }
+
+  /// Adopts whatever the service resolved so a later chain tap can call
+  /// `/chain` with the right discipline and role.
+  void _adoptSlots(Map<String, dynamic> slots) {
+    final discipline = slots['discipline']?.toString();
+    final role = slots['role']?.toString();
+    final subtype = slots['subtype']?.toString();
+    if (discipline != null && discipline.trim().isNotEmpty) {
+      _perfDiscipline = discipline;
+      _perfDisciplineLabel =
+          slots['display_name']?.toString() ?? _perfDisciplineLabel;
+    }
+    if (role != null && role.trim().isNotEmpty) _perfRole = role;
+    if (subtype != null && subtype.trim().isNotEmpty && subtype != 'null') {
+      _perfSubtype = subtype;
+    }
+  }
+
+  /// What the practitioner has already told the app — the guided-assessment
+  /// areas plus this conversation's answers. `{}` when nothing was collected.
+  Map<String, dynamic> _screenAnswers() {
+    final areas = ref.read(guidedAssessmentProvider).discomfortAreas;
+    return {
+      if (_answers.isNotEmpty) ..._answers,
+      if (_assessmentArea != null) 'area': _assessmentArea,
+      if (areas.isNotEmpty)
+        'discomfortAreas': [
+          for (final a in areas)
+            {
+              'bodyPart': a.bodyPart,
+              'side': a.side.value,
+              'discomfort': a.discomfortBefore,
+            }
+        ],
+    };
   }
 
   /// An icon for a body area (keyword-mapped; falls back to a body figure).
@@ -837,7 +1338,21 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 controller: _scroll,
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 children: [
-                  for (final m in _messages) _Bubble(palette: p, msg: m),
+                  for (final m in _messages)
+                    if (m.placement != null)
+                      PlacementCard(
+                        payload: m.placement!,
+                        onOpen3D: () => _openPadMap(m.placement!),
+                        onGoToSession: () => goToSessionFromPlacement(
+                          context,
+                          ref,
+                          payload: m.placement!,
+                          client: _perfClient,
+                          clientName: _perfWho,
+                        ),
+                      )
+                    else
+                      _Bubble(palette: p, msg: m),
                   if (_typing) _TypingBubble(palette: p),
                   if (_chipsVisible && _chips.isNotEmpty)
                     Padding(
@@ -1118,6 +1633,130 @@ class _MicSendButton extends StatelessWidget {
           ),
           child: const Icon(Icons.send_rounded,
               size: 20, color: Color(0xFF2B1D12)),
+        ),
+      ),
+    );
+  }
+}
+
+/// The searchable discipline picker — the spec's `allSportsSheet()`: a search
+/// field over the full catalogue so a long list stays usable when chips don't.
+class _DisciplineSheet extends StatefulWidget {
+  final List<Discipline> disciplines;
+  final ValueChanged<Discipline> onPick;
+
+  const _DisciplineSheet({required this.disciplines, required this.onPick});
+
+  @override
+  State<_DisciplineSheet> createState() => _DisciplineSheetState();
+}
+
+class _DisciplineSheetState extends State<_DisciplineSheet> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final q = _query.trim().toLowerCase();
+    final list = q.isEmpty
+        ? widget.disciplines
+        : widget.disciplines
+            .where((d) => d.label.toLowerCase().contains(q))
+            .toList();
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      maxChildSize: 0.92,
+      expand: false,
+      builder: (_, scrollController) => Container(
+        decoration: BoxDecoration(
+          color: p.bg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+        child: Column(
+          children: [
+            Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                color: p.line,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'All ${widget.disciplines.length} disciplines',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: p.ink,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              autofocus: true,
+              onChanged: (v) => setState(() => _query = v),
+              style: TextStyle(color: p.ink, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search disciplines…',
+                hintStyle: TextStyle(color: p.ink3),
+                prefixIcon: Icon(Icons.search_rounded, color: p.ink3, size: 18),
+                filled: true,
+                fillColor: p.card,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: BorderSide(color: p.line, width: 1.5),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: BorderSide(color: p.line, width: 1.5),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: BorderSide(color: p.copper, width: 1.5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: list.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No match — new disciplines appear here as their pad '
+                        'protocols land.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, color: p.ink3),
+                      ),
+                    )
+                  : ListView.separated(
+                      controller: scrollController,
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => Divider(
+                        height: 1,
+                        color: p.divider,
+                      ),
+                      itemBuilder: (_, i) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          list[i].label,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: p.ink,
+                          ),
+                        ),
+                        trailing:
+                            Icon(Icons.chevron_right_rounded, color: p.ink3),
+                        onTap: () => widget.onPick(list[i]),
+                      ),
+                    ),
+            ),
+          ],
         ),
       ),
     );

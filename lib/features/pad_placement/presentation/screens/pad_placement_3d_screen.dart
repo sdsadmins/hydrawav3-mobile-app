@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../widgets/pad_anatomy_view.dart';
 
 /// Full-screen 3D Sun/Moon pad-placement viewer — the mobile port of the web
 /// `AnatomyScene` (Hydrawave3 `apps/web/src/components/AnatomyScene.jsx`).
@@ -38,19 +36,9 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
   static const _muted = Color(0xFF6B7280);
   static const _ink = Color(0xFF1A1A1A);
 
-  // Same shared server the kinetic-chain viewer uses (`shared: true` makes
-  // start() idempotent across screens and re-entries).
-  static final InAppLocalhostServer _server = InAppLocalhostServer(
-    documentRoot: 'assets/3d',
-    port: 8080,
-    shared: true,
-  );
-
-  InAppWebViewController? _controller;
-  bool _serverReady = false;
-  bool _loading = true;
-  bool _webglError = false;
-  String? _serverError;
+  // The WebView bridge (localhost server, ready-poll, marker injection) lives in
+  // `PadAnatomyView`, shared with the performance pad map.
+  final _anatomy = PadAnatomyController();
   bool _showLabels = true;
   String _view = 'front';
 
@@ -71,85 +59,9 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
 
-  @override
-  void initState() {
-    super.initState();
-    _startServer();
-  }
+  void _toggleLabels() => setState(() => _showLabels = !_showLabels);
 
-  Future<void> _startServer() async {
-    try {
-      if (!_server.isRunning()) {
-        await _server.start();
-      }
-      if (mounted) setState(() => _serverReady = true);
-    } catch (e) {
-      // Another screen may already hold the port — treat a running server as OK.
-      if (_server.isRunning()) {
-        if (mounted) setState(() => _serverReady = true);
-        return;
-      }
-      if (mounted) {
-        setState(() {
-          _serverError = e.toString();
-          _loading = false;
-        });
-      }
-    }
-  }
-
-  /// Poll `window.__ready`, then inject the markers. The viewer sets `__ready`
-  /// once the GLB is parsed (or immediately if WebGL is unavailable).
-  Future<void> _injectWhenReady() async {
-    final controller = _controller;
-    if (controller == null) return;
-    for (var i = 0; i < 100; i++) {
-      final ready = await controller.evaluateJavascript(
-        source: 'window.__ready === true',
-      );
-      if (ready == true || ready == 'true') {
-        final webglError = await controller.evaluateJavascript(
-          source: 'window.__webglError === true',
-        );
-        if (webglError == true || webglError == 'true') {
-          if (mounted) {
-            setState(() {
-              _webglError = true;
-              _loading = false;
-            });
-          }
-          return;
-        }
-        await controller.evaluateJavascript(
-          source: 'window.renderPadPlacement(${jsonEncode(_markers)})',
-        );
-        await controller.evaluateJavascript(
-          source: 'window.setLabels($_showLabels)',
-        );
-        if (mounted) setState(() => _loading = false);
-        return;
-      }
-      await Future.delayed(const Duration(milliseconds: 100));
-    }
-    if (mounted) {
-      setState(() {
-        _webglError = true;
-        _loading = false;
-      });
-    }
-  }
-
-  void _eval(String js) => _controller?.evaluateJavascript(source: js);
-
-  void _toggleLabels() {
-    setState(() => _showLabels = !_showLabels);
-    _eval('window.setLabels($_showLabels)');
-  }
-
-  void _setView(String v) {
-    setState(() => _view = v);
-    _eval("window.setView('$v')");
-  }
+  void _setView(String v) => setState(() => _view = v);
 
   @override
   Widget build(BuildContext context) {
@@ -175,12 +87,6 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
   }
 
   Widget _body() {
-    if (_serverError != null) {
-      return _fallback('Couldn\'t start the 3D viewer.\n$_serverError');
-    }
-    if (_webglError) {
-      return _fallback('3D is not supported on this device.');
-    }
     if (_markers.isEmpty) {
       return _fallback(
         'No pad markers to show for this placement yet.',
@@ -191,35 +97,16 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
         Expanded(
           child: Stack(
             children: [
-              if (_serverReady)
-                Positioned.fill(
-                  child: InAppWebView(
-                    initialUrlRequest: URLRequest(
-                      url: WebUri('http://localhost:8080/pad_placement.html'),
-                    ),
-                    initialSettings: InAppWebViewSettings(
-                      javaScriptEnabled: true,
-                      mediaPlaybackRequiresUserGesture: false,
-                      allowsInlineMediaPlayback: true,
-                      hardwareAcceleration: true,
-                      useHybridComposition: true,
-                      transparentBackground: true,
-                      supportZoom: false,
-                    ),
-                    onWebViewCreated: (c) => _controller = c,
-                    onLoadStop: (c, url) => _injectWhenReady(),
-                    onConsoleMessage: (c, msg) {
-                      debugPrint(
-                          '[PadPlacement3D] ${msg.messageLevel}: ${msg.message}');
-                    },
-                  ),
+              Positioned.fill(
+                child: PadAnatomyView(
+                  markers: _markers,
+                  view: _view,
+                  showLabels: _showLabels,
+                  controller: _anatomy,
                 ),
+              ),
               Positioned(top: 10, right: 10, child: _controls()),
               Positioned(top: 10, left: 10, child: _viewSwitcher()),
-              if (_loading)
-                Center(
-                  child: CircularProgressIndicator(color: ThemeConstants.accent),
-                ),
             ],
           ),
         ),
@@ -302,10 +189,9 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                btn(Icons.add, () => _eval('window.zoomIn()')),
-                btn(Icons.remove, () => _eval('window.zoomOut()')),
-                btn(Icons.refresh, () => _eval('window.resetView()'),
-                    border: false),
+                btn(Icons.add, _anatomy.zoomIn),
+                btn(Icons.remove, _anatomy.zoomOut),
+                btn(Icons.refresh, _anatomy.reset, border: false),
               ],
             ),
           ),

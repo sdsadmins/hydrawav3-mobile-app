@@ -6,16 +6,23 @@ three.js fork** of the web `Hydrawav3-ai` viewer — changes there do not auto-f
 here; re-port and rebuild.
 
 ## Files
-- `viewer.src.js` — the ported viewer (matching logic, materials, camera, chain
+- `viewer.src.js` — the ported kinetic-chain viewer (materials, camera, chain
   line, labels). Ported from `Hydrawav3-ai/lib/zAnatomyModel.ts`,
   `lib/zAnatomyMapping.ts`, and `components/ai/ZAnatomyViewer.tsx`.
+- `pad_placement.src.js` — the Sun/Moon pad viewer (`AnatomyScene` port). Serves
+  both the recovery placement engine and the performance pad sets; resolves a pad
+  to a calibrated landmark, else to the target muscle's mesh geometry, else
+  reports it on `window.__unmapped` and draws nothing.
+- `muscle_resolve.js` — SHARED muscle-name → mesh-name resolution (normalize,
+  static `MAPPING`, fuzzy, side filter) imported by both viewers. Fix name
+  matching here and both get it.
 - `mapping.js` — AUTO-GENERATED from `Hydrawav3-ai/lib/zAnatomyMapping.ts`
   (the `MAPPING` dict). Re-extract when the web mapping changes (see below).
 
 ## Rebuild
 ```bash
 npm install          # once
-npm run build        # -> ../../assets/3d/viewer.bundle.js
+npm run build        # -> ../../assets/3d/{viewer,pad_placement}.bundle.js
 ```
 
 ## Re-extract the MAPPING dict (if web mapping changed)

@@ -62,6 +62,9 @@ class RouteNames {
 
   // Assistant (suggestion-led chat)
   static const String assistant = 'assistant';
+
+  // Performance protocol chains (pad_protocols catalogue, as dropdowns)
+  static const String performanceProtocols = 'performance-protocols';
 }
 
 class RoutePaths {
@@ -109,4 +112,5 @@ class RoutePaths {
   static const String presets = '/presets';
   static const String chat = '/chat';
   static const String assistant = '/assistant';
+  static const String performanceProtocols = '/performance-protocols';
 }
