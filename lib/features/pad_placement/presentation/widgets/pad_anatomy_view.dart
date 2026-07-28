@@ -26,7 +26,19 @@ class PadAnatomyView extends StatefulWidget {
   final bool showLabels;
 
   /// Muscles to tint behind the pads (the GLB is per-muscle). Empty = plain skin.
+  /// Ignored when [padStyle] is `'muscle'`: that mode colours each marker's OWN target muscles by
+  /// role, so it needs no separate list.
   final List<String> highlightMuscles;
+
+  /// `'dot'`    — a Sun/Moon disc + S1/M1 badge on the skin.
+  /// `'muscle'` — NO disc and NO badge; the target muscle itself is painted red (Sun) or blue (Moon).
+  ///              Web parity with `padStyle="muscle"` in `AnatomyScene`.
+  final String padStyle;
+
+  /// Muscle Mode's "solid body" half — stops the un-targeted skin being see-through, so the coloured
+  /// muscles read as part of a body rather than floating in a translucent shell.
+  /// Web parity: `transparentBody={!muscleMode}`.
+  final bool muscleMode;
 
   final PadAnatomyController? controller;
 
@@ -42,6 +54,8 @@ class PadAnatomyView extends StatefulWidget {
     this.view = 'front',
     this.showLabels = true,
     this.highlightMuscles = const [],
+    this.padStyle = 'dot',
+    this.muscleMode = false,
     this.controller,
     this.onUnmapped,
     this.onReady,
@@ -90,11 +104,15 @@ class _PadAnatomyViewState extends State<PadAnatomyView> {
       widget.controller?._state = this;
     }
     if (_loading || _webglError) return;
+    // padStyle FIRST: it decides whether a marker becomes a disc or a coloured muscle, so applying it
+    // after the marker render would draw the old style for one frame.
+    if (old.padStyle != widget.padStyle) _applyPadStyle();
     if (!_sameMarkers(old.markers, widget.markers)) _renderMarkers();
     if (old.view != widget.view) _eval("window.setView('${widget.view}')");
     if (old.showLabels != widget.showLabels) {
       _eval('window.setLabels(${widget.showLabels})');
     }
+    if (old.muscleMode != widget.muscleMode) _applyMuscleMode();
     if (!_sameStrings(old.highlightMuscles, widget.highlightMuscles)) {
       _applyHighlight();
     }
@@ -149,6 +167,10 @@ class _PadAnatomyViewState extends State<PadAnatomyView> {
           }
           return;
         }
+        // BEFORE the first render: padStyle decides whether a marker becomes a disc or a coloured
+        // muscle, so setting it afterwards would flash the wrong style on the very first frame.
+        await _applyPadStyle();
+        await _applyMuscleMode();
         await _renderMarkers();
         await controller.evaluateJavascript(
           source: 'window.setLabels(${widget.showLabels})',
@@ -192,10 +214,27 @@ class _PadAnatomyViewState extends State<PadAnatomyView> {
   Future<void> _applyHighlight() async {
     final controller = _controller;
     if (controller == null) return;
+    // Muscle style colours from the markers themselves, so a flat highlight list would fight it.
+    if (widget.padStyle == 'muscle') return;
     // Older bundles don't have setHighlight — guard so they keep working.
     await controller.evaluateJavascript(
       source: 'window.setHighlight && '
           'window.setHighlight(${jsonEncode(widget.highlightMuscles)})',
+    );
+  }
+
+  /// Every new bridge call is feature-detected. A stale `pad_placement.bundle.js` (someone pulled the
+  /// Dart change without re-running `npm run build:pads`) then keeps rendering the old dot style
+  /// instead of throwing a JS error into a WebView nobody is watching.
+  Future<void> _applyPadStyle() async {
+    await _controller?.evaluateJavascript(
+      source: "window.setPadStyle && window.setPadStyle('${widget.padStyle}')",
+    );
+  }
+
+  Future<void> _applyMuscleMode() async {
+    await _controller?.evaluateJavascript(
+      source: 'window.setMuscleMode && window.setMuscleMode(${widget.muscleMode})',
     );
   }
 

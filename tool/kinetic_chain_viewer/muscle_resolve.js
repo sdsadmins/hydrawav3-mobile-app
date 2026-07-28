@@ -306,13 +306,20 @@ function getHighlightMeshNames(muscles) {
 }
 /// The full pipeline for one clinical muscle name: static map -> normalized
 /// lookup -> side filter -> fuzzy fallback. Returns GLB mesh names.
+///
+/// `preferredSide` ("left" | "right" | null) applies ONLY when the name does not state a side itself.
+/// The web's `sideStrict` markers depend on it: a performance pad names a plain muscle
+/// ("Gluteus medius muscle") and carries its side on the MARKER, so without this a one-sided chain
+/// highlights both limbs and reads as bilateral.
 export function resolveMuscleToMeshes(
   name,
   allMeshNames,
   normalizedLookup,
   meshSideMap,
+  preferredSide = null,
 ) {
-  const specifiedSide = extractSide(name);
+  // A side written into the name always wins — it is what the author actually asked for.
+  const specifiedSide = extractSide(name) || preferredSide || null;
   const staticMatches = getHighlightMeshNames([name]);
   let matched = [];
   for (const staticName of staticMatches) {

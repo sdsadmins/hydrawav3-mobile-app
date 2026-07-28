@@ -313,9 +313,50 @@ class PadPlacementViewData {
 
   /// Markers to hand to `window.renderPadPlacement`. Tier-3 pads are omitted on
   /// purpose — better a missing disc than a confident wrong one.
-  List<Map<String, dynamic>> markers({int? focusSetIndex}) => padsFor(
-        focusSetIndex,
-      ).where((p) => !p.isUnmapped).map((p) => p.toMarker()).toList();
+  ///
+  /// [mirrored] flips the whole chain to the opposite side. [bilateral] draws it on BOTH sides at
+  /// once — and because that already shows both, mirroring on top of it would be a no-op, so it is
+  /// IGNORED rather than half-applied (the web reached the same conclusion in its Jul 25 review).
+  ///
+  /// Under [bilateral] each pad yields TWO markers whose `zone` keys carry the side; without that the
+  /// pair collapses into one identity and only one of them renders.
+  List<Map<String, dynamic>> markers({
+    int? focusSetIndex,
+    bool mirrored = false,
+    bool bilateral = false,
+  }) {
+    final out = <Map<String, dynamic>>[];
+    for (final pad in padsFor(focusSetIndex)) {
+      if (pad.isUnmapped) continue;
+      final base = _effectiveSide(pad, bilateral ? false : mirrored);
+      final sides = bilateral
+          ? <String>[base, base == 'right' ? 'left' : 'right']
+          : <String>[base];
+      for (final side in sides) {
+        final marker = Map<String, dynamic>.of(pad.toMarker());
+        marker['side'] = side;
+        // Opt into the viewer's geometry-backed single-side highlight: a performance pad names a
+        // plain muscle and carries its side HERE, so without this flag both limbs light up and a
+        // one-sided chain reads as bilateral.
+        marker['sideStrict'] = true;
+        if (bilateral) {
+          marker['zone'] = '${marker['zone'] ?? 'perf'}-$side';
+          marker['label'] = '${marker['label'] ?? ''} — $side side (bilateral)'.trim();
+        }
+        out.add(marker);
+      }
+    }
+    return out;
+  }
+
+  /// Ported verbatim from the web's `effectiveSide`: an unsided pad defaults to RIGHT, and mirroring
+  /// swaps whichever side it ended up on.
+  static String _effectiveSide(ResolvedPad pad, bool mirrored) {
+    var side = pad.pad.sideKey ?? 'right';
+    if (side != 'left' && side != 'right') side = 'right';
+    if (mirrored) side = side == 'right' ? 'left' : 'right';
+    return side;
+  }
 
   ResolvedPad? padOf(int setIndex, String role) {
     for (final p in pads) {

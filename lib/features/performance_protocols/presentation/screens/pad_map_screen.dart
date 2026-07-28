@@ -38,6 +38,32 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   bool _showLabels = true;
   bool _showMuscles = false;
 
+  // ---- web-parity view options (PerformanceProtocolStoreFlow.jsx) ------------------------------
+  // The same four options the web exposes above its AnatomyScene, with the same semantics, so one
+  // chain reads identically in both clients.
+
+  /// Muscle Mode: the target muscle IS the indicator — painted red (Sun) / blue (Moon) with NO disc
+  /// and NO badge on the body — and the un-targeted skin goes solid. Web parity:
+  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults ON, matching the web view.
+  bool _muscleMode = true;
+
+  /// Off = the focused set only. On = the whole chain at once.
+  bool _showAllSets = false;
+
+  /// Flip the whole chain to the opposite side. Disabled under [_bilateral], which shows both anyway.
+  bool _mirrored = false;
+
+  /// Draw the chain on BOTH sides at once. Wins over [_mirrored] rather than compounding with it —
+  /// mirroring something already drawn on both sides is a no-op, so it is ignored, not half-applied.
+  bool _bilateral = false;
+
+  /// What the mirror toggle reads. Bilateral overrides it, so say BOTH rather than naming a side that
+  /// is not what is on screen.
+  String get _mirrorLabel => _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
+
+  /// One source of truth for which pads are visible, so the stage, legend and notes cannot disagree.
+  int? get _visibleSetIndex => _showAllSets ? null : _focusSet;
+
   /// `setIndex:role` keys the viewer reported it could not place.
   Set<String> _unmappedByViewer = const {};
 
@@ -67,9 +93,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       pad.isUnmapped || _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
 
   List<String> get _highlightMuscles {
+    // Muscle Mode already colours every target muscle by role, from the markers themselves. Handing
+    // the viewer a second flat list on top would repaint them one uniform tint and destroy the
+    // Sun/Moon distinction — which in that mode is the ONLY thing marking the placement.
+    if (_muscleMode) return const [];
     if (!_showMuscles) return const [];
     return _data
-        .padsFor(_focusSet)
+        .padsFor(_visibleSetIndex)
         .expand((p) => p.pad.targetMuscles)
         .toSet()
         .toList();
@@ -107,6 +137,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   _focusChips(p, sets),
                   const SizedBox(height: HwSpace.s3),
                   _bodyStage(p),
+                  // Directly under the stage, as the web places them — the options describe what the
+                  // stage is showing, so putting them anywhere else breaks the association.
+                  _viewOptions(p),
                   const SizedBox(height: HwSpace.s2),
                   _legend(p, sets),
                   const SizedBox(height: HwSpace.s3),
@@ -147,8 +180,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     );
   }
 
-  List<PadSet> _shownSets(List<PadSet> sets) =>
-      _focusSet == null ? sets : [sets[_focusSet!]];
+  /// Goes through [_visibleSetIndex], not [_focusSet], so "Show all sets" widens the written notes in
+  /// step with the model. Notes describing a set that is not drawn is the mismatch this avoids.
+  List<PadSet> _shownSets(List<PadSet> sets) {
+    final index = _visibleSetIndex;
+    if (index == null) return sets;
+    return index >= 0 && index < sets.length ? [sets[index]] : sets;
+  }
 
   // ── head ───────────────────────────────────────────────────────────────────
 
@@ -279,9 +317,15 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         children: [
           Positioned.fill(
             child: PadAnatomyView(
-              markers: _data.markers(focusSetIndex: _focusSet),
+              markers: _data.markers(
+                focusSetIndex: _visibleSetIndex,
+                mirrored: _mirrored,
+                bilateral: _bilateral,
+              ),
               view: _view,
               showLabels: _showLabels,
+              padStyle: _muscleMode ? 'muscle' : 'dot',
+              muscleMode: _muscleMode,
               highlightMuscles: _highlightMuscles,
               controller: _anatomy,
               onUnmapped: (keys) {
@@ -343,6 +387,87 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         ],
       ),
     );
+  }
+
+  /// The web's four view options, in the web's order and with the web's wording.
+  ///
+  /// Mirror is DISABLED while Bilateral is on rather than silently doing nothing: bilateral already
+  /// draws both sides, so mirroring it would be a no-op, and a control that looks live but changes
+  /// nothing is worse than one that plainly says it does not apply.
+  Widget _viewOptions(RefPalette p) {
+    return Padding(
+      padding: const EdgeInsets.only(top: HwSpace.s3),
+      child: Wrap(
+        spacing: HwSpace.s2,
+        runSpacing: HwSpace.s2,
+        children: [
+          _optionChip(
+            p,
+            label: 'Muscle Mode (solid body)',
+            active: _muscleMode,
+            onTap: () => setState(() => _muscleMode = !_muscleMode),
+          ),
+          _optionChip(
+            p,
+            label: 'Show all sets',
+            active: _showAllSets,
+            onTap: () => setState(() => _showAllSets = !_showAllSets),
+          ),
+          _optionChip(
+            p,
+            label: 'Mirror — showing $_mirrorLabel',
+            active: _mirrored && !_bilateral,
+            enabled: !_bilateral,
+            onTap: () => setState(() => _mirrored = !_mirrored),
+          ),
+          _optionChip(
+            p,
+            label: 'Bilateral — both sides at once',
+            active: _bilateral,
+            onTap: () => setState(() => _bilateral = !_bilateral),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _optionChip(
+    RefPalette p, {
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+    bool enabled = true,
+  }) {
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: active ? p.copper : p.card,
+        borderRadius: BorderRadius.circular(HwRadius.xs),
+        border: Border.all(color: active ? p.copper : p.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            active ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+            size: 13,
+            color: active ? Colors.white : p.ink3,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+              color: active ? Colors.white : p.ink3,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!enabled) return Opacity(opacity: 0.45, child: chip);
+    return HwPress(onTap: onTap, child: chip);
   }
 
   Widget _stageToggle(

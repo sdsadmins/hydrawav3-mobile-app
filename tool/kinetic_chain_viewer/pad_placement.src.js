@@ -53,6 +53,15 @@ const COLORS = {
   muscle: "#C08A62", // target-muscle tint behind the pads
 };
 
+// MUSCLE PAD STYLE (padStyle === "muscle") — the target muscle mesh IS the indicator, coloured by
+// role, and no disc or badge is drawn on the body at all. These five values are lifted verbatim from
+// the web AnatomyScene (PERF_SUN_COLOR / PERF_MOON_COLOR and their emissives) so a Sun muscle is the
+// same red in both clients. Change them together with the web or the two stop agreeing.
+const PERF_SUN_COLOR = 0xff3b30; // red
+const PERF_MOON_COLOR = 0x2f80ff; // blue
+const PERF_SUN_EMISSIVE = 0x4d0f0b;
+const PERF_MOON_EMISSIVE = 0x0a2246;
+
 // ---------------------------------------------------------------------------
 // Shared calibrated landmarks (verbatim from placement-core anatomyCalibration)
 // ---------------------------------------------------------------------------
@@ -317,6 +326,17 @@ let skinMaterial = null;
 let highlightMaterial = null;
 let highlightedMuscles = [];
 
+// "dot"    — a Sun/Moon disc + S1/M1 badge on the skin (the original mobile look).
+// "muscle" — NO disc and NO badge: the target muscle is painted red (Sun) or blue (Moon), which is
+//            what the web shows under padStyle="muscle". Default stays "dot" so an older Flutter
+//            build that never calls setPadStyle behaves exactly as before.
+let padStyle = "dot";
+// Web parity: `transparentBody={!muscleMode}`. Muscle Mode ON = solid body.
+let solidBody = false;
+// Per-role muscle materials, built lazily and reused across renders.
+let sunMuscleMaterial = null;
+let moonMuscleMaterial = null;
+
 window.__ready = false;
 window.__webglError = false;
 window.__markers = [];
@@ -432,13 +452,61 @@ function applySkin(root) {
     opacity: 0.92,
     side: THREE.DoubleSide,
   });
+  syncSkinOpacity();
   root.traverse((o) => {
     if (o.isMesh) o.material = skinMaterial;
   });
 }
 
+// Muscle Mode reads as "solid body": the un-targeted skin stops being see-through so the red/blue
+// muscles sit ON a body rather than floating in a translucent shell. One shared material, so this is
+// a two-field update rather than a re-traverse.
+function syncSkinOpacity() {
+  if (!skinMaterial) return;
+  skinMaterial.opacity = solidBody ? 1 : 0.92;
+  skinMaterial.transparent = !solidBody;
+  skinMaterial.needsUpdate = true;
+}
+
 // Tint the pad's target muscles behind the discs — the GLB is per-muscle, so
 // "mid belly of the gluteus medius" can be shown, not just described.
+function roleMuscleMaterial(role) {
+  if (role === "moon") {
+    moonMuscleMaterial ??= new THREE.MeshStandardMaterial({
+      color: PERF_MOON_COLOR,
+      emissive: PERF_MOON_EMISSIVE,
+      emissiveIntensity: 0.6,
+      roughness: 0.45,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    return moonMuscleMaterial;
+  }
+  sunMuscleMaterial ??= new THREE.MeshStandardMaterial({
+    color: PERF_SUN_COLOR,
+    emissive: PERF_SUN_EMISSIVE,
+    emissiveIntensity: 0.6,
+    roughness: 0.45,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  return sunMuscleMaterial;
+}
+
+/**
+ * Which mesh gets which material.
+ *
+ * TWO MODES, and they answer different questions:
+ *
+ *   dot    — "which muscles sit behind these pads?" One flat tint over everything named in
+ *            `highlightedMuscles`, because the disc is what marks the placement.
+ *   muscle — "which muscle IS the Sun and which IS the Moon?" Per-marker, per-role: red for Sun,
+ *            blue for Moon, taken from each marker's own target muscles. There is no disc to carry
+ *            the role, so the colour has to.
+ *
+ * A mesh claimed by both a Sun and a Moon marker keeps the SUN colour (first write wins, Sun sorted
+ * first) rather than blending into a third colour that means nothing.
+ */
 function applyHighlight() {
   if (!modelScene) return;
   highlightMaterial ??= new THREE.MeshStandardMaterial({
@@ -450,21 +518,50 @@ function applyHighlight() {
     side: THREE.DoubleSide,
   });
 
-  const wanted = new Set();
-  for (const name of highlightedMuscles) {
-    for (const meshName of resolveMuscleToMeshes(
-      name,
-      allMeshNames,
-      normalizedLookup,
-      meshSideMap,
-    )) {
-      wanted.add(meshName);
+  const meshMaterial = new Map();
+
+  if (padStyle === "muscle") {
+    // Sun before Moon so the first-write-wins rule above is deterministic, not render-order luck.
+    const ordered = [...(window.__markers || [])].sort((a, b) => {
+      const ar = a.role === "moon" ? 1 : 0;
+      const br = b.role === "moon" ? 1 : 0;
+      return ar - br;
+    });
+    for (const marker of ordered) {
+      const role = marker.role === "moon" ? "moon" : "sun";
+      // `muscles` is the web's field name, `targetMuscles` the mobile mapper's. Accept both so one
+      // marker shape feeds both clients.
+      const names = marker.muscles || marker.targetMuscles || [];
+      for (const name of names) {
+        for (const meshName of resolveMuscleToMeshes(
+          name,
+          allMeshNames,
+          normalizedLookup,
+          meshSideMap,
+          marker.sideStrict ? marker.side : undefined,
+        )) {
+          if (!meshMaterial.has(meshName)) {
+            meshMaterial.set(meshName, roleMuscleMaterial(role));
+          }
+        }
+      }
+    }
+  } else {
+    for (const name of highlightedMuscles) {
+      for (const meshName of resolveMuscleToMeshes(
+        name,
+        allMeshNames,
+        normalizedLookup,
+        meshSideMap,
+      )) {
+        meshMaterial.set(meshName, highlightMaterial);
+      }
     }
   }
 
   modelScene.traverse((o) => {
     if (!o.isMesh) return;
-    o.material = wanted.has(o.name) ? highlightMaterial : skinMaterial;
+    o.material = meshMaterial.get(o.name) || skinMaterial;
   });
 }
 
@@ -641,6 +738,12 @@ function addPad(marker) {
     window.__unmapped.push(markerKey(marker));
     return;
   }
+  // MUSCLE STYLE DRAWS NOTHING ON THE BODY. The target muscle mesh itself is the indicator, painted
+  // red (Sun) or blue (Moon) in applyHighlight() — so the disc, the contact patch and the S1/M1 badge
+  // are all skipped, exactly as the web does under padStyle="muscle". Resolution still ran above, so
+  // an unplaceable pad is still reported through __unmapped rather than silently vanishing.
+  if (padStyle === "muscle") return;
+
   const snapped = snapToSurface(lm.position, lm.normal);
   const n = new THREE.Vector3(lm.normal[0], lm.normal[1], lm.normal[2]).normalize();
 
@@ -732,6 +835,44 @@ window.renderPadPlacement = function (markers) {
   window.__markers = Array.isArray(markers) ? markers : [];
   if (!window.__ready || !modelScene) return; // loadModel() replays it
   renderMarkers(window.__markers);
+  // Muscle style colours FROM the markers, so a new marker list has to recolour. In dot style this is
+  // a no-op beyond re-tinting whatever setHighlight last asked for.
+  if (padStyle === "muscle") applyHighlight();
+};
+
+/**
+ * "muscle" — no disc, no badge; the target muscle is painted red (Sun) / blue (Moon). Web parity for
+ *            `padStyle="muscle"`, and what "don't show the Sun/Moon icons on the body" means.
+ * "dot"     — the original discs + S1/M1 badges.
+ * Unknown values fall back to "dot" rather than throwing: a viewer that renders the old way is
+ * recoverable, one that renders nothing looks broken.
+ */
+window.setPadStyle = function (style) {
+  const next = style === "muscle" ? "muscle" : "dot";
+  if (next === padStyle) return;
+  padStyle = next;
+  if (!window.__ready || !modelScene) return;
+  renderMarkers(window.__markers);
+  applyHighlight();
+};
+
+/** Muscle Mode's "solid body" half: stop the un-targeted skin being see-through. */
+window.setMuscleMode = function (on) {
+  const next = !!on;
+  if (next === solidBody) return;
+  solidBody = next;
+  syncSkinOpacity();
+};
+
+/** What the viewer is currently doing, for a Flutter-side assertion or a bug report. */
+window.getViewerState = function () {
+  return JSON.stringify({
+    padStyle,
+    solidBody,
+    labelsVisible,
+    markers: (window.__markers || []).length,
+    unmapped: (window.__unmapped || []).length,
+  });
 };
 
 // Tint the pads' target muscles. Pass [] to go back to plain skin.
