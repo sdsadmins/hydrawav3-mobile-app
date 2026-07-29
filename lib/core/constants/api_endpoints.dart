@@ -21,7 +21,8 @@ class ApiEndpoints {
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
-  static const String nodeBaseUrl = 'https://1dba-2409-40f2-7-816e-7586-3806-4e29-7e45.ngrok-free.app/hydrawav/v1/';
+  static const String nodeBaseUrl =
+      'https://titten-glory-screen-islamic.trycloudflare.com/hydrawav/v1/';
 
   // static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
@@ -127,8 +128,7 @@ class ApiEndpoints {
   static String _perfUri(String path, Map<String, String?> params) {
     final q = params.entries
         .where((e) => (e.value ?? '').trim().isNotEmpty)
-        .map((e) =>
-            '${e.key}=${Uri.encodeQueryComponent(e.value!)}')
+        .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value!)}')
         .join('&');
     return q.isEmpty ? path : '$path?$q';
   }

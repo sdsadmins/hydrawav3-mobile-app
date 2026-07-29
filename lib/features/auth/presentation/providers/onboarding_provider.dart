@@ -171,9 +171,14 @@ class OnboardingController extends StateNotifier<OnboardingState> {
 
     state = state.copyWith(isCreatingAccount: true, error: null);
     try {
+      final createPayload = buildCreatePractitionerJson(state.form);
+      appLogger.i(
+        'Onboarding create payload: account_type_id=${createPayload['account_type_id']} '
+        'present=${state.form.accountType.trim().isNotEmpty}',
+      );
       final created = await _ref
           .read(onboardingRemoteSourceProvider)
-          .createPractitioner(buildCreatePractitionerJson(state.form));
+          .createPractitioner(createPayload);
       state = state.copyWith(
         isCreatingAccount: false,
         practitionerId: created.userId,
@@ -324,9 +329,14 @@ class OnboardingController extends StateNotifier<OnboardingState> {
       // 4) Link the organization to the practitioner account. The web sends
       // `addOrganisations: [Number(orgId)]`, so pass a numeric id when possible.
       final Object orgIdValue = int.tryParse(orgId) ?? orgId;
+      final accountUpdatePayload = buildAccountUpdateJson(form, orgIdValue);
+      appLogger.i(
+        'Onboarding submit payload: account_type_id=${accountUpdatePayload['account_type_id']} '
+        'present=${form.accountType.trim().isNotEmpty}',
+      );
       await remote.updateUserAccount(
         userId,
-        buildAccountUpdateJson(form, orgIdValue),
+        accountUpdatePayload,
         token,
       );
 
