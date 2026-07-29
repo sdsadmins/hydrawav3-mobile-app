@@ -134,9 +134,9 @@ class ApiEndpoints {
   }
 
   // Sports (Node) — the org's sport mappings (sport + positions) for the Add
-  // Player form. `GET organizations/:orgId/sports` → { organizationId, data:
+  // Player form. `GET /sports/:organisationId` → { organizationId, data:
   // [{ mappingId, sport, positions, isActive }] }. Relative (no leading slash).
-  static String orgSports(String orgId) => 'organizations/$orgId/sports';
+  static String orgSports(String orgId) => 'sports/$orgId';
 
   // Practitioner onboarding (Node). The web moved these three off Django onto
   // the Node backend under `user/*` (ref: hydrawav3-ai `actions/action.ts` —
@@ -148,9 +148,10 @@ class ApiEndpoints {
   static const String onboardingOrganizations = 'user/organizations';
   static String onboardingAccountById(String id) => 'user/accounts/$id';
 
-  /// Sports catalogue used by the onboarding Business step (`sportIds`).
-  /// Requires auth — onboarding calls it with the token from the create step.
-  static const String sports = 'sports';
+  /// The onboarding Business step picks its sports from the performance
+  /// catalogue ([perfDisciplines]) — the same list the protocols surface reads —
+  /// and sends the chosen DISPLAY NAMES as `sport`. The old `GET sports`
+  /// catalogue (Mongo `_id`s, token-gated) is no longer served.
 
   // Notifications (Node) — the AI-report processor writes one when a report
   // finishes generating (web parity: actions/notification.ts). List per user +

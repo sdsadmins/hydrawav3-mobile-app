@@ -18,8 +18,9 @@ class Position {
   const Position({required this.id, required this.name});
 }
 
-/// One sport mapped to the org, with its positions — an item of the
-/// `GET organizations/:orgId/sports` response `data` array.
+/// One sport mapped to the org, with its positions — compatible with both the
+/// older object response and the newer plain-string list returned by
+/// `GET /sports/:organisationId`.
 class OrgSport {
   final String mappingId;
   final String sportId;
@@ -36,6 +37,16 @@ class OrgSport {
   });
 
   static String _s(dynamic v) => v?.toString() ?? '';
+
+  factory OrgSport.fromName(String name) {
+    return OrgSport(
+      mappingId: name,
+      sportId: name,
+      name: name,
+      positions: const [],
+      isActive: true,
+    );
+  }
 
   factory OrgSport.fromJson(Map<String, dynamic> json) {
     final sport = json['sport'];
@@ -82,7 +93,7 @@ class OrgSport {
 }
 
 /// The org's active sports (+ positions) for the Add Player form. Calls the
-/// Node `GET organizations/:orgId/sports` for the selected organization.
+/// Node `GET /sports/:organisationId` for the selected organization.
 final orgSportsProvider =
     FutureProvider.autoDispose<List<OrgSport>>((ref) async {
   final auth = ref.watch(authStateProvider);
@@ -96,8 +107,14 @@ final orgSportsProvider =
   if (list is! List) return const [];
 
   return list
-      .whereType<Map>()
-      .map((e) => OrgSport.fromJson(Map<String, dynamic>.from(e)))
+      .map((item) {
+        if (item is String) return OrgSport.fromName(item);
+        if (item is Map) {
+          return OrgSport.fromJson(Map<String, dynamic>.from(item));
+        }
+        return null;
+      })
+      .whereType<OrgSport>()
       .where((s) => s.isActive && s.name.isNotEmpty)
       .toList();
 });
