@@ -115,13 +115,18 @@ class OnboardingCertification {
   });
 }
 
-/// A sport the org can offer, from `GET {node}sports`. [id] is the Mongo `_id`
-/// sent in `sportIds` when the organization is created.
+/// A sport the org can offer, from `GET {node}performance-protocols/disciplines`
+/// — the performance catalogue IS the sports list now.
+///
+/// [name] is the human label (`display_name`) and is what gets sent in `sport`
+/// on org create: the backend assigns sports BY NAME. [discipline] is the
+/// catalogue's retrieval key (e.g. `ice_hockey`), kept so a saved sport can be
+/// matched back to its protocols later.
 class SportOption {
-  final String id;
+  final String discipline;
   final String name;
 
-  const SportOption({required this.id, required this.name});
+  const SportOption({required this.discipline, required this.name});
 }
 
 /// Step 3 — a single business (required, ≥1, repeatable).
@@ -132,9 +137,9 @@ class OnboardingBusiness {
   final String contactNumber;
   final String address;
 
-  /// Sports offered, as [SportOption.id]s — university accounts only. Sent as
-  /// `sportIds` on org create, and omitted entirely when empty (web parity).
-  final List<String> sportIds;
+  /// Sports offered, as [SportOption.name]s — university accounts only. Sent as
+  /// `sport` on org create, and omitted entirely when empty.
+  final List<String> sports;
 
   const OnboardingBusiness({
     required this.name,
@@ -142,7 +147,7 @@ class OnboardingBusiness {
     this.email = '',
     this.contactNumber = '',
     this.address = '',
-    this.sportIds = const [],
+    this.sports = const [],
   });
 }
 
@@ -196,10 +201,10 @@ Map<String, dynamic> buildOrganizationJson(OnboardingBusiness primaryBusiness) {
     'address': primaryBusiness.address,
     'age': primaryBusiness.businessAge,
     'phone': primaryBusiness.contactNumber,
-    // Omit the key entirely when nothing is selected (web parity) — the DTO
-    // rejects unknown/empty extras rather than ignoring them.
-    if (primaryBusiness.sportIds.isNotEmpty)
-      'sportIds': primaryBusiness.sportIds,
+    // Sport NAMES, e.g. ["Ice Hockey"] — the backend assigns the org's sports
+    // by name (CreateOrganizationDto.sport). Omitted entirely when nothing is
+    // selected, since the DTO rejects unknown/empty extras.
+    if (primaryBusiness.sports.isNotEmpty) 'sport': primaryBusiness.sports,
   };
 }
 

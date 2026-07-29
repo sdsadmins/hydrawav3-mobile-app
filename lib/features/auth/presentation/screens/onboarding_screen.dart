@@ -64,7 +64,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _bizContact = TextEditingController();
   final _bizAddress = TextEditingController();
   String? _bizAge;
-  final _bizSports = <String>{}; // selected SportOption ids (university only)
+  final _bizSports = <String>{}; // selected sport NAMES (university only)
 
   /// True when the account type picked on step 1 is the university one. Matched
   /// on the option's NAME, not its id, since ids are per-environment.
@@ -611,8 +611,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 subtitle: [
                   if (e.value.businessAge.isNotEmpty) e.value.businessAge,
                   if (e.value.email.isNotEmpty) e.value.email,
-                  if (e.value.sportIds.isNotEmpty)
-                    _sportNames(s, e.value.sportIds),
+                  if (e.value.sports.isNotEmpty) e.value.sports.join(', '),
                 ].join('  ·  '),
                 onRemove: () => ref
                     .read(onboardingControllerProvider.notifier)
@@ -623,25 +622,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  /// Display names for saved [sportIds]; an id with no matching sport is
-  /// skipped rather than shown raw.
-  String _sportNames(OnboardingState s, List<String> sportIds) {
-    final names = <String>[];
-    for (final id in sportIds) {
-      for (final sport in s.sports) {
-        if (sport.id == id) {
-          names.add(sport.name);
-          break;
-        }
-      }
-    }
-    return names.join(', ');
-  }
-
-  /// University-only: the sports this business offers, sent as `sportIds` when
-  /// the organization is created. The list is fetched with the token from the
-  /// step-1 account creation, so it's empty if that fetch failed — optional
-  /// either way, so onboarding is never blocked on it.
+  /// University-only: the sports this business offers, sent as `sport` (the
+  /// display names) when the organization is created. The options come from the
+  /// performance disciplines catalogue, so the list is empty if that fetch
+  /// failed — optional either way, so onboarding is never blocked on it.
   Widget _sportsPicker(OnboardingState s) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -683,10 +667,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 for (final sport in s.sports)
                   _sportChip(
                     label: sport.name,
-                    selected: _bizSports.contains(sport.id),
+                    selected: _bizSports.contains(sport.name),
                     onTap: () => setState(() {
-                      if (!_bizSports.remove(sport.id))
-                        _bizSports.add(sport.id);
+                      if (!_bizSports.remove(sport.name))
+                        _bizSports.add(sport.name);
                     }),
                   ),
               ],
@@ -750,7 +734,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       email: email,
       contactNumber: contact,
       address: address,
-      sportIds: _isUniversityAccount ? _bizSports.toList() : const [],
+      sports: _isUniversityAccount ? _bizSports.toList() : const [],
     ));
     _bizName.clear();
     _bizEmail.clear();

@@ -21,7 +21,7 @@ class ApiEndpoints {
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
-  static const String nodeBaseUrl = 'https://1dba-2409-40f2-7-816e-7586-3806-4e29-7e45.ngrok-free.app/hydrawav/v1/';
+  static const String nodeBaseUrl = 'https://titten-glory-screen-islamic.trycloudflare.com/hydrawav/v1/';
 
   // static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
@@ -148,9 +148,10 @@ class ApiEndpoints {
   static const String onboardingOrganizations = 'user/organizations';
   static String onboardingAccountById(String id) => 'user/accounts/$id';
 
-  /// Sports catalogue used by the onboarding Business step (`sportIds`).
-  /// Requires auth — onboarding calls it with the token from the create step.
-  static const String sports = 'sports';
+  /// The onboarding Business step picks its sports from the performance
+  /// catalogue ([perfDisciplines]) — the same list the protocols surface reads —
+  /// and sends the chosen DISPLAY NAMES as `sport`. The old `GET sports`
+  /// catalogue (Mongo `_id`s, token-gated) is no longer served.
 
   // Notifications (Node) — the AI-report processor writes one when a report
   // finishes generating (web parity: actions/notification.ts). List per user +

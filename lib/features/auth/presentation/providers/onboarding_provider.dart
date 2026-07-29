@@ -28,8 +28,9 @@ class OnboardingState {
   final String? authToken;
   final bool isCreatingAccount;
 
-  /// Sports offered by the platform, loaded right after the account is created
-  /// (the endpoint needs a token). Empty until then, or if the fetch fails.
+  /// Sports offered by the platform — the performance disciplines. The
+  /// catalogue endpoint is public, so this is loaded as soon as the controller
+  /// is built. Empty until it answers, or if the fetch fails.
   final List<SportOption> sports;
 
   /// Per-field errors for step 1 (keyed by field name).
@@ -115,7 +116,11 @@ final onboardingControllerProvider =
 
 class OnboardingController extends StateNotifier<OnboardingState> {
   final Ref _ref;
-  OnboardingController(this._ref) : super(const OnboardingState());
+  OnboardingController(this._ref) : super(const OnboardingState()) {
+    // The disciplines catalogue is public, so the Business step's sport list
+    // no longer has to wait on the step-1 token.
+    unawaited(_loadSports());
+  }
 
   static final RegExp _emailRe = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
 
@@ -160,9 +165,9 @@ class OnboardingController extends StateNotifier<OnboardingState> {
   bool isValidEmail(String email) => _emailRe.hasMatch(email);
 
   /// Provision the practitioner account (submit call 1) when leaving step 1, so
-  /// the token it returns can authorize the sports fetch the Business step
-  /// needs. Creates ONCE — stepping back to step 1 and forward again reuses the
-  /// existing account instead of creating a duplicate (web parity).
+  /// the token it returns can authorize the remaining submit calls. Creates
+  /// ONCE — stepping back to step 1 and forward again reuses the existing
+  /// account instead of creating a duplicate (web parity).
   ///
   /// Returns true when the account exists afterwards.
   Future<bool> createAccount() async {
@@ -179,9 +184,10 @@ class OnboardingController extends StateNotifier<OnboardingState> {
         practitionerId: created.userId,
         authToken: created.token,
       );
-      // Best-effort: onboarding continues (without sport selection) if this
-      // fails — the org is simply created with no sportIds.
-      unawaited(_loadSports(created.token));
+      // Best-effort top-up for the case where the load at construction failed:
+      // onboarding continues (without sport selection) either way — the org is
+      // simply created with no sports.
+      if (state.sports.isEmpty) unawaited(_loadSports());
       return true;
     } on ServerException catch (e) {
       state = state.copyWith(isCreatingAccount: false, error: e.message);
@@ -196,19 +202,15 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     }
   }
 
-  /// Re-run the sports fetch with the token from step 1 — the picker offers
-  /// this when the list came back empty (a failed fetch looks identical to a
-  /// genuinely empty catalogue otherwise).
-  Future<void> reloadSports() async {
-    final token = state.authToken;
-    if (token == null || token.isEmpty) return;
-    await _loadSports(token);
-  }
+  /// Re-run the disciplines fetch — the picker offers this when the list came
+  /// back empty (a failed fetch looks identical to a genuinely empty catalogue
+  /// otherwise).
+  Future<void> reloadSports() => _loadSports();
 
-  Future<void> _loadSports(String token) async {
+  Future<void> _loadSports() async {
     try {
       final sports =
-          await _ref.read(onboardingRemoteSourceProvider).getSports(token);
+          await _ref.read(onboardingRemoteSourceProvider).getSports();
       if (!mounted) return;
       state = state.copyWith(sports: sports, error: state.error);
     } catch (e) {

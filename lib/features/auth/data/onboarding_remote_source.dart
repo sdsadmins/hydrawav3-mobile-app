@@ -67,18 +67,19 @@ class OnboardingRemoteSource {
     }
   }
 
-  // ── Sports catalogue (needs the create-step token) ──────────────────────────
-  /// GET {node}sports?page=1&perPage=100 — raw token. Only active sports are
-  /// returned to the caller; the list sits under `data` (web parity).
-  Future<List<SportOption>> getSports(String token) async {
+  // ── Sports catalogue = the performance disciplines (public) ─────────────────
+  /// GET {node}performance-protocols/disciplines — JSON, NO auth (the catalogue
+  /// routes are ungated), so this no longer waits on the create-step token.
+  ///
+  /// Returns `[{ discipline, display_name }]` — one entry per sport that has at
+  /// least one active protocol. `display_name` is what the practitioner picks
+  /// and what is sent back as `sport` on org create, since the backend stores
+  /// the sport by NAME now, not by a catalogue id.
+  Future<List<SportOption>> getSports() async {
     try {
       final res = await _dio.get(
-        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.sports}',
-        queryParameters: const {'page': 1, 'perPage': 100},
-        options: Options(headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token,
-        }),
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.perfDisciplines}',
+        options: Options(headers: const {'Content-Type': 'application/json'}),
       );
       final body = res.data;
       final list = body is List
@@ -87,13 +88,16 @@ class OnboardingRemoteSource {
               ? body['data'] as List
               : const [];
       final sports = <SportOption>[];
+      final seen = <String>{};
       for (final raw in list) {
         if (raw is! Map) continue;
-        // `isActive` absent → treat as active rather than hiding the sport.
-        if (raw['isActive'] == false) continue;
-        final id = _str(raw['_id']) ?? _str(raw['id']);
-        if (id == null) continue;
-        sports.add(SportOption(id: id, name: _str(raw['name']) ?? id));
+        final key = _str(raw['discipline']);
+        final name = _str(raw['display_name']) ?? key;
+        // A row with neither field isn't a discipline — skip it rather than
+        // rendering a blank chip.
+        if (name == null) continue;
+        if (!seen.add(name.toLowerCase())) continue;
+        sports.add(SportOption(discipline: key ?? name, name: name));
       }
       return sports;
     } on DioException catch (e) {
