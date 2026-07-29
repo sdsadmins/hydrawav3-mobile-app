@@ -477,6 +477,10 @@ class _OrgCard extends ConsumerWidget {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Switched to $name')),
               );
+              // Picking an organization is the start of working in it, so land
+              // on the Session tab rather than leaving the practitioner parked
+              // on More.
+              context.go(RoutePaths.devices);
             },
       child: Row(
         children: [

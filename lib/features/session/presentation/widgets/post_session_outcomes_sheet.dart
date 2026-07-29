@@ -7,12 +7,9 @@ import '../../domain/question_answer_model.dart';
 /// A protocol and its post-session questions (each with preset answers).
 typedef ProtocolQuestions = ({String protocolName, List<ProtocolQuestion> questions});
 
-/// One area of focus for the discomfort mapping: body part + pre-session pain.
-typedef DiscomfortAreaSeed = ({String bodyPart, int before});
-
-/// Post-session "Session Outcomes" sheet (web parity). Captures, for a
-/// completed CLIENT session: per-area discomfort (body part + post pain), the
-/// protocol's session questions (preset-answer chips), and practitioner notes.
+/// Post-session "Session Outcomes" sheet. Captures, for a completed session:
+/// the protocol's session questions (preset-answer chips) and practitioner
+/// notes. Per-body-part discomfort is deliberately NOT asked here.
 ///
 /// Built purely from the passed snapshot — no live engine — so it works even
 /// after the live card is gone. Returns the collected [PostSessionOutcomes] on
@@ -20,7 +17,6 @@ typedef DiscomfortAreaSeed = ({String bodyPart, int before});
 Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
   BuildContext context, {
   required List<ProtocolQuestions> protocolQuestions,
-  required List<DiscomfortAreaSeed> discomfortAreas,
   bool dismissible = true,
 }) {
   // Selected preset answer per "protocol::question".
@@ -35,12 +31,6 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
       }
     }
   }
-  // Post-session pain per area index, seeded to the pre-session value.
-  final painByArea = <int, double>{
-    for (var i = 0; i < discomfortAreas.length; i++)
-      i: discomfortAreas[i].before.toDouble(),
-  };
-  final painTouched = <int>{};
   final notesController = TextEditingController();
 
   String key(String p, String q) => '$p::$q';
@@ -96,25 +86,6 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // --- Discomfort Mapping (per body area) ---
-                          if (discomfortAreas.isNotEmpty) ...[
-                            _sectionLabel('Discomfort Mapping (Post-Session)'),
-                            for (var i = 0; i < discomfortAreas.length; i++) ...[
-                              _areaRow(
-                                bodyPart: discomfortAreas[i].bodyPart,
-                                before: discomfortAreas[i].before,
-                                value: painByArea[i]!,
-                                touched: painTouched.contains(i),
-                                onChanged: (v) => setSheet(() {
-                                  painByArea[i] = v;
-                                  painTouched.add(i);
-                                }),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
-                            const SizedBox(height: 4),
-                          ],
-
                           // --- Session Questions (per protocol) ---
                           if (protocolQuestions.isNotEmpty) ...[
                             _sectionLabel('Session Questions'),
@@ -215,8 +186,6 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
                               protocolQuestions,
                               selected,
                               textControllers,
-                              painByArea,
-                              painTouched,
                               notesController.text,
                             ),
                           ),
@@ -243,8 +212,6 @@ PostSessionOutcomes _collect(
   List<ProtocolQuestions> protocolQuestions,
   Map<String, String> selected,
   Map<String, TextEditingController> textControllers,
-  Map<int, double> painByArea,
-  Set<int> painTouched,
   String notes,
 ) {
   final byProtocol = <String, List<QuestionAnswer>>{};
@@ -266,66 +233,12 @@ PostSessionOutcomes _collect(
     }
     if (answers.isNotEmpty) byProtocol[pq.protocolName] = answers;
   }
-  final byArea = <int, int>{
-    for (final i in painTouched) i: painByArea[i]!.round(),
-  };
   final trimmedNotes = notes.trim();
   return PostSessionOutcomes(
     answersByProtocol: byProtocol,
-    discomfortAfterByArea: byArea,
+    // Body-part discomfort is no longer collected post-session.
+    discomfortAfterByArea: const {},
     notes: trimmedNotes.isEmpty ? null : trimmedNotes,
-  );
-}
-
-Widget _areaRow({
-  required String bodyPart,
-  required int before,
-  required double value,
-  required bool touched,
-  required ValueChanged<double> onChanged,
-}) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    decoration: BoxDecoration(
-      color: ThemeConstants.surfaceVariant.withValues(alpha: 0.5),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: ThemeConstants.border),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                bodyPart.isEmpty ? 'Area' : bodyPart,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: ThemeConstants.textPrimary,
-                ),
-              ),
-            ),
-            _pill('Pre $before', ThemeConstants.textTertiary),
-            const SizedBox(width: 6),
-            Icon(Icons.arrow_forward_rounded,
-                size: 14, color: ThemeConstants.textTertiary),
-            const SizedBox(width: 6),
-            _pill('Post ${touched ? value.round() : before}',
-                ThemeConstants.accent),
-          ],
-        ),
-        Slider(
-          value: value,
-          min: 0,
-          max: 10,
-          divisions: 10,
-          activeColor: ThemeConstants.accent,
-          label: value.round().toString(),
-          onChanged: onChanged,
-        ),
-      ],
-    ),
   );
 }
 
@@ -411,19 +324,3 @@ Widget _field(
     ),
   );
 }
-
-Widget _pill(String text, Color color) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-          color: color,
-        ),
-      ),
-    );

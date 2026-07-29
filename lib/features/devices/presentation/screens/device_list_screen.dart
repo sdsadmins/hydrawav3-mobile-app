@@ -1143,18 +1143,12 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     // Guided Assessment moved to the AI tab).
     String? reason;
     if (!enabled && !_starting) {
-      final requiresAreaOfFocus =
-          ref.watch(sessionClientModeProvider) == ClientMode.client;
-      final areaOfFocusReady = !requiresAreaOfFocus ||
-          ref.watch(guidedAssessmentProvider).discomfortAreas.isNotEmpty;
       if (runIds.isEmpty) {
         reason = 'Connect or select a device to start.';
       } else if (!runIds.every((id) =>
           _protocolIdByDeviceId.containsKey(id) &&
           _settingsByDeviceId.containsKey(id))) {
         reason = 'Select a protocol for each device.';
-      } else if (!areaOfFocusReady) {
-        reason = 'Select an area of focus to start.';
       }
     }
 
@@ -1801,19 +1795,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final deviceLimitReached = deviceLimit != null &&
         deviceLimit > 0 &&
         (inUseDeviceIds.length + newlySelectedCount) >= deviceLimit;
-    // Web parity (session.tsx handleStart): only CLIENT mode requires an area
-    // of focus (at least one discomfort area). Guest mode is never gated —
-    // neither Quick Start nor Guided — and completing the full Guided
-    // Assessment is NOT required to start.
-    final requiresAreaOfFocus =
-        ref.watch(sessionClientModeProvider) == ClientMode.client;
-    final areaOfFocusReady = !requiresAreaOfFocus ||
-        ref.watch(guidedAssessmentProvider).discomfortAreas.isNotEmpty;
+    // Picking a client no longer requires an area of focus. The body-part /
+    // guided-assessment step is optional intake, not a precondition — Start
+    // only needs devices with a protocol configured, in Client and Guest mode
+    // alike.
     final canStart = runIds.isNotEmpty &&
         runIds.every((id) =>
             _protocolIdByDeviceId.containsKey(id) &&
-            _settingsByDeviceId.containsKey(id)) &&
-        areaOfFocusReady;
+            _settingsByDeviceId.containsKey(id));
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,

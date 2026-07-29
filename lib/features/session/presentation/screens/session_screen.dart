@@ -1555,7 +1555,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final outcomes = await showPostSessionOutcomesSheet(
       context,
       protocolQuestions: pending.orderedProtocolQuestions,
-      discomfortAreas: pending.discomfortAreasForSheet,
     );
     // outcomes == null → Skip/dismiss: still log the session (no answers).
     await notifier.finalize(_engineKey, outcomes);

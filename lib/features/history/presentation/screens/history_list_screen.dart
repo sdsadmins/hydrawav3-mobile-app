@@ -181,7 +181,6 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
       final outcomes = await showPostSessionOutcomesSheet(
         context,
         protocolQuestions: entry.orderedProtocolQuestions,
-        discomfortAreas: entry.discomfortAreasForSheet,
       );
       await ref
           .read(pendingOutcomesProvider.notifier)

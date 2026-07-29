@@ -452,6 +452,19 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return _perfStartRole();
     }
 
+    // A picked player already carries their sport on the profile, so don't ask
+    // "What are we prepping for?" again — adopt it and go straight to the
+    // position step. (The fast path above needs a resolvable position too; this
+    // covers the player who has a sport but no position on file.)
+    for (final d in disciplines) {
+      if (_matchesClientSport(d)) {
+        _me(d.label);
+        _perfDiscipline = d.discipline;
+        _perfDisciplineLabel = d.label;
+        return _perfStartRole();
+      }
+    }
+
     await _ai('What are we prepping for?');
     _showChips([
       for (final d in disciplines.take(8))
@@ -836,10 +849,9 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   }
 
   Future<void> _finishAssessment() async {
-    // Record the picked area as the session's area of focus. In CLIENT mode the
-    // Devices tab gates "Start Session" on a non-empty guided-assessment
-    // discomfort area, and this recovery flow lives outside that wizard — so
-    // without this, Start stays disabled even after a placement is generated.
+    // Record the picked area as the session's area of focus so the Session tab
+    // and the AI report see it. Start Session is NOT gated on this — running
+    // the recovery flow first is optional.
     _recordAreaOfFocus();
 
     // Build the AssessmentPayload and call the RAG pad-placement endpoint.

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
@@ -203,6 +205,7 @@ class _OrgRow extends ConsumerWidget {
           : () async {
               final messenger = ScaffoldMessenger.of(context);
               final navigator = Navigator.of(context);
+              final router = GoRouter.of(context);
               await ref
                   .read(authStateProvider.notifier)
                   .setOrganization(org['id'].toString(), name);
@@ -210,6 +213,9 @@ class _OrgRow extends ConsumerWidget {
               messenger.showSnackBar(
                 SnackBar(content: Text('Switched to $name')),
               );
+              // Same landing rule as the org picker: a chosen org opens on the
+              // Session tab.
+              router.go(RoutePaths.devices);
             },
       child: Row(
         children: [

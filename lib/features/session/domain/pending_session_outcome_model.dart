@@ -113,13 +113,6 @@ class PendingSessionOutcome {
   /// shows for pain/notes even when this is empty.
   bool get hasQuestions => orderedProtocolQuestions.isNotEmpty;
 
-  /// The intake's areas of focus for the sheet's discomfort mapping —
-  /// body part + pre-session pain (seeds the per-area post slider).
-  List<({String bodyPart, int before})> get discomfortAreasForSheet =>
-      (intake?.discomfortAreas ?? const [])
-          .map((a) => (bodyPart: a.bodyPart, before: a.discomfortBefore))
-          .toList();
-
   Map<String, dynamic> toJson() => {
         'sessionId': sessionId,
         'protocolId': protocolId,

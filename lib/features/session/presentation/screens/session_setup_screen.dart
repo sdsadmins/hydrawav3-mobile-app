@@ -588,16 +588,12 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                   children: [
                     // Client / Guest selector (web parity).
                     const ClientSelectionSection(),
-                    // Guided vs Quick Start chooser is Guest-only (web parity):
-                    // in Client mode the Guided Assessment loads directly.
-                    if (ref.watch(sessionClientModeProvider) ==
-                        ClientMode.guest)
-                      const _SessionTypeCards(),
-                    // Guided wizard: always in Client mode; in Guest mode only
-                    // when Guided is chosen.
-                    if (ref.watch(sessionClientModeProvider) ==
-                            ClientMode.client ||
-                        ref.watch(sessionTypeProvider) == SessionType.guided)
+                    // Guided vs Quick Start is offered in Client mode too —
+                    // picking a client no longer forces the body-part /
+                    // assessment steps.
+                    const _SessionTypeCards(),
+                    // The wizard opens only when Guided is explicitly chosen.
+                    if (ref.watch(sessionTypeProvider) == SessionType.guided)
                       const GuidedAssessmentWizard(),
                     Text(
                       'Configure each device individually',
@@ -890,24 +886,9 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 return;
                               }
 
-                              // Web parity (session.tsx handleStart): Client mode
-                              // requires at least one area of focus (discomfort
-                              // area). Guest mode is never gated.
-                              if (clientMode == ClientMode.client &&
-                                  ref
-                                      .read(guidedAssessmentProvider)
-                                      .discomfortAreas
-                                      .isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text(
-                                      'Select at least one area of focus before starting.',
-                                    ),
-                                    backgroundColor: ThemeConstants.error,
-                                  ),
-                                );
-                                return;
-                              }
+                              // No area-of-focus gate: the body-part step is
+                              // optional intake in Client mode too, so a client
+                              // session starts without one.
 
                               final currentSelectedDeviceIds = widget.deviceIds
                                   .where((id) => _runDeviceIds.contains(id))

@@ -175,9 +175,8 @@ class _SelectOrganizationPageState
                   ? ThemeConstants.accent.withValues(alpha: 0.14)
                   : ThemeConstants.surface,
               border: Border.all(
-                color: isSelected
-                    ? ThemeConstants.accent
-                    : ThemeConstants.border,
+                color:
+                    isSelected ? ThemeConstants.accent : ThemeConstants.border,
               ),
               boxShadow: [
                 BoxShadow(
@@ -196,9 +195,7 @@ class _SelectOrganizationPageState
                   selectedOrgId = orgId;
                 });
 
-                await ref
-                    .read(authStateProvider.notifier)
-                    .setOrganization(
+                await ref.read(authStateProvider.notifier).setOrganization(
                       orgId,
                       org['name'] ?? 'Organization', // ✅ PASS NAME
                     );
@@ -206,12 +203,10 @@ class _SelectOrganizationPageState
                 // Provision the org's free plan + starter tokens (web parity)
                 // so the token balance shows for first-time / newly onboarded
                 // accounts. Best-effort — never blocks nav.
-                await ref
-                    .read(paymentRepositoryProvider)
-                    .ensureFreePlan(orgId);
+                await ref.read(paymentRepositoryProvider).ensureFreePlan(orgId);
 
                 if (mounted) {
-                  context.go(RoutePaths.protocols);
+                  context.go(RoutePaths.devices);
                 }
               },
               child: Row(
@@ -457,8 +452,9 @@ class _SelectOrganizationPageState
     });
 
     try {
-      final orgId =
-          await ref.read(organizationRepositoryProvider).createAndLinkOrganization(
+      final orgId = await ref
+          .read(organizationRepositoryProvider)
+          .createAndLinkOrganization(
         userId: userId,
         orgBody: {
           'name': name,
@@ -475,7 +471,7 @@ class _SelectOrganizationPageState
       await ref.read(paymentRepositoryProvider).ensureFreePlan(orgId);
 
       if (!mounted) return;
-      context.go(RoutePaths.protocols);
+      context.go(RoutePaths.devices);
     } on ServerException catch (e) {
       if (!mounted) return;
       setState(() {
