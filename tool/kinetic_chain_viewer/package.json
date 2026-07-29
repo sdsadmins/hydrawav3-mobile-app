@@ -1,13 +1,17 @@
 {
   "name": "kinetic-chain-viewer-build",
   "private": true,
+  "type": "module",
   "version": "1.0.0",
-  "description": "Build tooling for the offline three.js kinetic-chain 3D viewer bundled into assets/3d. Ports the web Hydrawav3-ai ZAnatomyViewer to vanilla three.js. Re-run `npm run build` after editing viewer.src.js.",
+  "description": "Build tooling for the offline three.js 3D viewers bundled into assets/3d. Re-run `npm run build` after editing any *.src.js.",
   "scripts": {
-    "build": "npm run build:kinetic && npm run build:pads",
+    "build": "npm run build:kinetic && npm run build:pads && npm run build:anatomy",
     "build:kinetic": "esbuild viewer.src.js --bundle --format=esm --minify --outfile=../../assets/3d/viewer.bundle.js",
     "build:pads": "esbuild pad_placement.src.js --bundle --format=esm --minify --outfile=../../assets/3d/pad_placement.bundle.js",
-    "copy-draco": "node copy-draco.mjs"
+    "build:anatomy": "esbuild anatomy_scene.src.js --bundle --format=esm --minify --outfile=../../assets/3d/anatomy_scene.bundle.js",
+    "copy-draco": "node copy-draco.mjs",
+    "gen:calibration": "node extract-anatomy-calibration.mjs",
+    "verify": "node verify-landmarks.mjs"
   },
   "dependencies": {
     "three": "0.182.0"

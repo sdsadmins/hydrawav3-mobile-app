@@ -246,15 +246,31 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
   }
 
+  /// True between requesting a scroll and the post-frame callback running, so a
+  /// burst of `_scrollToEnd()` calls in one turn produces ONE animation.
+  ///
+  /// A single reply can ask to scroll four times (typing on, reply text, pad
+  /// card, chips — see `_perfChat`). Each used to schedule its own `animateTo`,
+  /// and each new one interrupts the previous mid-flight, which is what made the
+  /// list visibly jerk on send.
+  bool _scrollQueued = false;
+
   void _scrollToEnd() {
+    if (_scrollQueued) return;
+    _scrollQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent + 160,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-        );
-      }
+      _scrollQueued = false;
+      if (!_scroll.hasClients) return;
+      // Animate to the END, not past it. This used to target
+      // `maxScrollExtent + 160`, which is outside the scrollable range: the
+      // physics clamped it and sprang back, so every message ended with an
+      // overscroll bounce. The post-frame callback already runs after layout,
+      // so `maxScrollExtent` is the real bottom by this point.
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     });
   }
 
@@ -1337,25 +1353,40 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               child: ListView(
                 controller: _scroll,
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                // KEYS MATTER HERE. Messages are only ever appended, so an index
+                // key is stable for every existing entry. Without keys, Flutter
+                // matches these children positionally: when the typing bubble is
+                // removed and a real bubble is appended in the same frame, every
+                // widget after that point shifts by one and gets remounted —
+                // which is the repaint flash that shows on send. The trailing
+                // typing row and chip row carry their own const keys so they can
+                // never be confused with a message bubble.
                 children: [
-                  for (final m in _messages)
-                    if (m.placement != null)
+                  for (var i = 0; i < _messages.length; i++)
+                    if (_messages[i].placement != null)
                       PlacementCard(
-                        payload: m.placement!,
-                        onOpen3D: () => _openPadMap(m.placement!),
+                        key: ValueKey('msg-$i'),
+                        payload: _messages[i].placement!,
+                        onOpen3D: () => _openPadMap(_messages[i].placement!),
                         onGoToSession: () => goToSessionFromPlacement(
                           context,
                           ref,
-                          payload: m.placement!,
+                          payload: _messages[i].placement!,
                           client: _perfClient,
                           clientName: _perfWho,
                         ),
                       )
                     else
-                      _Bubble(palette: p, msg: m),
-                  if (_typing) _TypingBubble(palette: p),
+                      _Bubble(
+                        key: ValueKey('msg-$i'),
+                        palette: p,
+                        msg: _messages[i],
+                      ),
+                  if (_typing)
+                    _TypingBubble(key: const ValueKey('typing'), palette: p),
                   if (_chipsVisible && _chips.isNotEmpty)
                     Padding(
+                      key: const ValueKey('chips'),
                       padding: const EdgeInsets.only(top: 6),
                       child: Wrap(
                         spacing: 9,
@@ -1416,7 +1447,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 class _Bubble extends StatelessWidget {
   final RefPalette palette;
   final _Msg msg;
-  const _Bubble({required this.palette, required this.msg});
+  const _Bubble({super.key, required this.palette, required this.msg});
 
   @override
   Widget build(BuildContext context) {
@@ -1460,7 +1491,7 @@ class _Bubble extends StatelessWidget {
 /// `.typing` — three-dot indicator in an AI bubble.
 class _TypingBubble extends StatefulWidget {
   final RefPalette palette;
-  const _TypingBubble({required this.palette});
+  const _TypingBubble({super.key, required this.palette});
 
   @override
   State<_TypingBubble> createState() => _TypingBubbleState();

@@ -25,6 +25,7 @@ import '../../../notifications/presentation/providers/notification_provider.dart
 import '../../../payments/presentation/providers/token_balance_provider.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../widgets/account_sheets.dart';
+import '../widgets/org_sheets.dart';
 
 /// The **More** tab — account, organizations, library, devices, session
 /// defaults and settings, ported from the UI handoff spec's `renderMore`.
@@ -438,31 +439,15 @@ class _OrganizationsSection extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: HwSpace.s1),
-        // Copper ghost button, per the spec's org list footer.
-        HwPress(
-          onTap: () => context.push('/select-organization?create=1'),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(HwRadius.sm),
-              border: Border.all(color: p.copper, width: 1.5),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                HwIcon(HwIcons.building, size: 15, color: p.copperInk),
-                const SizedBox(width: HwSpace.s2),
-                Text(
-                  'Add organization',
-                  style: TextStyle(
-                    fontSize: HwType.sm,
-                    fontWeight: FontWeight.w700,
-                    color: p.copperInk,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        // Opens the spec's sheet in place rather than pushing
+        // `/select-organization?create=1`. That page is the LOGIN GATE — landing
+        // on it just to add a second business reads as being signed out, and it
+        // navigates away from More on success instead of returning here.
+        AddOrganizationButton(
+          onTap: () async {
+            final created = await showAddOrganizationSheet(context);
+            if (created == true) ref.invalidate(organizationProvider);
+          },
         ),
       ],
     );

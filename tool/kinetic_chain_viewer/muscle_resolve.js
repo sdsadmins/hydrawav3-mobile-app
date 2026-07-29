@@ -1,5 +1,6 @@
-// Shared muscle-name -> GLB mesh-name resolution, used by BOTH offline viewers:
-// `viewer.src.js` (kinetic chain) and `pad_placement.src.js` (Sun/Moon pads).
+// Shared muscle-name -> GLB mesh-name resolution, used by ALL THREE offline
+// viewers: `viewer.src.js` (kinetic chain), `pad_placement.src.js` (Sun/Moon
+// pads) and `anatomy_scene.src.js` (the AnatomyScene port).
 // Ported from the web `lib/zAnatomyModel.ts` + `lib/zAnatomyMapping.ts`.
 //
 // Extracted from viewer.src.js so the pad viewer can place a pad from real mesh
@@ -12,6 +13,10 @@
 import * as THREE from "three";
 import { MAPPING } from "./mapping.js";
 
+// Already re-exported at the bottom of this file. `mesh_anchors.js` imports it
+// so the 242 perf-mesh-anchor keys are indexed through the SAME normalizer the
+// mesh resolver uses — a second copy of these rules would silently drift and
+// take anchor lookups down with it.
 function normalizeName(name) {
   return name
     .replace(/\s*\([A-Z]\d+-[A-Z]?\d+\)\s*/gi, " ")

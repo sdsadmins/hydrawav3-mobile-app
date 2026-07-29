@@ -103,8 +103,17 @@ class HwPill extends StatelessWidget {
   final HwPillTone tone;
   final bool tabular;
 
+  /// How many lines the label may wrap to before ellipsising. One by default —
+  /// a pill is a badge, and letting long text wrap freely turns it into a
+  /// paragraph with a rounded border. Raise it where the label is real prose of
+  /// unbounded length (e.g. a chain subline).
+  final int maxLines;
+
   const HwPill(this.label,
-      {super.key, this.tone = HwPillTone.ghost, this.tabular = false});
+      {super.key,
+      this.tone = HwPillTone.ghost,
+      this.tabular = false,
+      this.maxLines = 1});
 
   @override
   Widget build(BuildContext context) {
@@ -147,11 +156,18 @@ class HwPill extends StatelessWidget {
             ? Border.all(color: p.line)
             : null,
       ),
+      // Without a line cap the Text takes its full intrinsic width, so a long
+      // server-supplied label (e.g. `ChainInfo.subline`) overflows whatever Row
+      // it sits in. Pair this with a `Flexible` at the call site to actually
+      // yield the width.
       child: Text(
         label,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: HwType.eyebrow,
           fontWeight: FontWeight.w800,
+          height: maxLines > 1 ? 1.35 : null,
           color: fg,
           fontFeatures:
               tabular ? const [FontFeature.tabularFigures()] : null,
@@ -768,36 +784,61 @@ class HwSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    return SafeArea(
-      top: false,
-      child: Container(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.82,
-        ),
-        decoration: BoxDecoration(
-          color: p.card,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          boxShadow: p.shadowLg,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4.5,
-              margin: const EdgeInsets.fromLTRB(0, 6, 0, 14),
-              decoration: BoxDecoration(
-                color: p.line,
-                borderRadius: BorderRadius.circular(HwRadius.pill),
+    final media = MediaQuery.of(context);
+    // Height of the on-screen keyboard, 0 when it is closed.
+    final keyboard = media.viewInsets.bottom;
+    final open = keyboard > 0;
+
+    // KEYBOARD HANDLING. Two things are needed and both were missing, which is
+    // why every sheet with a text field was covered:
+    //
+    //  1. The sheet has to be pushed UP by the keyboard height. A modal bottom
+    //     sheet is laid out against the full screen, so without this the
+    //     keyboard simply draws on top of the fields and the primary button.
+    //  2. The max height has to be measured against the space that is actually
+    //     left. `size.height * 0.82` is 82% of the WHOLE screen — with a
+    //     keyboard taking ~40%, that alone still overflows.
+    //
+    // With the keyboard open the sheet is allowed 94% of what remains rather
+    // than 82%: the spec's 82% exists to leave a comfortable strip of page
+    // visible above the sheet, and once the keyboard is up that strip is gone
+    // anyway — the useful thing is to keep as many fields on screen as possible.
+    return Padding(
+      padding: EdgeInsets.only(bottom: keyboard),
+      child: SafeArea(
+        top: false,
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: (media.size.height - keyboard) * (open ? 0.94 : 0.82),
+          ),
+          decoration: BoxDecoration(
+            color: p.card,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            boxShadow: p.shadowLg,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4.5,
+                margin: const EdgeInsets.fromLTRB(0, 6, 0, 14),
+                decoration: BoxDecoration(
+                  color: p.line,
+                  borderRadius: BorderRadius.circular(HwRadius.pill),
+                ),
               ),
-            ),
-            Flexible(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                child: child,
+              Flexible(
+                child: Padding(
+                  // The 24px bottom breathing room is only wanted when the sheet
+                  // is sitting on the screen edge. With the keyboard up it is
+                  // dead space between the button and the keys.
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, open ? 8 : 24),
+                  child: child,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

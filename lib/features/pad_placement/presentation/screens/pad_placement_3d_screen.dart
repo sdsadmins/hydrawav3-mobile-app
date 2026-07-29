@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../domain/anatomy_scene_marker.dart';
+import '../widgets/anatomy_scene_flag.dart';
+import '../widgets/anatomy_scene_view.dart';
 import '../widgets/pad_anatomy_view.dart';
 
 /// Full-screen 3D Sun/Moon pad-placement viewer — the mobile port of the web
@@ -37,10 +40,17 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
   static const _ink = Color(0xFF1A1A1A);
 
   // The WebView bridge (localhost server, ready-poll, marker injection) lives in
-  // `PadAnatomyView`, shared with the performance pad map.
-  final _anatomy = PadAnatomyController();
+  // the stage widget, shared with the performance pad map. Both controllers are
+  // held because `kUseAnatomySceneRecovery` picks which stage is built.
+  final _anatomy = AnatomySceneController();
+  final _legacyAnatomy = PadAnatomyController();
   bool _showLabels = true;
   String _view = 'front';
+
+  /// The set whose pads are held highlighted, or null for none. Tapping a pad in
+  /// the 3D stage selects its set, and tapping a row in the list below
+  /// highlights that set's pads — the selection runs both ways.
+  int? _selectedSet;
 
   List<Map<String, dynamic>> get _markers =>
       ((widget.placement['markers'] as List?) ?? const [])
@@ -97,14 +107,7 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
         Expanded(
           child: Stack(
             children: [
-              Positioned.fill(
-                child: PadAnatomyView(
-                  markers: _markers,
-                  view: _view,
-                  showLabels: _showLabels,
-                  controller: _anatomy,
-                ),
-              ),
+              Positioned.fill(child: _stage()),
               Positioned(top: 10, right: 10, child: _controls()),
               Positioned(top: 10, left: 10, child: _viewSwitcher()),
             ],
@@ -114,6 +117,64 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
       ],
     );
   }
+
+  /// The 3D stage.
+  ///
+  /// Recovery pads are positioned entirely by their curated `zone` landmark —
+  /// the server sends no muscle list — so the new viewer resolves them through
+  /// exactly the same landmark table the old one used. `colorBySet`,
+  /// `showSetLinks` and `transparentBody` are all off: those are performance
+  /// affordances, and a recovery placement is one or two sets with no chain to
+  /// draw between them.
+  Widget _stage() {
+    if (!kUseAnatomySceneRecovery) {
+      return PadAnatomyView(
+        markers: _markers,
+        view: _view,
+        showLabels: _showLabels,
+        controller: _legacyAnatomy,
+      );
+    }
+    return AnatomySceneView(
+      markers: _markers,
+      source: MarkerSource.recovery,
+      view: _view,
+      showLabels: _showLabels,
+      padStyle: 'badge',
+      colorBySet: false,
+      showSetLinks: false,
+      transparentBody: false,
+      // This screen has no persistent front/back state to fight, so framing the
+      // pads on arrival saves the practitioner an orbit.
+      autoFocusCameraOnce: true,
+      backgroundCss: '#ffffff',
+      activeMarkers: _selectedSet == null
+          ? const []
+          : _markers
+              .where((m) => _asInt(m['setIndex']) == _selectedSet)
+              .toList(),
+      onRegionPick: (marker) {
+        if (!mounted) return;
+        setState(() => _selectedSet =
+            marker == null ? null : _asInt(marker['setIndex']));
+      },
+      controller: _anatomy,
+    );
+  }
+
+  static int? _asInt(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  // The zoom cluster drives whichever stage the flag actually built.
+  void _zoomIn() =>
+      kUseAnatomySceneRecovery ? _anatomy.zoomIn() : _legacyAnatomy.zoomIn();
+  void _zoomOut() =>
+      kUseAnatomySceneRecovery ? _anatomy.zoomOut() : _legacyAnatomy.zoomOut();
+  void _resetView() =>
+      kUseAnatomySceneRecovery ? _anatomy.reset() : _legacyAnatomy.reset();
 
   // --- Top-left: front/back/side view switcher -------------------------------
   Widget _viewSwitcher() {
@@ -189,9 +250,9 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                btn(Icons.add, _anatomy.zoomIn),
-                btn(Icons.remove, _anatomy.zoomOut),
-                btn(Icons.refresh, _anatomy.reset, border: false),
+                btn(Icons.add, _zoomIn),
+                btn(Icons.remove, _zoomOut),
+                btn(Icons.refresh, _resetView, border: false),
               ],
             ),
           ),
@@ -272,32 +333,54 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
     final moon =
         set['moon'] is Map ? (set['moon']['label']?.toString() ?? '') : '';
     final setting = set['setting']?.toString() ?? '';
+    // The other half of the two-way selection: tapping a row highlights that
+    // set's pads on the model, and tapping a pad selects the row. Tapping the
+    // selected row again clears it.
+    final selected = kUseAnatomySceneRecovery && _selectedSet == index;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              color: _ink,
+      child: InkWell(
+        onTap: kUseAnatomySceneRecovery
+            ? () => setState(
+                  () => _selectedSet = selected ? null : index,
+                )
+            : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFEEF2F5) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? const Color(0xFF132A35) : Colors.transparent,
             ),
           ),
-          const SizedBox(height: 4),
-          if (sun.isNotEmpty) _padLine('S${index + 1}', sun, _sun),
-          if (moon.isNotEmpty) _padLine('M${index + 1}', moon, _moon),
-          if (setting.isNotEmpty && setting != 'Normal')
-            Padding(
-              padding: const EdgeInsets.only(top: 3),
-              child: Text(
-                'Setting: $setting',
-                style: const TextStyle(fontSize: 11, color: _muted),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: _ink,
+                ),
               ),
-            ),
-        ],
+              const SizedBox(height: 4),
+              if (sun.isNotEmpty) _padLine('S${index + 1}', sun, _sun),
+              if (moon.isNotEmpty) _padLine('M${index + 1}', moon, _moon),
+              if (setting.isNotEmpty && setting != 'Normal')
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(
+                    'Setting: $setting',
+                    style: const TextStyle(fontSize: 11, color: _muted),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

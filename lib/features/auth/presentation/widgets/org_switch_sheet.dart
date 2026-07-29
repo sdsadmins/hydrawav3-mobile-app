@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
+import '../../../settings/presentation/widgets/org_sheets.dart';
 import '../providers/auth_provider.dart';
 import '../screens/select_organization_page.dart' show organizationProvider;
 
@@ -165,11 +165,21 @@ class _OrgSwitchSheet extends ConsumerWidget {
     );
   }
 
+  /// Closes the switcher, then opens the same Add-organization sheet the More
+  /// screen uses. It used to push `/select-organization?create=1` — the login
+  /// gate — which made adding a business look like being signed out.
+  ///
+  /// The parent navigator is captured BEFORE the pop, because this sheet's own
+  /// context is gone once it closes.
   void _openCreateOrg(BuildContext context) {
-    // Resolve the router before popping — this context is gone afterwards.
-    final router = GoRouter.of(context);
+    final navigator = Navigator.of(context, rootNavigator: true);
     Navigator.pop(context);
-    router.push('/select-organization?create=1');
+    // One frame, so the switcher has finished dismissing before the next sheet
+    // animates in — otherwise the two overlap mid-transition.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = navigator.context;
+      if (ctx.mounted) showAddOrganizationSheet(ctx);
+    });
   }
 }
 

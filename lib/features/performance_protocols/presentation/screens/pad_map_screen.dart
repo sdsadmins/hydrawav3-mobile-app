@@ -4,10 +4,32 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
+import '../../../pad_placement/domain/anatomy_scene_marker.dart';
 import '../../../pad_placement/domain/pad_marker_mapper.dart';
+import '../../../pad_placement/presentation/screens/anatomy_scene_fullscreen_screen.dart';
+import '../../../pad_placement/presentation/widgets/anatomy_scene_flag.dart';
+import '../../../pad_placement/presentation/widgets/anatomy_scene_view.dart';
 import '../../../pad_placement/presentation/widgets/pad_anatomy_view.dart';
 import '../../domain/performance_models.dart';
 import 'go_to_session.dart';
+
+/// Okabe-Ito, mirroring `SET_COLORS` in `tool/kinetic_chain_viewer/set_colors.js`.
+///
+/// The 3D stage paints set badges and arcs from that palette, so the chips,
+/// legend and set-note badges on this screen have to use the same hues — a
+/// legend that disagrees with the model is worse than either colour scheme
+/// alone. Deliberately NOT changed on `RefPalette.set1/2/3`, which is a theme
+/// token used elsewhere and has no reason to follow the 3D viewer.
+const List<Color> kAnatomySetColors = [
+  Color(0xFFF0E442), // Set 1 — yellow
+  Color(0xFF0072B2), // Set 2 — blue
+  Color(0xFF009E73), // Set 3 — green
+  Color(0xFFD55E00), // Set 4 — vermillion
+  Color(0xFF56B4E9), // Set 5 — sky blue
+  Color(0xFFCC79A7), // Set 6 — reddish purple
+  Color(0xFFE69F00), // Set 7 — orange
+  Color(0xFF999999), // Set 8 — grey
+];
 
 /// The pad-map screen — a port of the UI spec's `scr-padmap` (`renderPadMap()`
 /// in `hydrawav3-ui-handoff/app.js`), with the Z-Anatomy viewer as the body
@@ -29,7 +51,10 @@ class PadMapScreen extends ConsumerStatefulWidget {
 }
 
 class _PadMapScreenState extends ConsumerState<PadMapScreen> {
-  final _anatomy = PadAnatomyController();
+  // Both controllers exist because `kUseAnatomyScenePerformance` decides which
+  // stage is built; the zoom cluster dispatches to whichever is live.
+  final _anatomy = AnatomySceneController();
+  final _legacyAnatomy = PadAnatomyController();
   late final PadPlacementViewData _data;
 
   /// null = the spec's "All areas" chip.
@@ -74,8 +99,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     _view = _data.viewFor(null);
   }
 
-  Color _setColor(RefPalette p, int i) =>
-      [p.set1, p.set2, p.set3][i % 3];
+  /// The set colour for chips, legend swatches and set-note badges.
+  ///
+  /// Follows the 3D stage: the AnatomyScene viewer paints per-set badges and
+  /// arcs from the Okabe-Ito palette, so the chrome has to match it. The old
+  /// three-grey `RefPalette` triple stays in use when the flag is off.
+  Color _setColor(RefPalette p, int i) => kUseAnatomyScenePerformance
+      ? kAnatomySetColors[i % kAnatomySetColors.length]
+      : [p.set1, p.set2, p.set3][i % 3];
 
   /// Focusing a set jumps to the view that set sits on — `focusPadSet()` in the
   /// spec does the same, otherwise you focus a posterior set and see an empty
@@ -86,8 +117,6 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       _view = _data.viewFor(index);
     });
   }
-
-  void _flip() => setState(() => _view = _view == 'front' ? 'back' : 'front');
 
   bool _isUnmapped(ResolvedPad pad) =>
       pad.isUnmapped || _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
@@ -212,21 +241,25 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         ),
         if (chain != null && chain.name.trim().isNotEmpty) ...[
           const SizedBox(height: HwSpace.s2),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  chain.name,
-                  style: TextStyle(
-                    fontSize: HwType.sm,
-                    fontWeight: FontWeight.w700,
-                    color: p.ink,
-                  ),
-                ),
-              ),
-              if (chain.subline.isNotEmpty) HwPill(chain.subline),
-            ],
+          Text(
+            chain.name,
+            style: TextStyle(
+              fontSize: HwType.sm,
+              fontWeight: FontWeight.w700,
+              color: p.ink,
+            ),
           ),
+          // The subline sits BELOW the chain name rather than beside it: it is
+          // server copy of unbounded length, so sharing a row with the name left
+          // both squeezed and overflowed the row on longer chains. On its own
+          // line it gets the full width and may wrap to two.
+          if (chain.subline.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: HwPill(chain.subline, maxLines: 2),
+            ),
+          ],
         ],
       ],
     );
@@ -274,7 +307,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             color: selected ? p.copper : p.line,
             width: 1.5,
           ),
-          boxShadow: selected ? null : p.shadow,
+          // No shadow: these sit in a horizontally scrolling strip, where a drop
+          // shadow on each chip reads as visual noise and clips against the
+          // row's bounds. Selection is carried by the fill and the copper border.
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -315,53 +350,34 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          Positioned.fill(
-            child: PadAnatomyView(
-              markers: _data.markers(
-                focusSetIndex: _visibleSetIndex,
-                mirrored: _mirrored,
-                bilateral: _bilateral,
-              ),
-              view: _view,
-              showLabels: _showLabels,
-              padStyle: _muscleMode ? 'muscle' : 'dot',
-              muscleMode: _muscleMode,
-              highlightMuscles: _highlightMuscles,
-              controller: _anatomy,
-              onUnmapped: (keys) {
-                if (!mounted || keys.isEmpty) return;
-                setState(() => _unmappedByViewer = keys);
-              },
-            ),
-          ),
-          Positioned(
-            top: HwSpace.s3,
-            left: HwSpace.s3,
-            child: HwPill(
-              _view == 'front' ? 'Front' : 'Back',
-              tone: HwPillTone.copper,
-            ),
-          ),
+          Positioned.fill(child: _stage()),
+          // No Front/Back pill and no rotate button any more: the stage now
+          // claims every drag that starts on it, so the model is turned by
+          // dragging it. A button that flips to a fixed view — and a pill
+          // naming that view — both stop being true the moment you rotate.
           Positioned(
             top: HwSpace.s3,
             right: HwSpace.s3,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                HwIconButton(asset: HwIcons.rotate, onTap: _flip),
-                const SizedBox(height: HwSpace.s2),
                 _stageToggle(
                   p,
                   label: _showLabels ? 'Labels on' : 'Labels off',
                   active: _showLabels,
                   onTap: () => setState(() => _showLabels = !_showLabels),
                 ),
-                const SizedBox(height: HwSpace.s1),
+                const SizedBox(height: HwSpace.s2),
                 _stageToggle(
                   p,
                   label: 'Muscles',
                   active: _showMuscles,
                   onTap: () => setState(() => _showMuscles = !_showMuscles),
                 ),
+                if (kUseAnatomyScenePerformance) ...[
+                  const SizedBox(height: HwSpace.s2),
+                  _expandButton(p),
+                ],
               ],
             ),
           ),
@@ -377,9 +393,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _zoomBtn(p, Icons.add, _anatomy.zoomIn),
-                  _zoomBtn(p, Icons.remove, _anatomy.zoomOut),
-                  _zoomBtn(p, Icons.refresh, _anatomy.reset, border: false),
+                  _zoomBtn(p, Icons.add, _zoomIn),
+                  _zoomBtn(p, Icons.remove, _zoomOut),
+                  _zoomBtn(p, Icons.refresh, _resetView, border: false),
                 ],
               ),
             ),
@@ -388,6 +404,144 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       ),
     );
   }
+
+  /// The 3D stage.
+  ///
+  /// The option mapping follows the web performance flow exactly:
+  ///   • `padStyle: 'muscle'` when Muscle Mode is on — the target muscle IS the
+  ///     indicator, so no pad and no badge are drawn.
+  ///   • `transparentBody: !muscleMode` — this is the web's actual pairing
+  ///     (`transparentBody={!muscleMode}`). Muscle Mode reads as "solid body";
+  ///     with it off you get the X-ray, which the older viewer could not do at
+  ///     all because it shared one material across every mesh.
+  ///   • `colorBySet` + `showSetLinks` are always on here: this is the surface
+  ///     where a chain of sets has to read as a chain.
+  Widget _stage() {
+    final p = RefPalette.of(context);
+    final markers = _data.markers(
+      focusSetIndex: _visibleSetIndex,
+      mirrored: _mirrored,
+      bilateral: _bilateral,
+    );
+
+    void handleUnmapped(Set<String> keys) {
+      if (!mounted || keys.isEmpty) return;
+      setState(() => _unmappedByViewer = keys);
+    }
+
+    if (!kUseAnatomyScenePerformance) {
+      return PadAnatomyView(
+        markers: markers,
+        view: _view,
+        showLabels: _showLabels,
+        padStyle: _muscleMode ? 'muscle' : 'dot',
+        muscleMode: _muscleMode,
+        highlightMuscles: _highlightMuscles,
+        controller: _legacyAnatomy,
+        onUnmapped: handleUnmapped,
+      );
+    }
+
+    return AnatomySceneView(
+      markers: markers,
+      source: MarkerSource.performance,
+      // Drives the "Set N · Role" text on each arc.
+      setRoles: _data.sets.map((s) => s.role).toList(),
+      view: _view,
+      showLabels: _showLabels,
+      padStyle: _muscleMode ? 'muscle' : 'badge',
+      transparentBody: !_muscleMode,
+      colorBySet: true,
+      showSetLinks: true,
+      focusSetIndex: _visibleSetIndex,
+      dimUnselected: !_showAllSets,
+      activeMarkers: _visibleSetIndex == null ? const [] : markers,
+      highlightMuscles: _highlightMuscles,
+      // Matching the card behind it rather than staying transparent lets the
+      // WebView composite opaquely, which is a measurable win while orbiting.
+      backgroundCss: _cssOf(p.card2),
+      controller: _anatomy,
+      onUnmapped: handleUnmapped,
+      // Tapping a pad focuses its set, which is the same thing the chips above
+      // the stage do — so the two controls cannot disagree.
+      onRegionPick: (marker) {
+        if (!mounted) return;
+        final index = marker?['setIndex'];
+        if (index is int) _focus(index);
+      },
+    );
+  }
+
+  /// Opens the stage edge to edge, carrying the current view options across so
+  /// it shows exactly what the small stage was showing.
+  ///
+  /// This matters more than it looks: the inline stage now claims every drag
+  /// that starts on it (otherwise there is no vertical rotation inside a
+  /// scrolling page), so full screen is where inspecting a placement properly
+  /// belongs.
+  Widget _expandButton(RefPalette p) {
+    return HwPress(
+      onTap: _openFullscreen,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: BoxDecoration(
+          color: p.card,
+          borderRadius: BorderRadius.circular(HwRadius.xs),
+          border: Border.all(color: p.line),
+        ),
+        child: Icon(Icons.open_in_full, size: 14, color: p.ink3),
+      ),
+    );
+  }
+
+  void _openFullscreen() {
+    final sets = _data.sets;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AnatomySceneFullscreenScreen(
+          markers: _data.markers(
+            focusSetIndex: _visibleSetIndex,
+            mirrored: _mirrored,
+            bilateral: _bilateral,
+          ),
+          source: MarkerSource.performance,
+          setRoles: sets.map((s) => s.role).toList(),
+          title: 'Pad placements',
+          initialView: _view,
+          initialShowLabels: _showLabels,
+          padStyle: _muscleMode ? 'muscle' : 'badge',
+          transparentBody: !_muscleMode,
+          colorBySet: true,
+          showSetLinks: true,
+          focusSetIndex: _visibleSetIndex,
+          dimUnselected: !_showAllSets,
+          activeMarkers: _visibleSetIndex == null
+              ? const []
+              : _data.markers(
+                  focusSetIndex: _visibleSetIndex,
+                  mirrored: _mirrored,
+                  bilateral: _bilateral,
+                ),
+          highlightMuscles: _highlightMuscles,
+        ),
+      ),
+    );
+  }
+
+  /// `#rrggbb` for the viewer, which takes a CSS colour. Alpha is dropped —
+  /// the stage sits on an opaque card, so there is nothing behind it to blend
+  /// with anyway.
+  static String _cssOf(Color c) =>
+      '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+
+  // The zoom cluster drives whichever stage the flag actually built.
+  void _zoomIn() =>
+      kUseAnatomyScenePerformance ? _anatomy.zoomIn() : _legacyAnatomy.zoomIn();
+  void _zoomOut() => kUseAnatomyScenePerformance
+      ? _anatomy.zoomOut()
+      : _legacyAnatomy.zoomOut();
+  void _resetView() =>
+      kUseAnatomyScenePerformance ? _anatomy.reset() : _legacyAnatomy.reset();
 
   /// The web's four view options, in the web's order and with the web's wording.
   ///
