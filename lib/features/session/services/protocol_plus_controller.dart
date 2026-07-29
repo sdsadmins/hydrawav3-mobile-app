@@ -172,6 +172,12 @@ class ProtocolPlusController {
   /// keyed by localMac. Only the LATEST is kept; applied on reconnect.
   final Map<String, ({Protocol protocol, int index})> _pendingSwitches = {};
 
+  /// Devices whose OWN server session has already been stopped because the user
+  /// stopped that unit on the hardware. [stopServerSession] and [_finishRun]
+  /// skip them so the end-of-run teardown doesn't re-post a stop for a session
+  /// the server already closed.
+  final Set<String> _serverStoppedDevices = <String>{};
+
   /// Watches per-device BLE connection so a held switch can be applied the
   /// moment the device reconnects.
   StreamSubscription<Map<String, BleConnectionStatus>>? _connStatesSub;
@@ -401,6 +407,8 @@ class ProtocolPlusController {
     if (ctx == null) return;
     final dio = _ref.read(nodeDioProvider);
     for (final b in _bindings) {
+      // Already closed by a device-initiated stop — don't re-post.
+      if (_serverStoppedDevices.contains(b.localMac)) continue;
       try {
         final res = await dio.post(
           ApiEndpoints.sessionStop(b.serverSessionId, ctx.orgId),
@@ -416,6 +424,56 @@ class ProtocolPlusController {
       } catch (e) {
         appLogger.e('ProtocolPlus: stop failed: $e');
       }
+    }
+  }
+
+  /// The user stopped [localMac] ON THE DEVICE mid-sequence (the engine's
+  /// firmware run-state detector confirmed it). Stop just that device's server
+  /// session so the backend stops scheduling its remaining `START_PROTOCOL`
+  /// switches and it drops out of the org live feed — which is also what stops
+  /// the on-screen countdown, since the session card reads the feed's
+  /// `remainingSeconds` in preference to the local engine timer.
+  ///
+  /// Devices are registered one server session each ([_registerPlusDevices]), so
+  /// this affects only the stopped unit; the rest of a multi-device Plus run
+  /// carries on. When it was the last live device the engine goes terminal
+  /// anyway and the existing engine listener runs [_finishRun].
+  Future<void> _handlePlusDeviceStopped(String localMac) async {
+    if (!_serverStoppedDevices.add(localMac)) return; // already handled
+    ProtocolPlusBinding? binding;
+    for (final b in _bindings) {
+      if (b.localMac == localMac) {
+        binding = b;
+        break;
+      }
+    }
+    if (binding == null) return;
+
+    // Drop any held switch for this device — it is never being applied now.
+    _pendingSwitches.remove(localMac);
+    _engine?.setPlusSwitchPending(localMac, false);
+
+    final ctx = await _sessionRequestContext();
+    if (ctx == null) return;
+    try {
+      final res = await _ref.read(nodeDioProvider).post(
+            ApiEndpoints.sessionStop(binding.serverSessionId, ctx.orgId),
+            data: const {'stopAll': true},
+            options: ctx.options,
+          );
+      appLogger.i(
+        'ProtocolPlus: device-initiated stop → server session '
+        '${binding.serverSessionId} stopped:\n${_pretty(res.data)}',
+      );
+    } on DioException catch (e) {
+      appLogger.e(
+        'ProtocolPlus: device-stop server stop failed for $localMac '
+        '(status=${e.response?.statusCode}) ${e.response?.data}',
+      );
+    } catch (e) {
+      appLogger.e(
+        'ProtocolPlus: device-stop server stop failed for $localMac: $e',
+      );
     }
   }
 
@@ -659,6 +717,7 @@ class ProtocolPlusController {
     _terminalHandled = false;
     _engine = engine;
     _pendingSwitches.clear();
+    _serverStoppedDevices.clear();
 
     // Apply any protocol switch that was held while a device was disconnected,
     // the moment that device reconnects (BLE). Survives screen changes.
@@ -687,6 +746,12 @@ class ProtocolPlusController {
     // is mounted. This is what frees the device after an off-screen Plus finish.
     // fireImmediately:true also covers the race where the run already ended
     // before registration produced these bindings (engine already terminal).
+    // A device stopped ON THE DEVICE mid-sequence. Each Plus device owns its own
+    // server session, so stop exactly that one — the others keep running and
+    // keep receiving their switches.
+    engine.onPlusDeviceStoppedByUser =
+        (mac) => unawaited(_handlePlusDeviceStopped(mac));
+
     _removeEngineListener?.call();
     _removeEngineListener = engine.addListener(
       (state) {
@@ -794,6 +859,10 @@ class ProtocolPlusController {
             !_ref.read(bleConnectorProvider).isConnected(binding.localMac)) {
           _pendingSwitches[binding.localMac] =
               (protocol: protocol, index: index);
+          // Tell the engine a switch is outstanding: while it is, the device's
+          // `rs:stop` is the expected idle waiting for this protocol, not the
+          // user pressing STOP on the unit.
+          engine.setPlusSwitchPending(binding.localMac, true);
           appLogger.w(
             'ProtocolPlus: ${binding.localMac} not connected — holding switch '
             'index=$index until reconnect',
@@ -816,10 +885,13 @@ class ProtocolPlusController {
         if (!ok) {
           _pendingSwitches[binding.localMac] =
               (protocol: protocol, index: index);
+          engine.setPlusSwitchPending(binding.localMac, true);
           appLogger.w(
             'ProtocolPlus: switch apply failed for ${binding.localMac} '
             '(index=$index) — queued for retry',
           );
+        } else {
+          engine.setPlusSwitchPending(binding.localMac, false);
         }
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to handle START_PROTOCOL: $e');
@@ -1053,6 +1125,10 @@ class ProtocolPlusController {
       'ProtocolPlus: applying held switch for $mac (index=${pending.index}, '
       'via=$reason)',
     );
+    // No longer HELD, but the write below still keeps the device idle for a few
+    // seconds — applyProtocolPlusSwitch marks itself in-flight for that, so the
+    // stop detector stays suppressed across the handover.
+    engine.setPlusSwitchPending(mac, false);
     unawaited(
       engine
           .applyProtocolPlusSwitch(mac, pending.protocol, pending.index)
@@ -1061,6 +1137,7 @@ class ProtocolPlusController {
         // until the device actually accepts the switch.
         if (!ok && _engine != null) {
           _pendingSwitches[mac] = pending;
+          engine.setPlusSwitchPending(mac, true);
           appLogger.w(
             'ProtocolPlus: held switch for $mac (index=${pending.index}) '
             'still failing — will retry',
@@ -1078,7 +1155,11 @@ class ProtocolPlusController {
     _pendingSwitchReconciler?.cancel();
     _pendingSwitchReconciler = null;
     _pendingSwitches.clear();
+    _serverStoppedDevices.clear();
     _lastConnStates = {};
+    // Detach before dropping the reference, or a late confirmation from an
+    // engine that outlives this run would call back into a torn-down controller.
+    _engine?.onPlusDeviceStoppedByUser = null;
     _engine = null;
     try {
       _socket?.dispose();

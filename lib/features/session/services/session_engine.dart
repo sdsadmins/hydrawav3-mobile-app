@@ -486,6 +486,58 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// lands — this is what drives the break countdown in the tick loop.
   final Map<String, Duration> _plusSegmentEndByDevice = {};
 
+  /// Wall-clock start of the CURRENT uninterrupted `rs:"stop"` streak per Plus
+  /// device. Seeded by the first stop frame, cleared by any play/pause frame, by
+  /// a landed switch, and by [reset]. The tick loop turns a long-enough streak
+  /// into a device-initiated stop — see [_evaluatePlusDeviceStops].
+  final Map<String, DateTime> _plusStopSince = {};
+
+  /// Plus devices whose config+PLAY write is executing RIGHT NOW.
+  /// [applyProtocolPlusSwitch] deliberately sends STOP first and waits ~4s
+  /// before PLAY, so the device genuinely reports `rs:"stop"` for several
+  /// seconds during every healthy switch. Without this flag our own switch would
+  /// look exactly like a user stop.
+  final Set<String> _plusSwitchInFlight = <String>{};
+
+  /// Plus devices for which [ProtocolPlusController] is HOLDING a switch (the
+  /// device was disconnected, or the write failed and it was re-queued). The
+  /// controller owns `_pendingSwitches`; the engine has no other way to see that
+  /// a switch is outstanding. No time bound — the controller's 4s reconciler is
+  /// what clears it.
+  final Set<String> _plusSwitchPendingExternal = <String>{};
+
+  /// Fired once a Plus device is confirmed to have been stopped ON THE DEVICE.
+  /// [ProtocolPlusController] wires this to stop that device's own server
+  /// session (each Plus device has its own `serverSessionId`).
+  void Function(String deviceId)? onPlusDeviceStoppedByUser;
+
+  /// How long a Plus device must report `rs:"stop"` uninterrupted, outside the
+  /// break window and with no switch pending, before we call it a user stop.
+  /// Telemetry streams roughly every 3s, so this is ~2 consecutive frames.
+  static const Duration _plusStopConfirmWindow = Duration(seconds: 6);
+
+  /// The same, for a device whose segment end we can't predict — we can't reason
+  /// about its break window at all, so wait longer than any plausible
+  /// break + switch sequence before acting.
+  static const Duration _plusStopConfirmWindowUnknownSegment =
+      Duration(seconds: 25);
+
+  /// How far BEFORE the predicted segment end a stop still reads as the break.
+  /// [_plusSegmentEndByDevice] is our ESTIMATE of the firmware's runtime and the
+  /// device stopwatch can drift across a suspend, so a unit that finishes a few
+  /// seconds "early" by our clock must not be mistaken for a user stop.
+  static const Duration _plusBreakPreGrace = Duration(seconds: 15);
+
+  /// How far AFTER the nominal break end a stop still reads as the break. A
+  /// healthy but late switch costs up to 12s waiting for reconnect
+  /// (applyProtocolPlusSwitch) + ~4s for STOP→config→PLAY + a retry ≈ 22s; 30s
+  /// leaves headroom for server-side jitter.
+  ///
+  /// Both graces are deliberately generous: a false positive tears down a live
+  /// treatment mid-break, while a false negative only DELAYS detection (the
+  /// window always expires and the pending flags always clear).
+  static const Duration _plusBreakPostGrace = Duration(seconds: 30);
+
   Future<void> _stateUpdateQueue = Future.value();
 
   /// Listens to the BLE notify/status stream and turns telemetry frames into
@@ -727,20 +779,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return;
     }
 
-    // Protocol Plus lifecycle is server-driven (the controller handles
-    // SESSION_STOPPED and the protocol switches). The firmware physically stops
-    // between stacked protocols, so honoring `rs` here would tear the sequence
-    // down mid-break — mirror the tick loop's Plus guard and skip entirely.
-    final deviceIsPlus = _protocolPlusDeviceIds.contains(deviceId) ||
-        (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty) ||
-        state.protocolPlusSequenceByDevice.containsKey(deviceId);
-    if (deviceIsPlus) {
-      appLogger.i(
-          '🔎 rs-reconcile skip: $deviceId is Protocol Plus (rs=$rs ignored to avoid break teardown)');
-      return;
-    }
-
     final normalized = rs.trim().toLowerCase();
+    final deviceIsPlus = _isPlusDevice(deviceId);
+
+    // Track the Plus stop STREAK before the dedupe below. A repeated `stop`
+    // frame is not a new event, but it must not reset the streak either — and a
+    // `play` must break it. This has to run for repeats too, which is why it
+    // sits above the dedupe return.
+    if (deviceIsPlus) _recordPlusRunState(deviceId, normalized);
+
     if (_lastRsByDevice[deviceId] == normalized) {
       appLogger.i('🔎 rs-reconcile skip: dedupe (rs=$normalized unchanged)');
       return; // dedupe
@@ -748,6 +795,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _lastRsByDevice[deviceId] = normalized;
     appLogger.i(
         '🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
+
+    // Protocol Plus lifecycle is NOT decided here. The firmware PHYSICALLY STOPS
+    // between stacked sub-protocols — and our own switch sends STOP first and
+    // waits ~4s before PLAY — so a single `rs:stop` frame is ambiguous: it is
+    // usually an expected idle, but it is also exactly what the user pressing
+    // STOP on the unit looks like. Acting on the frame would tear the sequence
+    // down mid-break; ignoring it entirely (what we used to do) left the app
+    // counting down forever after a real stop. Instead the tick loop weighs the
+    // whole streak against the break window — see [_evaluatePlusDeviceStops].
+    if (deviceIsPlus) return;
 
     final current = state.deviceStatuses[deviceId];
     if (current == null) return;
@@ -788,6 +845,107 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
         }
         break;
+    }
+  }
+
+  /// Single source of truth for "is this device running a Plus sequence".
+  /// Replaces three divergent inline predicates that had drifted apart.
+  bool _isPlusDevice(String id) =>
+      _protocolPlusDeviceIds.contains(id) ||
+      (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty) ||
+      state.protocolPlusSequenceByDevice.containsKey(id);
+
+  /// Maintain [_plusStopSince] — the start of this device's current
+  /// uninterrupted `rs:"stop"` streak. Repeat stop frames do NOT restart the
+  /// streak; any play/pause frame breaks it.
+  void _recordPlusRunState(String id, String normalized) {
+    if (normalized == 'stop') {
+      _plusStopSince.putIfAbsent(id, DateTime.now);
+    } else if (normalized == 'play' || normalized == 'pause') {
+      if (_plusStopSince.remove(id) != null) {
+        appLogger.i(
+            'ProtocolPlus: $id reported $normalized — stop streak cleared');
+      }
+    }
+  }
+
+  /// Drop all Plus stop bookkeeping. Called wherever [_lastRsByDevice] is reset
+  /// — a new run must not inherit the last one's half-finished streaks.
+  void _clearPlusStopTracking() {
+    _plusStopSince.clear();
+    _plusSwitchInFlight.clear();
+    _plusSwitchPendingExternal.clear();
+  }
+
+  /// True when [id]'s elapsed time places it inside the window where an
+  /// `rs:"stop"` is the firmware's expected idle between two stacked
+  /// sub-protocols rather than a user pressing STOP on the unit.
+  bool _isInsidePlusBreakWindow(String id) {
+    // Nothing comes after the final sub-protocol, so there is no break to
+    // confuse it with — a stop there is either the natural end (the tick loop
+    // completes it) or a user stop.
+    if (_isPlusDeviceOnFinalProtocol(id)) return false;
+    final segEnd = _plusSegmentEndByDevice[id];
+    // Segment end unknown → we cannot reason about the break at all; the caller
+    // falls back to the much longer unknown-segment confirmation window.
+    if (segEnd == null) return false;
+    final elapsed = _deviceElapsed(id);
+    final delay = Duration(seconds: state.protocolPlusDelayByDevice[id] ?? 0);
+    return elapsed >= segEnd - _plusBreakPreGrace &&
+        elapsed <= segEnd + delay + _plusBreakPostGrace;
+  }
+
+  /// Turn a long-enough `rs:"stop"` streak into a device-initiated stop.
+  ///
+  /// Called from the tick loop rather than from the frame handler, so the
+  /// decision is re-evaluated continuously: a stop that begins during a break
+  /// and outlives it (a lost START_PROTOCOL switch) is still caught once the
+  /// break window expires, which a one-shot timer armed at the first frame
+  /// would miss.
+  ///
+  /// KNOWN LIMITATION: if the user presses STOP while the device is ALREADY idle
+  /// mid-break, the firmware's `rs` never changes and the streak that is running
+  /// is the break's own. It is confirmed once the break window expires, which is
+  /// the correct outcome, just later than a mid-protocol stop.
+  void _evaluatePlusDeviceStops() {
+    if (_plusStopSince.isEmpty) return;
+    if (!_isActive || state.transport != SessionTransport.ble) return;
+    final now = DateTime.now();
+    for (final id in _plusStopSince.keys.toList()) {
+      final since = _plusStopSince[id];
+      if (since == null) continue;
+      final status = state.deviceStatuses[id];
+      if (status != SessionStatus.running && status != SessionStatus.paused) {
+        _plusStopSince.remove(id); // already terminal / not started
+        continue;
+      }
+      // Our own switch sends STOP first and waits ~4s before PLAY, and a held
+      // switch leaves the device idle indefinitely — neither is a user stop.
+      if (_plusSwitchInFlight.contains(id) ||
+          _plusSwitchPendingExternal.contains(id)) {
+        continue;
+      }
+      if (_isInsidePlusBreakWindow(id)) continue;
+      final window = _plusSegmentEndByDevice[id] == null
+          ? _plusStopConfirmWindowUnknownSegment
+          : _plusStopConfirmWindow;
+      final streak = now.difference(since);
+      if (streak < window) continue;
+
+      appLogger.w(
+        'ProtocolPlus: $id reported rs=stop for ${streak.inSeconds}s outside '
+        'the break window with no pending switch → treating as a USER STOP ON '
+        'THE DEVICE (elapsed=${_deviceElapsed(id)}, '
+        'segEnd=${_plusSegmentEndByDevice[id]}, '
+        'delay=${state.protocolPlusDelayByDevice[id]})',
+      );
+      _plusStopSince.remove(id);
+      // The same path a normal protocol takes. Once every device is stopped the
+      // engine goes terminal, which the controller's engine listener turns into
+      // the full teardown (server stop, active-session removal, foreground
+      // notification) and the session screen turns into the post-session flow.
+      _forceDeviceStopped(id);
+      onPlusDeviceStoppedByUser?.call(id);
     }
   }
 
@@ -1130,6 +1288,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       ..addEntries(selectedDeviceIds.map((e) => MapEntry(e, Stopwatch())));
 
     _lastRsByDevice.clear();
+    _clearPlusStopTracking();
 
     // Begin listening for device→app telemetry over BLE. Subscribed
     // unconditionally so no session-entry path can skip it; the listener itself
@@ -1490,10 +1649,42 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     int protocolIndex,
   ) async {
     if (!_isActive) return false;
+    // Never resurrect a device that has already stopped. A START_PROTOCOL can
+    // arrive late — after the user stopped the unit and we ended its run — and
+    // without this guard we would happily re-PLAY a dead device.
+    final devStatus = state.deviceStatuses[mac];
+    if (devStatus == SessionStatus.stopped ||
+        devStatus == SessionStatus.completed) {
+      appLogger.w(
+        'ProtocolPlus: switch for $mac ignored — device already $devStatus',
+      );
+      return false;
+    }
     appLogger.i(
       'ProtocolPlus: switching device=$mac to ${newProtocol.templateName} '
       '(index=$protocolIndex, transport=${state.transport})',
     );
+
+    // The switch itself sends STOP and waits ~4s before PLAY, so the device
+    // genuinely reports rs=stop throughout. Mark it in-flight for the whole
+    // body so the stop detector doesn't read our own switch as a user stop.
+    _plusSwitchInFlight.add(mac);
+    try {
+      return await _applyProtocolPlusSwitchInner(
+        mac,
+        newProtocol,
+        protocolIndex,
+      );
+    } finally {
+      _plusSwitchInFlight.remove(mac);
+    }
+  }
+
+  Future<bool> _applyProtocolPlusSwitchInner(
+    String mac,
+    Protocol newProtocol,
+    int protocolIndex,
+  ) async {
 
     // Reflect the new protocol per-device + advance the sequence indicator so
     // the live session screen highlights the now-active protocol chip.
@@ -1515,6 +1706,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // break flag for the device. The next break begins when this elapses.
     _plusSegmentEndByDevice[mac] = _deviceElapsed(mac) +
         Duration(seconds: _plusProtocolDurationSeconds(newProtocol));
+    // This switch's PLAY restarts the device, so whatever stop streak was
+    // running belonged to the break before it.
+    _plusStopSince.remove(mac);
     final clearedOnBreak =
         Map<String, bool>.from(state.protocolPlusOnBreakByDevice)
           ..[mac] = false;
@@ -1677,6 +1871,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       ..clear()
       ..addAll(deviceIds);
     if (deviceIds.isNotEmpty) _isProtocolPlus = true;
+  }
+
+  /// Called by [ProtocolPlusController] whenever a `START_PROTOCOL` switch for
+  /// [mac] starts being applied, is held for a disconnected device, or is
+  /// re-queued after a failed write — and again once it lands. While pending,
+  /// the device's `rs:"stop"` is read as the expected inter-protocol idle
+  /// instead of a user stop. See [_isExpectedPlusBreakStop].
+  void setPlusSwitchPending(String mac, bool pending) {
+    if (pending) {
+      _plusSwitchPendingExternal.add(mac);
+      // A switch is outstanding → the idle we're seeing is expected, so the
+      // streak we were accumulating belongs to the break.
+      _plusStopSince.remove(mac);
+    } else {
+      _plusSwitchPendingExternal.remove(mac);
+    }
   }
 
   /// Device-elapsed (monotonic + slept-time catch-up) for [id].
@@ -2511,6 +2721,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _protocolPlusDeviceIds.clear();
     _plusSegmentEndByDevice.clear();
     _lastRsByDevice.clear();
+    _clearPlusStopTracking();
+    onPlusDeviceStoppedByUser = null;
     try {
       state = const SessionEngineState();
       unawaited(_ref
@@ -2527,6 +2739,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       return;
     }
+    // Weigh any outstanding Plus `rs:stop` streak FIRST, so a confirmed
+    // device-initiated stop lands before this tick paints the timers — the
+    // countdown must not advance one more frame after the unit has stopped.
+    _evaluatePlusDeviceStops();
+    if (!_isActive || state.status != SessionStatus.running) return;
     _reconcileClockFromWall();
     _syncDisplayedTimerFromStopwatch();
   }
@@ -2577,8 +2794,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           // so _finishRun never runs (device never gets a STOP, the foreground
           // notification never clears) and the session screen stays "running"
           // while the live card already reads "completed".
-          final deviceIsPlus = _protocolPlusDeviceIds.contains(id) ||
-              (_isProtocolPlus && _protocolPlusDeviceIds.isEmpty);
+          final deviceIsPlus = _isPlusDevice(id);
           // Decide whether the WHOLE Plus run is genuinely over.
           // `timerState.totalDuration` is the whole-sequence total, so reaching
           // it means every switch should already have happened.
@@ -2847,6 +3063,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _timer?.cancel();
     _telemetrySub?.cancel();
     _telemetrySub = null;
+    _clearPlusStopTracking();
     _stopwatch.stop();
     super.dispose();
   }

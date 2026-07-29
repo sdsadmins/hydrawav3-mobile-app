@@ -522,6 +522,17 @@ class BleConnector {
     appLogger.i('BLE: auto-reconnect suppressed for $deviceId (session ended)');
   }
 
+  /// True while auto-reconnect is suppressed for [deviceId] — i.e. the drop was
+  /// INTENTIONAL rather than the unit going out of range. Covers a user-driven
+  /// [disconnect], a session-end [suppressReconnect], and the mid-write GATT-133
+  /// / timeout recovery (which disconnects and immediately reconnects). Cleared
+  /// by the next [connect].
+  ///
+  /// Consumers use this to avoid reporting a deliberate disconnect as an
+  /// out-of-range event.
+  bool isReconnectSuppressed(String deviceId) =>
+      _manualDisconnects.contains(deviceId);
+
   /// Disconnect a specific device.
   Future<void> disconnect(String deviceId) async {
     // Always suppress any pending/in-flight auto-reconnect for this device,

@@ -62,6 +62,12 @@ class BleRepository {
   Map<String, BleConnectionStatus> get currentConnectionStates =>
       _connector.currentStates;
 
+  /// See [BleConnector.isReconnectSuppressed] — true when this device's drop was
+  /// intentional (user disconnect, session end, mid-write recovery) rather than
+  /// the unit going out of range.
+  bool isReconnectSuppressed(String deviceId) =>
+      _connector.isReconnectSuppressed(deviceId);
+
   Stream<BleNotification> get notifications => _connector.notifications;
 
   Stream<Map<String, int>> get batteryLevels => _connector.batteryLevels;

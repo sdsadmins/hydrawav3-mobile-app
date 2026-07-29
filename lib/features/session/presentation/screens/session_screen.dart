@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/storage/preferences.dart';
+import '../../../../core/theme/widgets/hw_info_dialog.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -143,6 +144,26 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   late final String _engineKey;
 
   Timer? _padPollTimer;
+
+  /// Per-device grace timers for the "device is not in range" popup. Armed on a
+  /// connected→disconnected edge, cancelled if the unit comes back.
+  final Map<String, Timer> _outOfRangeTimers = {};
+
+  /// One out-of-range dialog at a time, and the device it is about (so it can be
+  /// dismissed when that device reconnects).
+  String? _outOfRangeDialogDeviceId;
+
+  /// The out-of-range dialog route's own context, used to close it precisely.
+  BuildContext? _outOfRangeDialogContext;
+
+  /// How long a bound device must stay gone before we tell the user it's out of
+  /// range. The connector auto-reconnects up to `maxReconnectAttempts` (5) with
+  /// a `reconnectDelay * attempt` backoff (~9s of delay in total) and
+  /// AutoConnectManager restarts a scan on the same edge, so waiting 12s means
+  /// the popup only appears once that built-in recovery has genuinely failed.
+  /// It also silently covers the connector's OWN disconnect→reconnect during
+  /// write recovery (350ms + connect ≤6s), which must never raise a popup.
+  static const Duration _kOutOfRangeGrace = Duration(seconds: 12);
 
   final Map<String, String> _deviceLabelById = {};
 
@@ -308,10 +329,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         for (final deviceId in widget.deviceIds) {
           final previousStatus = previousStates[deviceId];
           final currentStatus = nextStates[deviceId];
+
+          // Back in range → drop the pending warning and close one already up.
+          if (currentStatus == BleConnectionStatus.connected &&
+              previousStatus != BleConnectionStatus.connected) {
+            _cancelOutOfRangeWarning(deviceId);
+            continue;
+          }
+
           if (!_isDisconnectTransition(previousStatus, currentStatus)) {
             continue;
           }
           unawaited(_handleBleDisconnect(deviceId));
+          _armOutOfRangeWarning(deviceId);
         }
       },
     );
@@ -1073,6 +1103,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
+    for (final t in _outOfRangeTimers.values) {
+      t.cancel();
+    }
+    _outOfRangeTimers.clear();
     _plusBindingsSub?.close();
     _normalServerIdSub?.close();
     _liveSessionsSub?.close();
@@ -1454,6 +1488,77 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     await ref
         .read(sessionEngineFamilyProvider(_engineKey).notifier)
         .handleBleDisconnect(deviceId);
+  }
+
+  /// Start the countdown to telling the user this unit is out of range. The
+  /// session itself is deliberately left alone — the firmware keeps running the
+  /// loaded protocol after the link drops, so a walk out of range must not end
+  /// a valid treatment (see `SessionEngine.handleBleDisconnect`).
+  void _armOutOfRangeWarning(String deviceId) {
+    _outOfRangeTimers[deviceId]?.cancel();
+    _outOfRangeTimers[deviceId] = Timer(_kOutOfRangeGrace, () {
+      _outOfRangeTimers.remove(deviceId);
+      unawaited(_showOutOfRangeWarning(deviceId));
+    });
+  }
+
+  /// The unit is back (or the screen is going away): drop the pending warning
+  /// and close the dialog if it was about this device.
+  void _cancelOutOfRangeWarning(String deviceId) {
+    _outOfRangeTimers.remove(deviceId)?.cancel();
+    if (_outOfRangeDialogDeviceId != deviceId) return;
+    // Reconnected while the popup was up — take it away rather than making the
+    // user dismiss a message that is no longer true. Popping through the
+    // DIALOG's own context (not the screen's) means that once the user has
+    // already dismissed it, `mounted` is false and we can't pop anything else.
+    final dialogContext = _outOfRangeDialogContext;
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+  }
+
+  Future<void> _showOutOfRangeWarning(String deviceId) async {
+    if (!mounted || widget.transport != 'ble') return;
+    // One at a time. With several units gone the first message already tells
+    // the user what to do.
+    if (_outOfRangeDialogDeviceId != null) return;
+
+    // Only while the run is live — this screen can outlive the session.
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
+    if (engine.status != SessionStatus.running &&
+        engine.status != SessionStatus.paused) {
+      return;
+    }
+
+    final ble = ref.read(bleRepositoryProvider);
+    // Came back during the grace window (the connection-state edge may not have
+    // fired if it bounced quickly).
+    if (ble.isConnected(deviceId)) return;
+    // Deliberate drop: an in-app stop/disconnect, session-end reconnect
+    // suppression, or the connector's own mid-write recovery. None of these
+    // mean the device is out of range.
+    if (ble.isReconnectSuppressed(deviceId)) return;
+    // Wi-Fi provisioning always drops BLE — that's the flow working, not a fault.
+    if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
+
+    _outOfRangeDialogDeviceId = deviceId;
+    try {
+      await showHwInfoDialog(
+        context,
+        icon: Icons.bluetooth_disabled_rounded,
+        iconColor: ThemeConstants.warning,
+        title: 'Your Hydrawave device is not in range',
+        message:
+            '${_deviceLabel(deviceId)} lost its Bluetooth connection. Please '
+            'move closer to the device — or bring it nearer to your phone — and '
+            'it will reconnect automatically. Your session keeps running.',
+        actionLabel: 'OK',
+        onDialogContext: (ctx) => _outOfRangeDialogContext = ctx,
+      );
+    } finally {
+      _outOfRangeDialogDeviceId = null;
+      _outOfRangeDialogContext = null;
+    }
   }
 
   Future<void> _syncEngineStateToActiveSessions(
@@ -2506,7 +2611,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // So trust the backend for Plus devices as well; fall back to the local
     // engine timer only until the first backend value arrives. The break banner /
     // sequence tracker continue to use the local engine state.
-    final useBackendTimer = backendRemainingSeconds != null &&
+    //
+    // EXCEPT once this device is terminal locally. The feed is polled once a
+    // second and the server takes a moment to close the run, so a device the
+    // user just stopped on the hardware would otherwise keep counting down for
+    // another beat or two after the app already knows it stopped.
+    final deviceTerminal = status == SessionStatus.stopped ||
+        status == SessionStatus.completed;
+    final useBackendTimer = !deviceTerminal &&
+        backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
     final displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)
