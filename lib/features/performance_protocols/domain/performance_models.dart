@@ -84,21 +84,53 @@ class ChainSummary {
   final String movement;
   final String? subtype;
 
+  /// The chain's OWN discipline and role, present on `performance-chat`
+  /// `options` rows (the catalogue's `/chains` rows omit them — the caller
+  /// already asked for one discipline+role there, so they'd be redundant).
+  ///
+  /// A chat option list can span several roles at once ("cricket" alone offers
+  /// Fast Bowler, Batsman and Fielder chains together), so a chain must be
+  /// fetched with the role IT belongs to. Using the conversation's current role
+  /// instead asks `/chain` for a Batsman chain under Fast Bowler, which is a
+  /// combination the catalogue does not have.
+  final String? discipline;
+  final String? role;
+
+  /// The discipline's display name (`Cricket`), when the row carries one.
+  final String? displayName;
+
   const ChainSummary({
     required this.chainId,
     this.name = '',
     this.movement = '',
     this.subtype,
+    this.discipline,
+    this.role,
+    this.displayName,
   });
 
-  String get label => name.trim().isEmpty ? chainId : name;
+  /// The chat rows already ship a fully-qualified label
+  /// (`Cricket · Fast Bowler — Overhead shoulder chain`); prefer it, because a
+  /// bare chain name repeats across roles and the chips become ambiguous.
+  String get label {
+    if (name.trim().isNotEmpty) return name;
+    return chainId;
+  }
 
   factory ChainSummary.fromJson(Map<String, dynamic> json) => ChainSummary(
         chainId: (json['chain_id'] ?? json['chainId'] ?? json['id'] ?? '')
             .toString(),
-        name: (json['name'] ?? json['chain_name'] ?? '').toString(),
+        name: (json['label'] ??
+                json['name'] ??
+                json['chain'] ??
+                json['chain_name'] ??
+                '')
+            .toString(),
         movement: (json['movement'] ?? '').toString(),
         subtype: _blankToNull(json['subtype']),
+        discipline: _blankToNull(json['discipline']),
+        role: _blankToNull(json['role']),
+        displayName: _blankToNull(json['display_name']),
       );
 
   static List<ChainSummary> listFrom(dynamic raw) {

@@ -19,6 +19,13 @@ void resetPerformanceSession(Ref ref) {
   ref.read(performanceSessionIdProvider.notifier).state = _uuid.v4();
 }
 
+/// The same rotation, from a widget. `WidgetRef` and `Ref` are unrelated types,
+/// so a screen cannot call [resetPerformanceSession] — and a screen is exactly
+/// where "start over" and "switch client" are pressed.
+void resetPerformanceSessionFromWidget(WidgetRef ref) {
+  ref.read(performanceSessionIdProvider.notifier).state = _uuid.v4();
+}
+
 /// The pad set the practitioner last accepted, so the session surface can name
 /// the chain that produced the placement. The service returns no protocol, so
 /// nothing about the session is inferred from it.

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/api_endpoints.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/error/exceptions.dart';
 import '../../../core/network/dio_client.dart';
 import '../domain/performance_models.dart';
@@ -113,6 +114,7 @@ class PerformanceRemoteSource {
         'screenAnswers': screenAnswers,
       },
       'Couldn’t run that search',
+      timeout: AppConstants.padChatTimeout,
     );
     final map = _asMap(data);
     final results = RankedChain.listFrom(map['results'] ?? map['data'] ?? data);
@@ -144,6 +146,9 @@ class PerformanceRemoteSource {
         'screenAnswers': screenAnswers,
       },
       'Couldn’t reach the assistant',
+      // A chat turn is an embed + a model round trip server-side; the client's
+      // 30 s default is far under what it actually takes.
+      timeout: AppConstants.padChatTimeout,
     );
     return ChatReply.fromJson(_asMap(data));
   }
@@ -159,15 +164,21 @@ class PerformanceRemoteSource {
     }
   }
 
+  /// [timeout] overrides the Dio default per request — the retrieval endpoints
+  /// are far slower than the catalogue ones and share a Dio instance with them.
   Future<dynamic> _post(
     String path,
     Map<String, dynamic> body,
-    String fallbackMessage,
-  ) async {
+    String fallbackMessage, {
+    Duration? timeout,
+  }) async {
     try {
       final res = await _dio.post(
         path,
         data: {...body}..removeWhere((_, v) => v == null),
+        options: timeout == null
+            ? null
+            : Options(receiveTimeout: timeout, sendTimeout: timeout),
       );
       return res.data;
     } on DioException catch (e) {
