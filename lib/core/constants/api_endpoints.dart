@@ -22,7 +22,7 @@ class ApiEndpoints {
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
   static const String nodeBaseUrl =
-      'https://titten-glory-screen-islamic.trycloudflare.com/hydrawav/v1/';
+      'https://gonna-trend-robertson-episodes.trycloudflare.com/hydrawav/v1/';
 
   // static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
@@ -123,6 +123,17 @@ class ApiEndpoints {
 
   static const String perfQuery = 'performance-query/query';
   static const String perfChat = 'performance-chat/message';
+
+  /// The RECOVERY conversational front door — the recovery v2 engine's own
+  /// chatbot, not the performance one. Same envelope idea (reply + slots +
+  /// options + render), different corpus and different slots (`region`, `side`,
+  /// `goal`), so a typed message must go to whichever surface the conversation
+  /// is on: performance → [perfChat], recovery → this.
+  ///
+  /// `slots` is the multi-turn memory and `redFlags` carries the screen answers
+  /// (the recovery equivalent of `screenAnswers`); the engine's universal safety
+  /// gate runs before anything else, so a reply can come back as a refusal.
+  static const String recoveryChat = 'recovery-chat/message';
 
   /// Builds `path?a=b&c=d`, dropping null/blank values and encoding the rest.
   static String _perfUri(String path, Map<String, String?> params) {

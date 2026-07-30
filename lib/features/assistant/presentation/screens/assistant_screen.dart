@@ -16,6 +16,8 @@ import '../../../intake/domain/intake_models.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../intake/presentation/widgets/body_map.dart';
 import '../../../pad_placement/data/pad_placement_remote_source.dart';
+import '../../../pad_placement/data/recovery_chat_remote_source.dart';
+import '../../../pad_placement/domain/recovery_chat_models.dart';
 import '../../../pad_placement/presentation/screens/pad_placement_3d_screen.dart';
 import '../../../performance_protocols/data/performance_remote_source.dart';
 import '../../../performance_protocols/domain/performance_models.dart';
@@ -157,6 +159,32 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// Conversation memory for `performance-chat/message` — threaded back on every
   /// turn, which is how the service remembers discipline/role across messages.
   Map<String, dynamic> _slots = const {};
+
+  /// The performance topic slots, explicitly NULLED — how a new topic starts.
+  ///
+  /// The service keeps its OWN per-session slot memory and merges
+  /// `{...serverMemory, ...clientSlots}`, so sending `{}` does not start a new
+  /// topic: the server's memory for this `sessionId` survives and a later "hi"
+  /// comes back with the last sport's chains instead of the sport list. (The
+  /// web console looks stateless only because it sends `sessionId: null`, which
+  /// opts out of the memory — and out of the tier-1 safety lock with it.)
+  ///
+  /// Explicit nulls override the remembered values on the merge, which clears
+  /// the topic WITHOUT rotating the session id — so the safety lock survives.
+  static const _clearedPerfSlots = <String, dynamic>{
+    'discipline': null,
+    'role': null,
+    'subtype': null,
+    'chainId': null,
+    'bodyRegion': null,
+    'injuryKeyword': null,
+    'romGoal': null,
+  };
+
+  /// The same idea for `recovery-chat/message`, kept SEPARATE: the two services
+  /// hold different slots (`region`/`side`/`goal` vs `discipline`/`role`), so
+  /// feeding one's memory to the other resolves nothing and confuses both.
+  Map<String, dynamic> _recoverySlots = const {};
 
   // The guided-assessment questions, as chat steps (parity with the intake
   // panel's Area of Focus → Daily Activities steps).
@@ -360,6 +388,9 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   // Performance → pick a user, then the focus area. (Unchanged — no ROM step.)
   Future<void> _onPerformance() async {
     _recovery = false;
+    // A new prep is a new topic. Without this the service's session memory
+    // answers the next typed message with the PREVIOUS sport's chains.
+    _slots = _clearedPerfSlots;
     _me('Performance');
 
     // If the caller already picked someone — a player profile, or the Game
@@ -393,11 +424,18 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 
   void _pickUser(String name, {Client? client}) {
     _me(name);
+    // A different person is a different conversation: rotate the session so the
+    // previous person's safety lock and slot memory don't follow them. (Rotate
+    // only on a real switch — mid-flow it would drop a tier-1 lock.)
+    if (client?.id != _perfClient?.id) resetPerformanceSessionFromWidget(ref);
     _perfClient = client;
     _perfWho = name;
     _perfDiscipline = null;
     _perfRole = null;
     _perfSubtype = null;
+    // The local fields above and the service's memory have to agree, or the
+    // next typed message resolves against the person we just moved off.
+    _slots = _clearedPerfSlots;
     _perfStartDiscipline();
   }
 
@@ -567,9 +605,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   }
 
   Future<void> _perfPads(ChainSummary chain) async {
-    final discipline = _perfDiscipline;
-    final role = _perfRole;
+    // The chain's OWN discipline/role win when it carries them. A chat option
+    // list spans roles — "cricket" offers Fast Bowler, Batsman and Fielder
+    // chains in one list — so fetching every tapped chain under the
+    // conversation's current role asks for combinations that don't exist.
+    final discipline = chain.discipline ?? _perfDiscipline;
+    final role = chain.role ?? _perfRole;
     if (discipline == null || role == null) return _perfStartDiscipline();
+    // Keep the conversation on whatever the practitioner just picked, so
+    // "Change position" and a follow-up message continue from there.
+    _perfDiscipline = discipline;
+    _perfRole = role;
 
     setState(() {
       _typing = true;
@@ -582,7 +628,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
             discipline: discipline,
             role: role,
             chainId: chain.chainId,
-            subtype: _perfSubtype,
+            subtype: chain.subtype ?? _perfSubtype,
             sessionId: ref.read(performanceSessionIdProvider),
           );
       if (!mounted) return;
@@ -662,13 +708,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (!mounted) return;
     _showChips([
       _ChipAction(Icons.refresh_rounded, 'Try again', retry),
-      _ChipAction(Icons.home_rounded, 'Start over', () => setState(_initialize)),
+      _ChipAction(Icons.home_rounded, 'Start over', _startOver),
     ]);
   }
 
   static String _reason(Object error) {
     if (error is ServerException) return error.message;
     return error.toString();
+  }
+
+  /// "Start over" — the one place a genuinely new conversation begins, so it is
+  /// the one place the session id rotates. Clearing the bubbles alone left the
+  /// service still holding the old topic (and the old safety lock) server-side,
+  /// which is how a fresh-looking chat kept answering with the last sport.
+  void _startOver() {
+    resetPerformanceSessionFromWidget(ref);
+    _slots = const {};
+    _recoverySlots = const {};
+    setState(_initialize);
   }
 
   void _showDisciplineSheet(List<Discipline> all) {
@@ -751,6 +808,9 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   // Recovery → pick a discomfort area, then a range-of-motion check.
   Future<void> _onRecovery() async {
     _recovery = true;
+    // Recovery keeps its slots CLIENT-side only (the service has no session
+    // memory of its own), so an empty map really does start a new topic here.
+    _recoverySlots = const {};
     _me('Recovery');
     await _ai('Recovery — let’s find where you need it. Where’s the discomfort?');
     _showAreas();
@@ -1158,7 +1218,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return;
     }
     _me(text);
-    _perfChat(text);
+    // Two chatbots, one input box. A typed message must reach the surface the
+    // conversation is actually on: the recovery corpus can't answer "hamstring
+    // chain for a sprinter" and the performance corpus can't answer "my low
+    // back is tight", so sending everything to one of them made half the
+    // messages unanswerable. Nothing chosen yet → performance, as before.
+    if (_recovery) {
+      _recoveryChat(text);
+    } else {
+      _perfChat(text);
+    }
   }
 
   // ── Typed text → performance-chat (the query path, conversationally) ────────
@@ -1167,7 +1236,56 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// that is the conversation memory, so a follow-up doesn't re-ask the
   /// discipline. The reply's `render`/`results` are the query service's output
   /// verbatim, so pads render through the same card as the catalogue path.
+  /// The catalogue discipline this message names OUTRIGHT — the whole message
+  /// is the sport and nothing else ("cricket").
+  ///
+  /// Returns null when the catalogue isn't in cache yet or the message says
+  /// more than the sport ("cricket fast bowler"); both fall through to the chat,
+  /// which is the general case. Deliberately reads the CACHE and never awaits:
+  /// a typed message must not pay for a catalogue fetch just to find out it
+  /// wasn't a sport name.
+  Discipline? _disciplineNamedOutright(String text) {
+    final list = ref.read(disciplinesProvider).valueOrNull;
+    if (list == null) return null;
+    final t = text.trim().toLowerCase();
+    for (final d in list) {
+      if (d.label.trim().toLowerCase() == t ||
+          d.discipline.trim().toLowerCase() == t) {
+        return d;
+      }
+    }
+    return null;
+  }
+
   Future<void> _perfChat(String text) async {
+    // A bare sport name needs no chat turn: the catalogue already knows the
+    // sport, and the position step is where this was always going to land. It
+    // answers in about a second instead of the ~90 s a retrieval turn costs.
+    final named = _disciplineNamedOutright(text);
+    if (named != null) {
+      _perfDiscipline = named.discipline;
+      _perfDisciplineLabel = named.label;
+      _perfRole = null;
+      _perfSubtype = null;
+      // Keep the service's memory in step, or a LATER typed message resolves
+      // against the sport and position we just moved off.
+      _slots = {
+        ..._slots,
+        'discipline': named.discipline,
+        'role': null,
+        'subtype': null,
+        'chainId': null,
+      };
+      return _perfStartRole();
+    }
+
+    // Whether a position was already on the table BEFORE this turn. Needed
+    // below to tell "the service chose a position for them" apart from "they
+    // are following up on the position they already picked".
+    final roleBefore = (_slots['role']?.toString().trim().isNotEmpty ?? false)
+        ? _slots['role'].toString().trim()
+        : _perfRole;
+
     setState(() {
       _typing = true;
       _chipsVisible = false;
@@ -1197,6 +1315,37 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       if (reply.slots.isNotEmpty) _slots = reply.slots;
     });
     _adoptSlots(reply.slots);
+
+    // ── Bare sport name → let them pick the position ─────────────────────────
+    //
+    // Asked only for a discipline ("cricket"), the service resolves a position
+    // ITSELF — the top-ranked one — and answers with that position's chains.
+    // For someone who named a sport and nothing else that is a silent choice:
+    // cricket has Batsman and Fielder chains too, and neither was offered.
+    //
+    // So when a position appears that was neither on the table before this turn
+    // nor named in the message, drop into the catalogue's position picker
+    // instead of the service's narrowed answer. It's the same step the chip
+    // flow uses, and it answers in about a second against the catalogue rather
+    // than another full chat turn.
+    final resolvedRole = reply.slots['role']?.toString().trim() ?? '';
+    final roleWasChosenForThem = resolvedRole.isNotEmpty &&
+        (roleBefore == null || roleBefore.isEmpty) &&
+        !text.toLowerCase().contains(resolvedRole.toLowerCase());
+    if (!reply.hasPads && roleWasChosenForThem && _perfDiscipline != null) {
+      // The chat's slots carry no display name, but its option rows do — take
+      // it so the position step can name the sport in its empty state.
+      if (_perfDisciplineLabel.isEmpty) {
+        _perfDisciplineLabel =
+            reply.options.firstOrNull?.displayName ?? _perfDiscipline!;
+      }
+      // Nothing is narrowed to this position yet, so don't let it leak into
+      // the catalogue call or into the next typed turn.
+      _perfRole = null;
+      _perfSubtype = null;
+      _slots = {..._slots, 'role': null, 'subtype': null, 'chainId': null};
+      return _perfStartRole();
+    }
 
     if (reply.reply.trim().isNotEmpty) {
       setState(() => _messages.add(_Msg(false, reply.reply.trim())));
@@ -1230,10 +1379,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (reply.options.isNotEmpty) {
       // A MENU for the resolved role — the whole catalogue, unscored. Calling
       // these "closest matches" would be the bug e5ef4f6 fixed.
-      final role = _perfRole ?? (reply.slots['role']?.toString() ?? '');
-      await _ai(role.isEmpty
-          ? 'Here are the chains I have.'
-          : 'Here are the chains for $role.');
+      // Only introduce the list if the service didn't already. Its own reply
+      // ("I have 4 documented chains for Cricket · Fast Bowler … pick the one
+      // you're working on") says this better and names the position, so adding
+      // "Here are the chains I have." under it was two bubbles saying one
+      // thing — and the vaguer one came second.
+      if (reply.reply.trim().isEmpty) {
+        final role = _perfRole ?? (reply.slots['role']?.toString() ?? '');
+        await _ai(role.isEmpty
+            ? 'Here are the chains I have.'
+            : 'Here are the chains for $role.');
+      }
       _showChips([
         for (final c in reply.options)
           _ChipAction(Icons.link_rounded, c.label, () {
@@ -1250,6 +1406,103 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           'and position, or tap a suggestion.');
     }
     _showChips(_homeChips);
+  }
+
+  // ── Typed text → recovery-chat (the recovery engine, conversationally) ─────
+
+  /// `POST recovery-chat/message`. The recovery twin of [_perfChat]:
+  /// [_recoverySlots] is threaded back every turn (that's how the area sticks
+  /// across messages) and the guided-assessment answers ride along as
+  /// `redFlags`, which is what the engine's safety gate screens.
+  ///
+  /// The service phrases the whole answer — header, pad lines, thermal note,
+  /// citation — so the reply is rendered verbatim rather than re-formatted
+  /// here. [slotPatch] carries an exact value from a tapped chip, so a chip
+  /// answer doesn't have to survive a second round of text parsing.
+  Future<void> _recoveryChat(
+    String text, {
+    Map<String, dynamic> slotPatch = const {},
+  }) async {
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final RecoveryChatReply reply;
+    try {
+      reply = await ref.read(recoveryChatRemoteSourceProvider).message(
+            message: text,
+            sessionId: ref.read(performanceSessionIdProvider),
+            slots: {..._recoverySlots, ...slotPatch},
+            redFlags: _screenAnswers(),
+          );
+    } catch (e) {
+      return _failStep('Couldn’t reach the recovery assistant',
+          () => _recoveryChat(text, slotPatch: slotPatch), e);
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _typing = false;
+      if (reply.slots.isNotEmpty) _recoverySlots = reply.slots;
+      if (reply.reply.trim().isNotEmpty) {
+        _messages.add(_Msg(false, reply.reply.trim()));
+      }
+    });
+    _scrollToEnd();
+
+    // A gate block. Show what the service said and offer a way onward — never
+    // pads, and never the "start a session" chip alongside it.
+    if (reply.isRefusal) {
+      if (reply.reply.trim().isEmpty) return _refusal(null);
+      _showChips([
+        _ChipAction(Icons.waves_rounded, 'Try another area', _showAreas),
+        _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+      ]);
+      return;
+    }
+
+    // One missing slot, asked once with chips (the service's own wording is
+    // already in the bubble above).
+    if (reply.options.isNotEmpty) {
+      _showChips([
+        for (final c in reply.options.take(12))
+          _ChipAction(_areaIcon(c.label), c.label, () {
+            _me(c.label);
+            // Record the area the same way the chip flow does, so Start Session
+            // and the AI report see it.
+            if (c.region != null) _assessmentArea = c.label;
+            _recoveryChat(c.label, slotPatch: c.slotPatch);
+          }),
+      ]);
+      return;
+    }
+
+    if (reply.hasPlacement) {
+      // The area the engine actually resolved — not the label that was typed.
+      final region = reply.slots['region']?.toString();
+      if (region != null && region.trim().isNotEmpty) {
+        _assessmentArea = region.replaceAll('-', ' ');
+        _recordAreaOfFocus();
+      }
+      _showChips([
+        _ChipAction(Icons.play_arrow_rounded, 'Start session',
+            () => context.go(RoutePaths.devices),
+            hot: true),
+        _ChipAction(Icons.waves_rounded, 'Another area', _showAreas),
+      ]);
+      return;
+    }
+
+    if (reply.reply.trim().isEmpty) {
+      await _ai('I don’t have a recovery placement for that yet. Try naming the '
+          'area and how it feels, or pick an area below.');
+    }
+    _showChips([
+      _ChipAction(Icons.waves_rounded, 'Pick an area', _showAreas),
+      _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
+    ]);
   }
 
   /// Adopts whatever the service resolved so a later chain tap can call
@@ -1356,7 +1609,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                   _IconBtn(
                     palette: p,
                     icon: Icons.refresh_rounded,
-                    onTap: () => setState(_initialize),
+                    onTap: _startOver,
                   ),
                 ],
               ),
@@ -1603,12 +1856,25 @@ class _Chip extends StatelessWidget {
             children: [
               Icon(action.icon, size: 16, color: hot ? p.copperInk : p.ink2),
               const SizedBox(width: 7),
-              Text(
-                action.label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: hot ? p.copperInk : p.ink,
+              // A Wrap hands each child the row's full width as its MAXIMUM, so
+              // a label wider than that overflows unless the text is allowed to
+              // give way. Short chips still size to their content (the Row is
+              // still mainAxisSize.min); only an over-long one wraps, and two
+              // lines is the ceiling so a chip can't grow without bound.
+              // Labels here run long by design — a chain list that spans roles
+              // has to say "Cricket · Fast Bowler — Lumbar extension-lateral
+              // chain", because the bare chain name repeats across roles.
+              Flexible(
+                child: Text(
+                  action.label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: hot ? p.copperInk : p.ink,
+                    height: 1.25,
+                  ),
                 ),
               ),
             ],
