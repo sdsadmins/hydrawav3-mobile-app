@@ -1853,10 +1853,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return Scaffold(
       backgroundColor: pal.bg,
       appBar: AppBar(
-        title: Text(
-          widget.remoteView
-              ? 'Live: ${engine.deviceIds.length} device(s)'
-              : 'Session(${widget.deviceIds.length} Devices)',
+        // The spec's live header (app.js:1260): "Live: N device(s)" with a
+        // reassurance line, rather than "Session(N Devices)".
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Live: ${(widget.remoteView ? engine.deviceIds.length : widget.deviceIds.length)} device(s)',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: pal.ink,
+              ),
+            ),
+            Text(
+              'sessions keep running if you leave',
+              style: TextStyle(fontSize: 11, color: pal.ink3),
+            ),
+          ],
         ),
         leading: IconButton(
           icon: Icon(Icons.arrow_back_rounded),
@@ -2615,6 +2630,323 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return onBreak ? stage * 2 + 1 : stage * 2;
   }
 
+  /// Whether this device's link is currently considered lost.
+  ///
+  /// Uses the screen's EXISTING out-of-range tracking rather than a new source:
+  /// `_armOutOfRangeWarning` starts a grace timer on a BLE drop, so a device
+  /// with a live timer is one we've lost and not yet given up on. Deriving link
+  /// state independently would risk the pill disagreeing with the dialog the
+  /// screen already shows.
+  bool _isLinkLost(String deviceId, SessionStatus status) {
+    final live = status == SessionStatus.running ||
+        status == SessionStatus.paused;
+    if (!live) return false;
+    return _outOfRangeTimers.containsKey(deviceId) ||
+        _outOfRangeDialogDeviceId == deviceId;
+  }
+
+  /// The spec's `liveCard` header: `{device}` with the protocol as a quiet
+  /// suffix, and a `Linked` / `⚠ Bluetooth lost` pill on the right.
+  Widget _lcHeader({
+    required String deviceId,
+    required String deviceLabel,
+    required String protocolName,
+    required SessionStatus status,
+  }) {
+    // Keyed by ID, not the display label — `_outOfRangeTimers` is keyed by the
+    // device id, and a label lookup would silently never match.
+    final lost = _isLinkLost(deviceId, status);
+    // Remote/WiFi sessions have no BLE link to lose, so the pill would be
+    // meaningless there — show it only where it means something.
+    final showPill = !widget.remoteView && widget.transport != 'wifi';
+    return Row(
+      children: [
+        Expanded(
+          child: Text.rich(
+            TextSpan(children: [
+              TextSpan(
+                text: deviceLabel,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: pal.ink,
+                ),
+              ),
+              if (protocolName.trim().isNotEmpty)
+                TextSpan(
+                  text: ' · $protocolName',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: pal.ink3,
+                  ),
+                ),
+            ]),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (showPill) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: lost ? pal.lowSoft : pal.goodSoft,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              lost ? '⚠ Bluetooth lost' : 'Linked',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: lost ? pal.low : pal.good,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// `.blewarn` — the spec's warning strip (app.js:1327).
+  Widget _lcBleWarn() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+      decoration: BoxDecoration(
+        color: pal.lowSoft,
+        borderRadius: BorderRadius.circular(HwRadius.sm),
+      ),
+      child: Text(
+        '⚠ Bluetooth link lost — the unit may keep running its current cycle '
+        'on its own until it finishes or is powered off.',
+        style: TextStyle(fontSize: 11, height: 1.45, color: pal.low),
+      ),
+    );
+  }
+
+  /// The spec's `.btn` in its three session flavours: solid copper (primary),
+  /// soft outline (secondary) and solid danger.
+  Widget _sessionButton({
+    required String label,
+    required VoidCallback? onTap,
+    bool filled = true,
+    bool danger = false,
+  }) {
+    final enabled = onTap != null;
+    final bg = danger ? pal.low : (filled ? pal.copperInk : pal.card);
+    final fg = danger || filled ? Colors.white : pal.copperInk;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(HwRadius.sm),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(HwRadius.sm),
+            border: filled || danger
+                ? null
+                : Border.all(color: pal.copper, width: 1.5),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: fg,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── UI handoff `liveCard` parts (app.js:1342-1352) ────────────────────────
+
+  static String _mmss(Duration d) {
+    final s = d.inSeconds < 0 ? 0 : d.inSeconds;
+    return '${(s ~/ 60).toString().padLeft(2, '0')}:'
+        '${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  /// `.lc-active` — the running stage's name, large, under the timer. On a
+  /// break it reads "Break" in the break colour, as the spec does.
+  Widget _lcActiveName({
+    required List<String> plusSequence,
+    required int plusIndex,
+    required bool plusOnBreak,
+    required String protocolName,
+  }) {
+    final isPlus = plusSequence.length > 1;
+    final name = !isPlus
+        ? protocolName
+        : plusOnBreak
+            ? 'Break'
+            : plusSequence[plusIndex.clamp(0, plusSequence.length - 1)];
+    if (name.trim().isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      children: [
+        Text(
+          name,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: plusOnBreak ? _kBreakColor : pal.ink,
+          ),
+        ),
+        if (isPlus) ...[
+          const SizedBox(height: 2),
+          Text(
+            plusOnBreak
+                ? 'Break · next: ${plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)]}'
+                : 'Stage ${plusIndex + 1} of ${plusSequence.length}',
+            style: TextStyle(fontSize: 11, color: pal.ink3),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// `.lc-steps` — every stage and break as a chip with its duration, the
+  /// current one highlighted and completed ones dimmed.
+  Widget _lcSteps({
+    required List<String> plusSequence,
+    required List<int> plusDurations,
+    required int breakSeconds,
+    required int plusIndex,
+    required bool plusOnBreak,
+  }) {
+    final segments = _plusRingSegments(
+      plusSequence: plusSequence,
+      plusDurations: plusDurations,
+      breakSeconds: breakSeconds,
+    );
+    // Without real durations the ring falls back to one arc; the strip does the
+    // same rather than inventing per-stage times.
+    if (segments.isEmpty) return const SizedBox.shrink();
+    final activeIdx = _plusRingActiveIndex(
+      sequenceLength: plusSequence.length,
+      plusIndex: plusIndex,
+      onBreak: plusOnBreak,
+    );
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      alignment: WrapAlignment.center,
+      children: [
+        for (var i = 0; i < segments.length; i++)
+          () {
+            final seg = segments[i];
+            final done = i < activeIdx;
+            final active = i == activeIdx;
+            final accent = seg.isBreak ? _kBreakColor : pal.copperInk;
+            final label =
+                seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
+            final dur = Duration(seconds: seg.seconds.round());
+            return Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: active
+                    ? accent.withValues(alpha: 0.14)
+                    : pal.card2,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: active ? accent : pal.line,
+                  width: active ? 1.5 : 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: done
+                          ? pal.ink3
+                          : active
+                              ? accent
+                              : pal.ink2,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    seg.isBreak
+                        ? '${dur.inSeconds}s'
+                        : _mmss(dur),
+                    style: TextStyle(fontSize: 9, color: pal.ink3),
+                  ),
+                ],
+              ),
+            );
+          }(),
+      ],
+    );
+  }
+
+  /// `.lc-legend` — Protocol / Break swatches.
+  Widget _lcLegend() {
+    Widget item(Color c, String label) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 9, height: 9, color: c),
+            const SizedBox(width: 5),
+            Text(label, style: TextStyle(fontSize: 10, color: pal.ink3)),
+          ],
+        );
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        item(pal.copperInk, 'Protocol'),
+        const SizedBox(width: 14),
+        item(_kBreakColor, 'Break'),
+      ],
+    );
+  }
+
+  /// `.lc-bar` — the flat progress bar under the ring.
+  Widget _lcBar(double progress) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: LinearProgressIndicator(
+        value: progress.clamp(0.0, 1.0),
+        minHeight: 6,
+        backgroundColor: pal.line,
+        valueColor: AlwaysStoppedAnimation<Color>(pal.copperInk),
+      ),
+    );
+  }
+
+  /// `.lc-elapsed` — "MM:SS elapsed of MM:SS total", bold on the numbers.
+  Widget _lcElapsed({required Duration elapsed, required Duration total}) {
+    final base = TextStyle(fontSize: 11, color: pal.ink3);
+    final bold = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w800,
+      color: pal.ink2,
+    );
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: _mmss(elapsed), style: bold),
+        TextSpan(text: ' elapsed of ', style: base),
+        TextSpan(text: _mmss(total), style: bold),
+        TextSpan(text: ' total', style: base),
+      ]),
+      textAlign: TextAlign.center,
+    );
+  }
+
   Widget _buildDeviceSessionCard({
     required String id,
     required String label,
@@ -2688,6 +3020,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     } else {
       displayProgress = timer.progress;
     }
+    // Whole-run total, for the spec's "MM:SS elapsed of MM:SS total" line. The
+    // backend total wins when we're following its clock; otherwise derive it
+    // from the local timer so the two halves of the line always agree.
+    final displayTotal = (useBackendTimer &&
+            backendTotalSeconds != null &&
+            backendTotalSeconds > 0)
+        ? Duration(seconds: backendTotalSeconds)
+        : (timer.progress > 0
+            ? Duration(
+                seconds:
+                    (timer.remaining.inSeconds / (1 - timer.progress)).round())
+            : timer.remaining);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -2714,16 +3058,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: pal.ink,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+            // The spec's `liveCard` header (app.js:1324): device on the left
+            // with the protocol as a quiet suffix, link state as a pill on the
+            // right — replacing the bare centred label this card used to show.
+            _lcHeader(
+              deviceId: id,
+              deviceLabel: label,
+              protocolName: protocolName,
+              status: status,
             ),
+            // `.blewarn` — the spec's explicit warning that the unit may keep
+            // running its own cycle after the link drops (app.js:1327). This is
+            // a real hardware behaviour, not a cosmetic banner.
+            if (_isLinkLost(id, status)) ...[
+              const SizedBox(height: 8),
+              _lcBleWarn(),
+            ],
             // FAULT card (red) / WARNING banner (orange) â€” deviceâ†’app telemetry,
             // mirroring the web live-session card. Fault supersedes warning.
             if (isFault) ...[
@@ -2823,24 +3173,36 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 ),
               ),
             ),
+            // ── The UI handoff's `liveCard` block (app.js:1342-1352) ──────────
+            // Active stage name, stage strip, progress bar, elapsed/total.
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _statusColor(status).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(20),
+            _lcActiveName(
+              plusSequence: plusSequence,
+              plusIndex: plusIndex,
+              plusOnBreak: plusOnBreak,
+              protocolName: protocolName,
+            ),
+            if (plusSequence.length > 1) ...[
+              const SizedBox(height: 8),
+              _lcSteps(
+                plusSequence: plusSequence,
+                plusDurations: plusDurations,
+                breakSeconds: plusDelaySeconds,
+                plusIndex: plusIndex,
+                plusOnBreak: plusOnBreak,
               ),
-              child: Text(
-                _statusLabel(status),
-                style: TextStyle(
-                  color: _statusColor(status),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
+              const SizedBox(height: 8),
+              _lcLegend(),
+            ],
+            const SizedBox(height: 10),
+            _lcBar(displayProgress),
+            const SizedBox(height: 8),
+            _lcElapsed(
+              elapsed: displayTotal - displayRemaining,
+              total: displayTotal,
             ),
             if (totalCycles > 0 && padCycleIdx >= 0) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 'Cycle ${padCycleIdx + 1}/$totalCycles',
                 style: TextStyle(
@@ -3190,37 +3552,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ],
           ),
           const SizedBox(height: 12),
+          // The spec's `.btnrow`: a soft Pause All beside a solid danger Stop
+          // All (app.js:1265). Previously both were solid ElevatedButtons with
+          // ink-on-copper labels, which read as two equally destructive actions.
           Row(
             children: [
               Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: canPause ? onPauseResume : null,
-                    icon: Icon(
-                      paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                    ),
-                    label: Text(paused ? 'Resume All' : 'Pause All'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: pal.copperInk,
-                      foregroundColor: pal.ink,
-                    ),
-                  ),
+                child: _sessionButton(
+                  label: paused ? '▶ Resume All' : '⏸ Pause All',
+                  onTap: canPause ? onPauseResume : null,
+                  filled: false,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: onStopAll,
-                    icon: const Icon(Icons.stop_rounded),
-                    label: const Text('Stop All'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: pal.low,
-                      foregroundColor: pal.ink,
-                    ),
-                  ),
+                child: _sessionButton(
+                  label: '■ Stop All',
+                  onTap: onStopAll,
+                  danger: true,
                 ),
               ),
             ],
