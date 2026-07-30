@@ -2056,6 +2056,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// then stops (stations) laid out leftâ†’right and joined by a track whose
   /// traveled portion is filled. The active stop pulses; passed stops show âœ“.
   /// Advances on each START_PROTOCOL.
+  /// SUPERSEDED by `_lcStackHeader` + `_lcSteps`, which present the same
+  /// sequence the way the UI handoff does (stack name and cycle line above the
+  /// ring, stage chips below it). Kept because it renders `breakRemaining` as a
+  /// live countdown, which the chip strip does not yet do — if that turns out
+  /// not to be missed, delete this and `_routeStop`/`_routeTrack`/
+  /// `_buildBreakBanner` with it.
+  // ignore: unused_element
   Widget _buildProtocolPlusSequence(
     List<String> names, {
     required String name,
@@ -2775,13 +2782,59 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         '${(s % 60).toString().padLeft(2, '0')}';
   }
 
-  /// `.lc-active` — the running stage's name, large, under the timer. On a
-  /// break it reads "Break" in the break colour, as the spec does.
+  /// `.lc-stackname` + `.lc-cyclesub` — the stack's name and where you are in
+  /// it. These sit ABOVE the ring in the spec (app.js:1329), which is where the
+  /// sequence context belongs; only the current stage name goes below.
+  Widget _lcStackHeader({
+    required String plusName,
+    required List<String> plusSequence,
+    required int plusIndex,
+    required bool plusOnBreak,
+    required bool paused,
+  }) {
+    if (plusSequence.length < 2) return const SizedBox.shrink();
+    final next = plusSequence[
+        (plusIndex + 1).clamp(0, plusSequence.length - 1)];
+    final sub = paused
+        ? 'paused'
+        : plusOnBreak
+            ? 'Break · next: $next'
+            : 'Stage ${plusIndex + 1} of ${plusSequence.length}';
+
+    return Column(
+      children: [
+        if (plusName.trim().isNotEmpty)
+          Text(
+            plusName,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+              height: 1.1,
+              color: pal.copperInk,
+            ),
+          ),
+        const SizedBox(height: 2),
+        Text(
+          sub,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: pal.ink3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// `.lc-active` — 22px/800 copper, the running stage's name only.
   Widget _lcActiveName({
     required List<String> plusSequence,
     required int plusIndex,
     required bool plusOnBreak,
     required String protocolName,
+    required Color gc,
   }) {
     final isPlus = plusSequence.length > 1;
     final name = !isPlus
@@ -2791,27 +2844,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             : plusSequence[plusIndex.clamp(0, plusSequence.length - 1)];
     if (name.trim().isEmpty) return const SizedBox.shrink();
 
-    return Column(
-      children: [
-        Text(
-          name,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w800,
-            color: plusOnBreak ? _kBreakColor : pal.ink,
-          ),
-        ),
-        if (isPlus) ...[
-          const SizedBox(height: 2),
-          Text(
-            plusOnBreak
-                ? 'Break · next: ${plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)]}'
-                : 'Stage ${plusIndex + 1} of ${plusSequence.length}',
-            style: TextStyle(fontSize: 11, color: pal.ink3),
-          ),
-        ],
-      ],
+    return Text(
+      name,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.w800,
+        height: 1.1,
+        color: plusOnBreak ? _kBreakColor : gc,
+      ),
     );
   }
 
@@ -2823,6 +2864,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required int breakSeconds,
     required int plusIndex,
     required bool plusOnBreak,
+    required Color gc,
   }) {
     final segments = _plusRingSegments(
       plusSequence: plusSequence,
@@ -2838,6 +2880,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       onBreak: plusOnBreak,
     );
 
+    // `.lc-step` is a COLUMN — name above duration — not a row. Active steps go
+    // white-on-copper-gradient with no border; breaks carry their own tinted
+    // scheme; completed steps just drop to 50% opacity.
     return Wrap(
       spacing: 6,
       runSpacing: 6,
@@ -2848,46 +2893,65 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             final seg = segments[i];
             final done = i < activeIdx;
             final active = i == activeIdx;
-            final accent = seg.isBreak ? _kBreakColor : pal.copperInk;
-            final label =
-                seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
+            final label = seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
             final dur = Duration(seconds: seg.seconds.round());
-            return Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-              decoration: BoxDecoration(
-                color: active
-                    ? accent.withValues(alpha: 0.14)
-                    : pal.card2,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: active ? accent : pal.line,
-                  width: active ? 1.5 : 1,
+
+            final Color fg;
+            final Color bg;
+            final Color? borderColor;
+            if (seg.isBreak) {
+              fg = active ? Colors.white : _kBreakColor;
+              bg = active
+                  ? _kBreakColor
+                  : _kBreakColor.withValues(alpha: 0.12);
+              borderColor =
+                  active ? null : _kBreakColor.withValues(alpha: 0.32);
+            } else if (active) {
+              fg = Colors.white;
+              bg = gc;
+              borderColor = null;
+            } else {
+              fg = pal.ink3;
+              bg = pal.card2;
+              borderColor = pal.line;
+            }
+
+            return Opacity(
+              opacity: done ? 0.5 : 1,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(HwRadius.sm),
+                  border: borderColor == null
+                      ? null
+                      : Border.all(color: borderColor),
+                  boxShadow: active ? pal.shadow : null,
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: done
-                          ? pal.ink3
-                          : active
-                              ? accent
-                              : pal.ink2,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.15,
+                        fontWeight: FontWeight.w700,
+                        color: fg,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    seg.isBreak
-                        ? '${dur.inSeconds}s'
-                        : _mmss(dur),
-                    style: TextStyle(fontSize: 9, color: pal.ink3),
-                  ),
-                ],
+                    Text(
+                      seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: fg.withValues(alpha: 0.8),
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }(),
@@ -2895,53 +2959,81 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// `.lc-legend` — Protocol / Break swatches.
-  Widget _lcLegend() {
+  /// `.lc-legend` — the swatch is a 14×5 rounded bar, not a square.
+  Widget _lcLegend(Color gc) {
     Widget item(Color c, String label) => Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 9, height: 9, color: c),
+            Container(
+              width: 14,
+              height: 5,
+              decoration: BoxDecoration(
+                color: c,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
             const SizedBox(width: 5),
-            Text(label, style: TextStyle(fontSize: 10, color: pal.ink3)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: pal.ink3,
+              ),
+            ),
           ],
         );
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        item(pal.copperInk, 'Protocol'),
+        item(gc, 'Protocol'),
         const SizedBox(width: 14),
         item(_kBreakColor, 'Break'),
       ],
     );
   }
 
-  /// `.lc-bar` — the flat progress bar under the ring.
-  Widget _lcBar(double progress) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(999),
-      child: LinearProgressIndicator(
-        value: progress.clamp(0.0, 1.0),
-        minHeight: 6,
-        backgroundColor: pal.line,
-        valueColor: AlwaysStoppedAnimation<Color>(pal.copperInk),
+  /// `.lc-bar` — 5px tall on a `bg2` track, filled in the goal colour.
+  Widget _lcBar(double progress, Color gc) {
+    return Container(
+      height: 5,
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: pal.bg2,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: progress.clamp(0.0, 1.0),
+          heightFactor: 1,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: gc,
+              borderRadius: BorderRadius.circular(99),
+            ),
+          ),
+        ),
       ),
     );
   }
 
-  /// `.lc-elapsed` — "MM:SS elapsed of MM:SS total", bold on the numbers.
+  /// `.lc-elapsed` — 12.5px/700 in ink2, with the times themselves in full ink.
   Widget _lcElapsed({required Duration elapsed, required Duration total}) {
-    final base = TextStyle(fontSize: 11, color: pal.ink3);
-    final bold = TextStyle(
-      fontSize: 11,
-      fontWeight: FontWeight.w800,
+    final base = TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w700,
       color: pal.ink2,
+      fontFeatures: const [FontFeature.tabularFigures()],
     );
+    final bold = base.copyWith(color: pal.ink);
     return Text.rich(
-      TextSpan(children: [
+      TextSpan(style: base, children: [
         TextSpan(text: _mmss(elapsed), style: bold),
-        TextSpan(text: ' elapsed of ', style: base),
+        const TextSpan(text: ' elapsed of '),
         TextSpan(text: _mmss(total), style: bold),
-        TextSpan(text: ' total', style: base),
+        const TextSpan(text: ' total'),
       ]),
       textAlign: TextAlign.center,
     );
@@ -3020,6 +3112,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     } else {
       displayProgress = timer.progress;
     }
+    // `--gc` — the spec drives the ring, bar, active-stage name and chips from
+    // the protocol's GOAL colour, not a fixed accent (`goalColor(s.goal)`,
+    // app.js:1314). So a Recovery run rings slate-blue, Calm teal, Vitality
+    // green, Performance copper. Everything here was hardcoded copper before,
+    // which is why every protocol looked identical.
+    //
+    // The goal is read off the protocol name: `GoalColor.of` matches on the goal
+    // words ("Recovery", "Comfort", "Calm", "Vitality") that protocol names
+    // already carry, and falls back to Performance copper.
+    final gc = GoalColor.of(
+      protocolName.isNotEmpty ? protocolName : plusName,
+      pal,
+    ).text;
+
     // Whole-run total, for the spec's "MM:SS elapsed of MM:SS total" line. The
     // backend total wins when we're following its clock; otherwise derive it
     // from the local timer so the two halves of the line always agree.
@@ -3083,55 +3189,48 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               const SizedBox(height: 10),
               _buildWarningBanner(telemetry!),
             ],
-            // Per-device Protocol Plus progress card (only for Plus devices).
+            // `.lc-stackname` + `.lc-cyclesub` above the ring. This replaces the
+            // old `_buildProtocolPlusSequence` progress card: the spec shows the
+            // sequence as the chip strip BELOW the ring, so keeping both would
+            // state the same thing twice in two different visual languages.
             if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              _buildProtocolPlusSequence(
-                plusSequence,
-                name: plusName,
-                index: plusIndex,
-                durations: plusDurations,
-                delaySeconds: plusDelaySeconds,
-                onBreak: plusOnBreak,
-                breakRemaining: plusBreakRemaining,
+              const SizedBox(height: 12),
+              _lcStackHeader(
+                plusName: plusName,
+                plusSequence: plusSequence,
+                plusIndex: plusIndex,
+                plusOnBreak: plusOnBreak,
+                paused: status == SessionStatus.paused,
               ),
             ],
-            if (protocolName.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                protocolName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: pal.ink2,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 11,
-                ),
-              ),
-            ],
+            // The protocol name is no longer repeated here — `_lcHeader` shows
+            // it beside the device, and `.lc-active` shows the running stage.
             const SizedBox(height: 10),
-            Container(
-              decoration: status == SessionStatus.running
-                  ? BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: pal.copperInk.withValues(alpha: 0.10),
-                          blurRadius: 26,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    )
-                  : null,
-              child: SizedBox(
-                width: 200,
-                height: 200,
+            // No halo behind the ring either — this was a 26px blurred circle
+            // shadow while running (the spec's `.lc-halo`). Removed together
+            // with the arc glow so the ring reads as a clean, flat arc.
+            SizedBox(
+                // `.lc-ringwrap` is 190×190.
+                width: 190,
+                height: 190,
                 child: CustomPaint(
                   painter: _TimerRing(
                     progress: displayProgress,
                     active: status == SessionStatus.running,
-                    trackColor: pal.line,
-                    accentColor: pal.copperInk,
+                    trackColor: pal.ringTrack,
+                    accentColor: gc,
+                    // Drives the active arc's growth.
+                    elapsedSeconds:
+                        (displayTotal - displayRemaining).inSeconds.toDouble(),
+                    // A break knows its own progress exactly, from the engine's
+                    // countdown — more reliable than inferring it from the
+                    // whole-run clock, which a Plus run resets per sub-protocol.
+                    activeFill: (plusOnBreak &&
+                            plusDelaySeconds > 0 &&
+                            plusBreakRemaining >= 0)
+                        ? (1 - plusBreakRemaining / plusDelaySeconds)
+                            .clamp(0.0, 1.0)
+                        : null,
                     segments: _plusRingSegments(
                       plusSequence: plusSequence,
                       plusDurations: plusDurations,
@@ -3147,22 +3246,28 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // `.lc-time` — 50px/900, tabular, tight tracking.
                         Text(
                           displayRemaining.formatted,
                           style: TextStyle(
-                            fontSize: 38,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 50,
+                            fontWeight: FontWeight.w900,
+                            height: 0.92,
                             color: pal.ink,
                             letterSpacing: -1.5,
+                            fontFeatures: const [
+                              FontFeature.tabularFigures()
+                            ],
                           ),
                         ),
+                        // `.lc-mod` — both pads 22px, 9px apart.
                         const SizedBox(height: 8),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.dark_mode_rounded,
-                                size: 20, color: effectiveMoonColor),
-                            const SizedBox(width: 12),
+                                size: 22, color: effectiveMoonColor),
+                            const SizedBox(width: 9),
                             Icon(Icons.wb_sunny_rounded,
                                 size: 22, color: effectiveSunColor),
                           ],
@@ -3172,7 +3277,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   ),
                 ),
               ),
-            ),
             // ── The UI handoff's `liveCard` block (app.js:1342-1352) ──────────
             // Active stage name, stage strip, progress bar, elapsed/total.
             const SizedBox(height: 10),
@@ -3181,6 +3285,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               plusIndex: plusIndex,
               plusOnBreak: plusOnBreak,
               protocolName: protocolName,
+              gc: gc,
             ),
             if (plusSequence.length > 1) ...[
               const SizedBox(height: 8),
@@ -3190,12 +3295,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 breakSeconds: plusDelaySeconds,
                 plusIndex: plusIndex,
                 plusOnBreak: plusOnBreak,
+                gc: gc,
               ),
               const SizedBox(height: 8),
-              _lcLegend(),
+              _lcLegend(gc),
             ],
             const SizedBox(height: 10),
-            _lcBar(displayProgress),
+            _lcBar(displayProgress, gc),
             const SizedBox(height: 8),
             _lcElapsed(
               elapsed: displayTotal - displayRemaining,
@@ -3738,6 +3844,14 @@ class _TimerRing extends CustomPainter {
   final Color trackColor;
   final Color accentColor;
 
+  /// Seconds elapsed in the whole run, used to fill the ACTIVE arc — the spec's
+  /// `sp = (el - seg.startFrac * total) / seg.dur` (app.js:1307).
+  final double elapsedSeconds;
+
+  /// 0–1 fill for the active arc when the caller knows it exactly — a break,
+  /// from the engine's own countdown. Overrides [elapsedSeconds] when set.
+  final double? activeFill;
+
   _TimerRing({
     required this.progress,
     required this.active,
@@ -3745,29 +3859,36 @@ class _TimerRing extends CustomPainter {
     required this.accentColor,
     this.segments = const [],
     this.activeIndex = -1,
+    this.elapsedSeconds = 0,
+    this.activeFill,
   });
+
+  /// `liveRingSVG` geometry, verbatim: a 190px box with a 13px stroke, and the
+  /// radius the spec derives as `(size - stroke - 8) / 2`. The stroke width is
+  /// the single most visible number here — this was 4px, which read as a hairline
+  /// next to the spec's heavy ring.
+  static const double _stroke = 13;
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 10;
+    final radius = (size.shortestSide - _stroke - 8) / 2;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
     Paint stroke(Color c) => Paint()
       ..color = c
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
+      ..strokeWidth = _stroke
       ..strokeCap = StrokeCap.round;
 
+    // No glow on the arc. The spec's `.lc-arc` has a
+    // `drop-shadow(0 0 4px gc)`, but at a 13px stroke on a phone screen it read
+    // as a smear around the ring rather than the subtle bloom it is in the
+    // browser — removed at the user's request.
     if (segments.length < 2) {
       canvas.drawCircle(center, radius, stroke(trackColor));
-      canvas.drawArc(
-        rect,
-        -pi / 2,
-        2 * pi * progress.clamp(0.0, 1.0),
-        false,
-        stroke(accentColor),
-      );
+      final sweep = 2 * pi * progress.clamp(0.0, 1.0);
+      canvas.drawArc(rect, -pi / 2, sweep, false, stroke(accentColor));
       return;
     }
 
@@ -3776,38 +3897,66 @@ class _TimerRing extends CustomPainter {
 
     // A small gap between arcs so adjacent stages read as separate.
     const gapFraction = 0.012;
+
+    // PASS 1 — every segment's empty track. The spec draws all tracks first,
+    // then the fills over them, so a partially-filled arc still shows the rest
+    // of its own stage waiting behind it.
     var startFraction = 0.0;
+    final starts = <double>[];
+    final sweeps = <double>[];
     for (var i = 0; i < segments.length; i++) {
       final seg = segments[i];
       final span = seg.seconds / total;
       final sweep = (span - gapFraction).clamp(0.002, 1.0) * 2 * pi;
       final from = -pi / 2 + startFraction * 2 * pi;
+      starts.add(from);
+      sweeps.add(sweep);
+      canvas.drawArc(
+        rect,
+        from,
+        sweep,
+        false,
+        stroke(seg.isBreak
+            ? _kBreakColor.withValues(alpha: 0.28)
+            : trackColor),
+      );
       startFraction += span;
+    }
 
+    // PASS 2 — the fills. Completed stages are fully filled but dimmed; the
+    // ACTIVE stage fills proportionally to how far into it we are, which is what
+    // makes the ring grow through the run instead of snapping stage to stage.
+    // Breaks fill exactly the same way, in the break colour.
+    var elapsedBefore = 0.0;
+    for (var i = 0; i < segments.length; i++) {
+      final seg = segments[i];
       final fill = seg.isBreak ? _kBreakColor : accentColor;
+
       if (activeIndex >= 0 && i < activeIndex) {
-        // Done â€” filled, but dimmed so the current stage stands out.
-        canvas.drawArc(
-            rect, from, sweep, false, stroke(fill.withValues(alpha: 0.55)));
+        canvas.drawArc(rect, starts[i], sweeps[i], false,
+            stroke(fill.withValues(alpha: 0.55)));
       } else if (i == activeIndex) {
-        canvas.drawArc(rect, from, sweep, false, stroke(fill));
-      } else {
-        canvas.drawArc(
-          rect,
-          from,
-          sweep,
-          false,
-          stroke(seg.isBreak
-              ? _kBreakColor.withValues(alpha: 0.28)
-              : trackColor),
-        );
+        // `sp` — the spec's per-segment progress. Prefer the caller's exact
+        // value (breaks report their own countdown); otherwise derive it from
+        // elapsed time against this segment's own start and duration.
+        final sp = (activeFill ??
+                (seg.seconds > 0
+                    ? (elapsedSeconds - elapsedBefore) / seg.seconds
+                    : 0.0))
+            .clamp(0.0, 1.0);
+        if (sp > 0) {
+          canvas.drawArc(rect, starts[i], sweeps[i] * sp, false, stroke(fill));
+        }
       }
+      elapsedBefore += seg.seconds;
     }
   }
 
   @override
   bool shouldRepaint(covariant _TimerRing old) =>
       progress != old.progress ||
+      elapsedSeconds != old.elapsedSeconds ||
+      activeFill != old.activeFill ||
       activeIndex != old.activeIndex ||
       segments.length != old.segments.length;
 }
