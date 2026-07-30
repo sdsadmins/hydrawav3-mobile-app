@@ -2,17 +2,31 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../data/ai_report_pdf.dart';
+import '../../domain/report_summary.dart';
 import '../ai_report_style.dart';
 import '../widgets/report_sections.dart';
+import '../widgets/report_spec_sections.dart';
 import '../widgets/sections/pad_placement_section.dart';
 
-/// Renders an AI report styled like the web (`analysis-display.tsx`): brand
-/// colors, section cards, chips, confidence badges, colored callouts. The same
-/// styling/colors are mirrored in the downloaded PDF (`ai_report_pdf.dart`).
+/// The AI report, laid out as the UI handoff spec draws it — `openReport()`,
+/// `hydrawav3-ui-handoff/app.js:2781`.
+///
+/// The spec's report is six numbered sections (I–VI) with a copper eyebrow each
+/// and a PDF / QR share / Start session row at the foot. Ours is fed by a real
+/// AI response that carries far more than six sections' worth, so each numbered
+/// section shows the spec's summary and the full clinical detail sits in an
+/// expander beneath it — see `report_spec_sections.dart`.
+///
+/// The Practitioner tab is not in the spec at all, but the app has one and the
+/// PDF has a practitioner variant, so it stays: same chrome, existing sections.
 class AiReportScreen extends StatefulWidget {
   final Map<String, dynamic>? report;
 
@@ -23,155 +37,165 @@ class AiReportScreen extends StatefulWidget {
 }
 
 class _AiReportScreenState extends State<AiReportScreen> {
-  int _tab = 0; // 0 = Your Report, 1 = Practitioner Report
+  int _tab = 0; // 0 = Your report, 1 = Practitioner
 
   @override
   Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
     final raw = widget.report;
     final data = raw == null ? null : HydraReport.normalize(raw);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final empty = data == null || data.isEmpty;
+    final subtitle = raw == null ? '' : reportSubtitle(raw);
 
     return Scaffold(
-      backgroundColor: isDark ? ThemeConstants.background : HydraReport.cream,
-      appBar: AppBar(
-        backgroundColor: HydraReport.darkTeal,
-        foregroundColor: Colors.white,
-        title: const Text('AI Report'),
-        actions: [
-          if (data != null && data.isNotEmpty) ...[
-            IconButton(
-              tooltip: 'Share',
-              icon: const Icon(Icons.ios_share_rounded),
-              onPressed: () =>
-                  shareAiReport(context, data, practitioner: _tab == 1),
+      backgroundColor: p.bg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: HwSpace.s4),
+              child: HwBackBar(
+                title: 'AI Kinetic Chain Report',
+                subtitle: subtitle.isEmpty ? null : subtitle,
+                onBack: () => Navigator.of(context).maybePop(),
+                trailing: const HwPill('AI', tone: HwPillTone.copper),
+              ),
             ),
-            IconButton(
-              tooltip: 'Download',
-              icon: const Icon(Icons.download_rounded),
-              onPressed: () =>
-                  downloadAiReport(context, data, practitioner: _tab == 1),
+            Expanded(
+              child: empty
+                  ? Center(
+                      child: Text(
+                        'No report available.',
+                        style: TextStyle(
+                            fontSize: HwType.cap, color: p.ink3),
+                      ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(
+                          HwSpace.s4, 0, HwSpace.s4, HwSpace.s5),
+                      children: [
+                        HwSegmented(
+                          labels: const ['Your report', 'Practitioner'],
+                          selectedIndex: _tab,
+                          onSelected: (i) => setState(() => _tab = i),
+                        ),
+                        const SizedBox(height: HwSpace.s4),
+                        ...(_tab == 0
+                            ? reportSpecSections(context, data)
+                            : _practitionerSections(data)),
+                        _disclaimer(p, data),
+                        const SizedBox(height: HwSpace.s3),
+                        _actionRow(data),
+                      ],
+                    ),
             ),
           ],
-        ],
+        ),
       ),
-      body: data == null || data.isEmpty
-          ? Center(
-              child: Text('No report available.',
-                  style: TextStyle(color: ThemeConstants.textSecondary)),
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 32),
-              children: [
-                _header(),
-                const SizedBox(height: 14),
-                _tabs(),
-                const SizedBox(height: 14),
-                ...(_tab == 0
-                    ? _clientSections(data)
-                    : _practitionerSections(data)),
-              ],
-            ),
     );
   }
 
-  /// "Your Report" (client) sections, in web order (shared with the PDF).
-  List<Widget> _clientSections(Map<String, dynamic> data) =>
-      clientReportSections(data);
-
-  /// Practitioner sections (live pad placement + the shared tail).
+  /// Practitioner sections — unchanged content, new chrome around it.
   List<Widget> _practitionerSections(Map<String, dynamic> data) => [
         PadPlacementSection(data),
         ...practitionerTailSections(data),
       ];
 
-  Widget _header() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: HydraReport.darkTeal,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: HydraReport.tanDark,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(Icons.auto_awesome_rounded,
-                color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('AI Kinetic Chain Report',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900)),
-                const SizedBox(height: 3),
-                Text('COMPLETE AI ANALYSIS REPORT',
-                    style: TextStyle(
-                        color: HydraReport.tanLight,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 2)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  /// The spec's centred micro line, using the backend's own disclaimer when it
+  /// sent one.
+  Widget _disclaimer(RefPalette p, Map<String, dynamic> data) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Text(
+          disclaimerText(data),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+        ),
+      );
 
-  Widget _tabs() {
-    Widget tab(String label, int i, Color activeBg) {
-      final active = _tab == i;
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => setState(() => _tab = i),
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 11),
-            decoration: BoxDecoration(
-              color: active ? activeBg : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1,
-                color: active ? Colors.white : HydraReport.darkTeal,
+  /// The spec's `.btnrow`: PDF · QR share · Start session.
+  Widget _actionRow(Map<String, dynamic> data) {
+    return Row(
+      children: [
+        Expanded(
+          child: HwButton(
+            label: 'PDF',
+            filled: false,
+            onTap: () => _pdfSheet(data),
+          ),
+        ),
+        const SizedBox(width: HwSpace.s2),
+        Expanded(
+          child: HwButton(
+            label: 'QR share',
+            filled: false,
+            // Not yet wired: the spec's share URL (hydrawav3.studio/r/{id})
+            // doesn't exist, and a QR that resolves to nothing is worse than no
+            // QR. Kept visible so the row matches the spec and the gap is
+            // obvious rather than silently missing.
+            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('QR sharing is coming to this screen'),
               ),
             ),
           ),
         ),
-      );
-    }
+        const SizedBox(width: HwSpace.s2),
+        Expanded(
+          child: HwButton(
+            label: 'Start session',
+            // Hands off to device selection rather than starting anything — a
+            // report should never silently power a device.
+            onTap: () => context.go(RoutePaths.devices),
+          ),
+        ),
+      ],
+    );
+  }
 
-    return Container(
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        color: HydraReport.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: HydraReport.tanLight.withValues(alpha: 0.5)),
-      ),
-      child: Row(
+  /// Save vs share, so the spec's single `PDF` button keeps both of the actions
+  /// the old app bar had.
+  void _pdfSheet(Map<String, dynamic> data) {
+    final practitioner = _tab == 1;
+    showHwSheet<void>(
+      context: context,
+      builder: (sheetContext) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          tab('YOUR REPORT', 0, HydraReport.tanDark),
-          tab('PRACTITIONER', 1, HydraReport.darkTeal),
+          Text(
+            practitioner ? 'Practitioner report' : 'Your report',
+            style: TextStyle(
+              fontSize: HwType.lg,
+              fontWeight: FontWeight.w700,
+              color: RefPalette.of(sheetContext).ink,
+            ),
+          ),
+          const SizedBox(height: HwSpace.s4),
+          HwButton(
+            label: 'Save to files',
+            onTap: () {
+              Navigator.pop(sheetContext);
+              downloadAiReport(context, data, practitioner: practitioner);
+            },
+          ),
+          const SizedBox(height: HwSpace.s2),
+          HwButton(
+            label: 'Share',
+            filled: false,
+            onTap: () {
+              Navigator.pop(sheetContext);
+              shareAiReport(context, data, practitioner: practitioner);
+            },
+          ),
+          HwSkipLink(
+            label: 'Cancel',
+            onTap: () => Navigator.pop(sheetContext),
+          ),
         ],
       ),
     );
   }
-
 }
 
 /// Build the report PDF and open the native SHARE sheet (iOS + Android) via

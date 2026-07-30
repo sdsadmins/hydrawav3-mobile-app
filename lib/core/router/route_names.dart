@@ -32,6 +32,7 @@ class RouteNames {
   static const String aiReport = 'ai-report';
   static const String aiReports = 'ai-reports';
   static const String aiReportClients = 'ai-report-clients';
+  static const String guidedAssessment = 'guided-assessment';
   static const String kineticChain3d = 'kinetic-chain-3d';
 
   // Client detail (lease + AI reports)
@@ -99,6 +100,7 @@ class RoutePaths {
   static const String aiReport = '/ai-report';
   static const String aiReports = '/ai-reports';
   static const String aiReportClients = '/ai-report-clients';
+  static const String guidedAssessment = '/guided-assessment';
   static const String kineticChain3d = '/kinetic-chain-3d';
   static const String clientDetail = '/client-detail';
   static const String clientLease = '/client-lease';

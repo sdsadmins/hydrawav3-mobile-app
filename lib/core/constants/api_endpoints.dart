@@ -22,7 +22,7 @@ class ApiEndpoints {
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
   static const String nodeBaseUrl =
-      'https://titten-glory-screen-islamic.trycloudflare.com/hydrawav/v1/';
+      'https://goto-deliver-miami-dat.trycloudflare.com/hydrawav/v1/';
 
   // static const String nodeBaseUrl = 'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';

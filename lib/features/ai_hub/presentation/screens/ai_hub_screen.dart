@@ -78,12 +78,11 @@ class AiHubScreen extends ConsumerWidget {
                 ),
               ),
 
-              // 3 — start a guided assessment. That wizard lives in session
-              // setup (pick a client, choose the Guided session type), which
-              // needs a device selected first, so this lands on the Session
-              // tab rather than a screen that can't open standalone.
+              // 3 — start a guided assessment. This used to land on the Session
+              // tab because the wizard was only reachable inline from session
+              // setup; it's now its own screen, so the card goes straight there.
               HwCard(
-                onTap: () => context.go(RoutePaths.devices),
+                onTap: () => context.push(RoutePaths.guidedAssessment),
                 child: const Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [

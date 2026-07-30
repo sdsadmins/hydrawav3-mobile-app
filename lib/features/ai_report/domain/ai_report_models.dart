@@ -42,38 +42,8 @@ class AnalysisStatus {
   }
 }
 
-/// Lightweight view over an AnalysisOutput / persisted report. Sections are
-/// rendered flexibly from the raw map so the UI tolerates missing fields.
-class AiReportView {
-  final Map<String, dynamic> data;
-
-  const AiReportView(this.data);
-
-  String? get string1 => _str('clinical_insight_snapshot', 'summary_statement');
-
-  Map<String, dynamic> section(String key) {
-    final v = data[key];
-    return v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
-  }
-
-  String? topString(String key) {
-    final v = data[key];
-    if (v is String) return v;
-    if (v is Map && v['explanation'] is String) {
-      return v['explanation'] as String;
-    }
-    return null;
-  }
-
-  List<String> stringList(String key) {
-    final v = data[key];
-    if (v is List) return v.map((e) => e.toString()).toList();
-    return const [];
-  }
-
-  String? _str(String section, String field) {
-    final s = data[section];
-    if (s is Map && s[field] is String) return s[field] as String;
-    return null;
-  }
-}
+// `AiReportView` used to live here — a loose accessor over the raw report map.
+// It was never referenced: every section widget reads the map directly, and the
+// content decisions it was reaching for now live in `domain/report_summary.dart`
+// (shared with the PDF). Removed rather than left as a second, unused way to
+// read the same data.

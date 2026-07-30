@@ -37,6 +37,8 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/screens/subscription_screen.dart';
 import '../../features/presets/presentation/screens/preset_management_screen.dart';
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
+import '../../features/ai_report/presentation/providers/ai_report_providers.dart';
+import '../../features/intake/presentation/screens/guided_assessment_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
 import '../../features/ai_report/presentation/screens/kinetic_chain_3d_screen.dart';
@@ -389,6 +391,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: RouteNames.aiReportClients,
         builder: (c, s) => const ClientsListScreen(),
       ),
+      // The 5-step Guided Assessment (the spec's `scr-wizard`). Full screen and
+      // outside the shell: the body stage and the per-area protractor need the
+      // room, and it used to be duplicated inline on two different hosts.
+      GoRoute(
+        path: RoutePaths.guidedAssessment,
+        name: RouteNames.guidedAssessment,
+        builder: (c, s) => const GuidedAssessmentScreen(),
+      ),
       GoRoute(
         path: RoutePaths.kineticChain3d,
         name: RouteNames.kineticChain3d,
@@ -440,6 +450,18 @@ class _AppShell extends ConsumerWidget {
   final Widget child;
   const _AppShell({required this.child});
 
+  static void _toast(BuildContext context, String text,
+      {bool isError = false}) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: isError ? RefPalette.of(context).low : null,
+      ),
+    );
+  }
+
   bool _isLiveStatus(SessionStatus status) {
     return status == SessionStatus.running || status == SessionStatus.paused;
   }
@@ -462,6 +484,22 @@ class _AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
     final idx = _tabIndexFor(location);
+
+    // AI report generation runs in the background and the user is free to walk
+    // away from the screen that started it, so completion has to be announced
+    // app-wide. This is the only listener — the old in-screen status banner was
+    // removed when the reports list took over showing in-flight jobs.
+    ref.listen<List<AiReportJob>>(aiReportGenerationProvider, (prev, next) {
+      final seen = {for (final j in prev ?? const <AiReportJob>[]) j.id: j.phase};
+      for (final job in next) {
+        if (seen[job.id] == job.phase) continue; // unchanged
+        if (job.phase == AiReportPhase.done) {
+          _toast(context, '${job.label} ready ✓');
+        } else if (job.phase == AiReportPhase.error) {
+          _toast(context, job.message ?? 'AI report failed', isError: true);
+        }
+      }
+    });
 
     // Backend-driven live feed (same source as the History → Live tab) so the
     // badge stays consistent and clears when a session stops/finishes.
