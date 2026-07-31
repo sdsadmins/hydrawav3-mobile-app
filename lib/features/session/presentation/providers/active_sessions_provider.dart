@@ -111,6 +111,13 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         _hasLiveDeviceStatuses(session.deviceStatuses);
   }
 
+  List<String> _liveDeviceIds(Map<String, SessionStatus> deviceStatuses) {
+    return deviceStatuses.entries
+        .where((entry) => _isLiveStatus(entry.value))
+        .map((entry) => entry.key)
+        .toList();
+  }
+
   Future<String> createSession({
     String? sessionId,
     required String protocolId,
@@ -258,7 +265,7 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     for (final session in state) {
       if (session.status == SessionStatus.running ||
           session.status == SessionStatus.paused) {
-        busyDevices.addAll(session.deviceIds);
+        busyDevices.addAll(_liveDeviceIds(session.deviceStatuses));
       }
     }
     return busyDevices.toList();

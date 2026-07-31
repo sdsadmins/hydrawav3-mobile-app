@@ -731,8 +731,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     }
 
-    final engineCtrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
-    final localStatus = ref.read(sessionEngineFamilyProvider(_engineKey)).status;
+    final engineCtrl =
+        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final localStatus =
+        ref.read(sessionEngineFamilyProvider(_engineKey)).status;
     final localLive = localStatus == SessionStatus.running ||
         localStatus == SessionStatus.paused;
 
@@ -742,7 +744,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       // session simply hasn't appeared in the feed yet).
       if (_backendSessionSeen && !_normalServerStopped && localLive) {
         _normalServerStopped = true; // remote already stopped the server side
-        appLogger.i('Session: backend $backendId removed â€” applying remote stop');
+        appLogger
+            .i('Session: backend $backendId removed â€” applying remote stop');
         unawaited(engineCtrl.stop());
       }
       return;
@@ -760,7 +763,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         'local=$localStatus lastRemote=$_lastRemoteStatus';
     if (sig != _lastReconcileSig) {
       _lastReconcileSig = sig;
-      appLogger.i('Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
+      appLogger.i(
+          'Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
     }
 
     // Edge-triggered: only act when the backend status actually changes, so a
@@ -779,7 +783,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final localActive = localStatus == SessionStatus.running ||
         localStatus == SessionStatus.paused;
     if (localAction != null && localActive) {
-      if (DateTime.now().difference(localAction) < _localLifecycleSettleWindow) {
+      if (DateTime.now().difference(localAction) <
+          _localLifecycleSettleWindow) {
         if (remote != _toActiveStatus(localStatus)) {
           appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote '
               'while local=$localStatus settles');
@@ -817,7 +822,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final backendId = _normalBackendSessionId;
     if (backendId == null || backendId.isEmpty) return;
     _normalServerStopped = true;
-    unawaited(ref.read(sessionSyncServiceProvider).stopServerSession(backendId));
+    unawaited(
+        ref.read(sessionSyncServiceProvider).stopServerSession(backendId));
   }
 
   Future<void> _loadDeviceNames() async {
@@ -937,9 +943,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                               music.isMuted
                                   ? Icons.volume_off_rounded
                                   : Icons.volume_up_rounded,
-                              color: music.hasTrack
-                                  ? pal.ink2
-                                  : pal.ink3,
+                              color: music.hasTrack ? pal.ink2 : pal.ink3,
                             ),
                           ),
                         ],
@@ -973,8 +977,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                             padding: const EdgeInsets.symmetric(vertical: 24),
                             child: Text(
                               'Couldn\'t load music.',
-                              style:
-                                  TextStyle(color: pal.ink2),
+                              style: TextStyle(color: pal.ink2),
                             ),
                           ),
                           data: (tracks) {
@@ -998,9 +1001,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                   const SizedBox(height: 8),
                               itemBuilder: (_, i) {
                                 final track = tracks[i];
-                                final isActive = music.activeTrackId == track.id;
-                                final isAudible =
-                                    isActive && music.isPlaying && !music.isMuted;
+                                final isActive =
+                                    music.activeTrackId == track.id;
+                                final isAudible = isActive &&
+                                    music.isPlaying &&
+                                    !music.isMuted;
                                 return _atmosphereTile(
                                   icon: isActive
                                       ? Icons.graphic_eq_rounded
@@ -1009,8 +1014,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                   selected: isActive,
                                   trailing: isAudible
                                       ? Icon(Icons.equalizer_rounded,
-                                          size: 18,
-                                          color: pal.copperInk)
+                                          size: 18, color: pal.copperInk)
                                       : null,
                                   onTap: () => controller.selectTrack(track),
                                 );
@@ -1044,9 +1048,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: selected
-              ? pal.copperInk.withValues(alpha: 0.12)
-              : pal.card,
+          color: selected ? pal.copperInk.withValues(alpha: 0.12) : pal.card,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: selected ? pal.copperInk : pal.line,
@@ -1054,11 +1056,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ),
         child: Row(
           children: [
-            Icon(icon,
-                size: 18,
-                color: selected
-                    ? pal.copperInk
-                    : pal.ink3),
+            Icon(icon, size: 18, color: selected ? pal.copperInk : pal.ink3),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -1455,7 +1453,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
 
-    // Only update if this session's devices match the engine's current devices
+    // Only update if this session's devices match the engine's current devices.
+    // The device statuses are intentionally synced even when the session header
+    // is already terminal, because a single-device stop must immediately free
+    // that device for the next session selection UI.
     if (_areDeviceListsEqual(widget.deviceIds, engine.deviceIds)) {
       await activeSessionsNotifier.updateSessionStatus(
         _activeSessionId!,
@@ -1785,10 +1786,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     Widget buildDeviceCard(String id, {required bool scrollable}) {
       final deviceTimer = engine.deviceTimers[id]!;
       final deviceStatus = engine.deviceStatuses[id] ?? SessionStatus.idle;
-      final perDeviceProtocolName =
-          engine.protocolByDevice[id]?.templateName ??
-              protocol?.templateName ??
-              '';
+      final perDeviceProtocolName = engine.protocolByDevice[id]?.templateName ??
+          protocol?.templateName ??
+          '';
       final backendDev = _findBackendLiveDevice(liveSessions, id);
 
       // Prefer the local engine's Plus state (it also drives the live break
@@ -1918,9 +1918,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         music.isMuted
                             ? Icons.volume_off_rounded
                             : Icons.volume_up_rounded,
-                        color: music.isMuted
-                            ? pal.ink2
-                            : pal.copperInk,
+                        color: music.isMuted ? pal.ink2 : pal.copperInk,
                       ),
                     ),
                   // Session "Atmosphere" music â€” accent when a track is active.
@@ -1996,8 +1994,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         decoration: BoxDecoration(
                           color: active
                               ? pal.copperInk
-                              : pal.ink3
-                                  .withValues(alpha: 0.35),
+                              : pal.ink3.withValues(alpha: 0.35),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       );
@@ -2030,8 +2027,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         width: 8,
                         height: 8,
                         decoration: BoxDecoration(
-                            color: pal.good,
-                            shape: BoxShape.circle)),
+                            color: pal.good, shape: BoxShape.circle)),
                     const SizedBox(width: 8),
                     Text(
                       widget.transport == 'wifi'
@@ -2160,7 +2156,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     // The connector being "traversed" right now is the break gap
                     // between the finished protocol and the next one.
                     active: breaking && i == currentIndex,
-                    countdown: breaking && i == currentIndex ? breakRemaining : null,
+                    countdown:
+                        breaking && i == currentIndex ? breakRemaining : null,
                   ),
               ],
             ],
@@ -2261,8 +2258,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.timer_outlined,
-                  size: 9, color: pal.ink3),
+              Icon(Icons.timer_outlined, size: 9, color: pal.ink3),
               const SizedBox(width: 2),
               Text(
                 _fmtStopDuration(durationSeconds),
@@ -2421,9 +2417,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 ),
                 const SizedBox(height: 1),
                 Text(
-                  counting
-                      ? 'Next: $nextName'
-                      : 'Starting $nextNameâ€¦',
+                  counting ? 'Next: $nextName' : 'Starting $nextNameâ€¦',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2645,8 +2639,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// state independently would risk the pill disagreeing with the dialog the
   /// screen already shows.
   bool _isLinkLost(String deviceId, SessionStatus status) {
-    final live = status == SessionStatus.running ||
-        status == SessionStatus.paused;
+    final live =
+        status == SessionStatus.running || status == SessionStatus.paused;
     if (!live) return false;
     return _outOfRangeTimers.containsKey(deviceId) ||
         _outOfRangeDialogDeviceId == deviceId;
@@ -2793,8 +2787,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required bool paused,
   }) {
     if (plusSequence.length < 2) return const SizedBox.shrink();
-    final next = plusSequence[
-        (plusIndex + 1).clamp(0, plusSequence.length - 1)];
+    final next =
+        plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)];
     final sub = paused
         ? 'paused'
         : plusOnBreak
@@ -2901,9 +2895,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             final Color? borderColor;
             if (seg.isBreak) {
               fg = active ? Colors.white : _kBreakColor;
-              bg = active
-                  ? _kBreakColor
-                  : _kBreakColor.withValues(alpha: 0.12);
+              bg = active ? _kBreakColor : _kBreakColor.withValues(alpha: 0.12);
               borderColor =
                   active ? null : _kBreakColor.withValues(alpha: 0.32);
             } else if (active) {
@@ -3074,9 +3066,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final effectiveMoonColor = (telemetry?.moon != null)
         ? _webMoonPadColor(telemetry!.moon)
         : moonColor;
-    final effectiveSunColor = (telemetry?.sun != null)
-        ? _webSunPadColor(telemetry!.sun)
-        : sunColor;
+    final effectiveSunColor =
+        (telemetry?.sun != null) ? _webSunPadColor(telemetry!.sun) : sunColor;
     final isFault = telemetry?.isFault ?? false;
     final isWarning = telemetry?.isWarning ?? false;
 
@@ -3095,8 +3086,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // second and the server takes a moment to close the run, so a device the
     // user just stopped on the hardware would otherwise keep counting down for
     // another beat or two after the app already knows it stopped.
-    final deviceTerminal = status == SessionStatus.stopped ||
-        status == SessionStatus.completed;
+    final deviceTerminal =
+        status == SessionStatus.stopped || status == SessionStatus.completed;
     final useBackendTimer = !deviceTerminal &&
         backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
@@ -3210,73 +3201,71 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             // shadow while running (the spec's `.lc-halo`). Removed together
             // with the arc glow so the ring reads as a clean, flat arc.
             SizedBox(
-                // `.lc-ringwrap` is 190×190.
-                width: 190,
-                height: 190,
-                child: CustomPaint(
-                  painter: _TimerRing(
-                    progress: displayProgress,
-                    active: status == SessionStatus.running,
-                    trackColor: pal.ringTrack,
-                    accentColor: gc,
-                    // Drives the active arc's growth.
-                    elapsedSeconds:
-                        (displayTotal - displayRemaining).inSeconds.toDouble(),
-                    // A break knows its own progress exactly, from the engine's
-                    // countdown — more reliable than inferring it from the
-                    // whole-run clock, which a Plus run resets per sub-protocol.
-                    activeFill: (plusOnBreak &&
-                            plusDelaySeconds > 0 &&
-                            plusBreakRemaining >= 0)
-                        ? (1 - plusBreakRemaining / plusDelaySeconds)
-                            .clamp(0.0, 1.0)
-                        : null,
-                    segments: _plusRingSegments(
-                      plusSequence: plusSequence,
-                      plusDurations: plusDurations,
-                      breakSeconds: plusDelaySeconds,
-                    ),
-                    activeIndex: _plusRingActiveIndex(
-                      sequenceLength: plusSequence.length,
-                      plusIndex: plusIndex,
-                      onBreak: plusOnBreak,
-                    ),
+              // `.lc-ringwrap` is 190×190.
+              width: 190,
+              height: 190,
+              child: CustomPaint(
+                painter: _TimerRing(
+                  progress: displayProgress,
+                  active: status == SessionStatus.running,
+                  trackColor: pal.ringTrack,
+                  accentColor: gc,
+                  // Drives the active arc's growth.
+                  elapsedSeconds:
+                      (displayTotal - displayRemaining).inSeconds.toDouble(),
+                  // A break knows its own progress exactly, from the engine's
+                  // countdown — more reliable than inferring it from the
+                  // whole-run clock, which a Plus run resets per sub-protocol.
+                  activeFill: (plusOnBreak &&
+                          plusDelaySeconds > 0 &&
+                          plusBreakRemaining >= 0)
+                      ? (1 - plusBreakRemaining / plusDelaySeconds)
+                          .clamp(0.0, 1.0)
+                      : null,
+                  segments: _plusRingSegments(
+                    plusSequence: plusSequence,
+                    plusDurations: plusDurations,
+                    breakSeconds: plusDelaySeconds,
                   ),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // `.lc-time` — 50px/900, tabular, tight tracking.
-                        Text(
-                          displayRemaining.formatted,
-                          style: TextStyle(
-                            fontSize: 50,
-                            fontWeight: FontWeight.w900,
-                            height: 0.92,
-                            color: pal.ink,
-                            letterSpacing: -1.5,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ],
-                          ),
+                  activeIndex: _plusRingActiveIndex(
+                    sequenceLength: plusSequence.length,
+                    plusIndex: plusIndex,
+                    onBreak: plusOnBreak,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // `.lc-time` — 50px/900, tabular, tight tracking.
+                      Text(
+                        displayRemaining.formatted,
+                        style: TextStyle(
+                          fontSize: 50,
+                          fontWeight: FontWeight.w900,
+                          height: 0.92,
+                          color: pal.ink,
+                          letterSpacing: -1.5,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
-                        // `.lc-mod` — both pads 22px, 9px apart.
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.dark_mode_rounded,
-                                size: 22, color: effectiveMoonColor),
-                            const SizedBox(width: 9),
-                            Icon(Icons.wb_sunny_rounded,
-                                size: 22, color: effectiveSunColor),
-                          ],
-                        ),
-                      ],
-                    ),
+                      ),
+                      // `.lc-mod` — both pads 22px, 9px apart.
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.dark_mode_rounded,
+                              size: 22, color: effectiveMoonColor),
+                          const SizedBox(width: 9),
+                          Icon(Icons.wb_sunny_rounded,
+                              size: 22, color: effectiveSunColor),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
+            ),
             // ── The UI handoff's `liveCard` block (app.js:1342-1352) ──────────
             // Active stage name, stage strip, progress bar, elapsed/total.
             const SizedBox(height: 10),
@@ -3718,8 +3707,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     width: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Text(
-                    widget.transport == 'wifi' ? 'Startingâ€¦' : 'Start Session'),
+                : Text(widget.transport == 'wifi'
+                    ? 'Startingâ€¦'
+                    : 'Start Session'),
           ),
         ),
       SessionStatus.running => const SizedBox.shrink(),
@@ -3742,8 +3732,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 if (!mounted) return;
                 context.pop();
               },
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: pal.good),
+              style: ElevatedButton.styleFrom(backgroundColor: pal.good),
               child: Text('Done'))),
     };
   }
@@ -3789,7 +3778,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   Color _webSunPadColor(String? sun) {
     if (sun == null || sun.isEmpty) return Colors.grey;
     final s = sun.trim();
-    if (_strEqIc(s, 'rightHotRed') || _strEqIc(s, 'hot') || _strEqIc(s, 'red')) {
+    if (_strEqIc(s, 'rightHotRed') ||
+        _strEqIc(s, 'hot') ||
+        _strEqIc(s, 'red')) {
       return Colors.red;
     }
     if (_strEqIc(s, 'rightColdBlue') ||
@@ -3916,9 +3907,7 @@ class _TimerRing extends CustomPainter {
         from,
         sweep,
         false,
-        stroke(seg.isBreak
-            ? _kBreakColor.withValues(alpha: 0.28)
-            : trackColor),
+        stroke(seg.isBreak ? _kBreakColor.withValues(alpha: 0.28) : trackColor),
       );
       startFraction += span;
     }

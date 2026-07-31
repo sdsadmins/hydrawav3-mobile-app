@@ -1705,28 +1705,45 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
 
     // Devices already running in ANY live session — this phone, the web, or
     // another phone — can't be selected for a new run. Local busy set covers
-    // this phone's runs; the org-wide feed (only ever holds RUNNING/PAUSED
-    // sessions) covers web/other phones. Matched by id (WiFi = macAddress).
+    // this phone's runs; the org-wide feed covers web/other phones. When we
+    // already know from our own session engine that a device is stopped, we
+    // prefer that local truth over a stale backend/feed report so the UI frees
+    // the device immediately.
     final busyDeviceIds =
         ref.read(activeSessionsProvider.notifier).getBusyDevices().toSet();
-    // "In use" = devices actively RUNNING/PAUSED right now. The local busy set
-    // covers this phone's runs; the org-wide feed covers web/other phones. Gate
-    // the feed by the PER-DEVICE backend status: a multi-device session stays
-    // RUNNING while one device finishes, and a stopped/stale session can linger
-    // in the feed — without this check both kept a freed device wrongly "In use".
+    final localDeviceStatuses = <String, live.SessionStatus>{};
+    for (final session in ref.watch(activeSessionsProvider)) {
+      for (final entry in session.deviceStatuses.entries) {
+        localDeviceStatuses[entry.key] = entry.value;
+      }
+    }
+
+    bool shouldTreatAsBusy(String deviceId) {
+      final localStatus = localDeviceStatuses[deviceId];
+      return localStatus == null ||
+          localStatus == live.SessionStatus.running ||
+          localStatus == live.SessionStatus.paused;
+    }
+
     final liveInUseDeviceIds = <String>{};
     for (final s in ref.watch(liveSessionsProvider)) {
       if (s.liveDevices.isNotEmpty) {
         for (final d in s.liveDevices) {
           if (d.status == live.SessionStatus.running ||
               d.status == live.SessionStatus.paused) {
-            liveInUseDeviceIds.add(d.deviceId);
+            if (shouldTreatAsBusy(d.deviceId)) {
+              liveInUseDeviceIds.add(d.deviceId);
+            }
           }
         }
       } else if (s.status == live.SessionStatus.running ||
           s.status == live.SessionStatus.paused) {
         // Feed carried no per-device breakdown — fall back to session status.
-        liveInUseDeviceIds.addAll(s.deviceIds);
+        for (final deviceId in s.deviceIds) {
+          if (shouldTreatAsBusy(deviceId)) {
+            liveInUseDeviceIds.add(deviceId);
+          }
+        }
       }
     }
     // A BLE unit whose own telemetry reports rs = Play/Pause is mid-session
@@ -1737,7 +1754,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final inUseDeviceIds = <String>{
       ...busyDeviceIds,
       ...liveInUseDeviceIds,
-      ...bleBusyDeviceIds,
+      ...bleBusyDeviceIds.where(shouldTreatAsBusy),
     };
 
     // Auto-select + default-protocol seeding apply only to devices that are NOT
