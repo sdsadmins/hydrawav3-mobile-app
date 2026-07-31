@@ -105,7 +105,9 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
           HwChipRow(
             labels: [
               'All',
-              for (final c in chipClients) c.displayName.split(' ').first,
+              // Full name, not just the first word — two clients sharing a
+              // first name were indistinguishable in the filter row.
+              for (final c in chipClients) c.displayName,
             ],
             selectedIndex: _clientId == null
                 ? 0
@@ -312,13 +314,32 @@ class _SessionRow extends StatelessWidget {
   }
 }
 
-/// The spec's trailing status, in its precedence order.
+/// The spec's trailing status, in its precedence order (app.js:1338): the
+/// outcome check first, then the discomfort delta, then "—".
+///
+/// The outcome check is the ONLY thing the post-session sheet collects, and it
+/// lands in `protocols[].questionAnswers`. Reading only `discomfortAreas` (as
+/// this did) meant every row showed "—": nothing ever writes a
+/// `discomfortAfter`, because per-area discomfort is deliberately not asked
+/// post-session.
 class _OutcomePill extends StatelessWidget {
   final SessionHistoryItem session;
   const _OutcomePill(this.session);
 
   @override
   Widget build(BuildContext context) {
+    final answer = _firstAnswer(session);
+    if (answer != null) {
+      final normalized = answer.toLowerCase();
+      if (normalized == 'yes') {
+        return const HwPill('YES ✓', tone: HwPillTone.good);
+      }
+      if (normalized == 'no') return const HwPill('NO', tone: HwPillTone.low);
+      // Preset sets aren't always yes/no — show what was actually answered
+      // rather than forcing it into a verdict the data doesn't support.
+      return HwPill(answer.length > 14 ? '${answer.substring(0, 13)}…' : answer);
+    }
+
     var scored = 0;
     var improved = 0;
     for (final d in session.discomfortAreas) {
@@ -330,6 +351,18 @@ class _OutcomePill extends StatelessWidget {
     return improved > 0
         ? const HwPill('YES ✓', tone: HwPillTone.good)
         : const HwPill('NO', tone: HwPillTone.low);
+  }
+
+  /// The first non-empty outcome answer logged on any of the session's
+  /// protocols, or null when the review was skipped.
+  static String? _firstAnswer(SessionHistoryItem s) {
+    for (final p in s.protocols) {
+      for (final qa in p.questionAnswers) {
+        final a = qa.answer.trim();
+        if (a.isNotEmpty) return a;
+      }
+    }
+    return null;
   }
 }
 

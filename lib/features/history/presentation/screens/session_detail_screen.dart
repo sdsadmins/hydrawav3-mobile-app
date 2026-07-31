@@ -90,10 +90,26 @@ class _Detail extends ConsumerWidget {
                 _Fact('Device', first?.deviceName ?? '—'),
               ]),
 
+              // The post-session outcome check — what the outcomes sheet
+              // actually collects (`protocols[].questionAnswers`). It was never
+              // rendered here, so a submitted review left no trace in history.
+              if (_answers(session).isNotEmpty) ...[
+                const SizedBox(height: HwSpace.s2),
+                const HwEyebrow('Outcome check'),
+                HwCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final qa in _answers(session)) _AnswerRow(qa),
+                    ],
+                  ),
+                ),
+              ],
+
               // Every scored area, before → after.
               if (session.discomfortAreas.isNotEmpty) ...[
                 const SizedBox(height: HwSpace.s2),
-                const HwEyebrow('Outcome check'),
+                const HwEyebrow('Discomfort'),
                 HwCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -121,6 +137,22 @@ class _Detail extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  /// Every answered outcome question across the session's protocols, de-duped
+  /// by question text (a Protocol Plus run logs the same question per
+  /// sub-protocol).
+  static List<HistoryQuestionAnswer> _answers(SessionHistoryItem s) {
+    final seen = <String>{};
+    final out = <HistoryQuestionAnswer>[];
+    for (final p in s.protocols) {
+      for (final qa in p.questionAnswers) {
+        if (qa.answer.trim().isEmpty) continue;
+        if (!seen.add(qa.question)) continue;
+        out.add(qa);
+      }
+    }
+    return out;
   }
 
   static String _stamp(DateTime at) {
@@ -157,6 +189,38 @@ class _Fact extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: HwType.cap, color: p.ink2),
         ),
+      ),
+    );
+  }
+}
+
+/// One outcome-check question and the answer that was given.
+class _AnswerRow extends StatelessWidget {
+  final HistoryQuestionAnswer qa;
+  const _AnswerRow(this.qa);
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            qa.question,
+            style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            qa.answer,
+            style: TextStyle(
+              fontSize: HwType.sm,
+              fontWeight: FontWeight.w700,
+              color: p.ink,
+            ),
+          ),
+        ],
       ),
     );
   }

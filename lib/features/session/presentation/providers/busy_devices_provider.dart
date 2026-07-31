@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../session/domain/active_session_model.dart';
+import 'active_sessions_provider.dart';
 import 'live_sessions_provider.dart';
 
 /// Normalized MAC plus its ±1 last-byte variants. BLE units advertise on a MAC
@@ -48,6 +49,60 @@ final busyDevicesProvider = Provider<Set<String>>((ref) {
 final isDeviceBusyProvider = Provider.family<bool, String>((ref, deviceId) {
   final busyDevices = ref.watch(busyDevicesProvider);
   return _macVariants(deviceId).any(busyDevices.contains);
+});
+
+/// How many physical devices are running org-wide right now — the number the
+/// plan's concurrent-device limit is measured against.
+///
+/// [busyDevicesProvider] must NOT be used for this. It deliberately expands
+/// every MAC into its ±1 variants so a membership test matches whichever form
+/// the caller holds, which means one running device contributes up to three
+/// entries; counting it puts a 1-device run over a 2-device plan. It also keys
+/// off the SESSION status, so a device stopped inside a still-running
+/// multi-device session went on occupying a slot forever.
+///
+/// This counts one entry per physical device (±1 variants collapse onto the
+/// device already counted, so the local advertised id and the backend's
+/// firmware id never double-count), and honours the PER-DEVICE status so
+/// stopping one device of a run frees its slot immediately.
+final liveDeviceCountProvider = Provider<int>((ref) {
+  final counted = <String>[];
+
+  bool alreadyCounted(String norm) =>
+      counted.any((seen) => _macVariants(seen).contains(norm));
+
+  void add(String id) {
+    final norm = id.trim().toUpperCase();
+    if (norm.isEmpty || alreadyCounted(norm)) return;
+    counted.add(norm);
+  }
+
+  bool isLive(SessionStatus s) =>
+      s == SessionStatus.running || s == SessionStatus.paused;
+
+  // The org-wide backend feed is the source of truth and already covers this
+  // phone's own registered runs.
+  for (final session in ref.watch(liveSessionsProvider)) {
+    if (!isLive(session.status)) continue;
+    for (final id in session.deviceIds) {
+      final status = session.deviceStatuses[id];
+      // Unknown per-device status on a live session → treat as running; the
+      // feed always reports one, so this only covers malformed frames.
+      if (status == null || isLive(status)) add(id);
+    }
+  }
+
+  // Local runs whose backend registration hasn't landed in the feed yet. The
+  // ±1 collapse above keeps these from double-counting a device the feed
+  // already reported under its firmware id.
+  for (final session in ref.watch(activeSessionsProvider)) {
+    if (!isLive(session.status)) continue;
+    for (final entry in session.deviceStatuses.entries) {
+      if (isLive(entry.value)) add(entry.key);
+    }
+  }
+
+  return counted.length;
 });
 
 /// Placeholder for devices in active sessions that may be disconnected.

@@ -12,10 +12,12 @@ import '../providers/token_balance_provider.dart';
 /// The plan / session-credits sheet behind the token badge, ported from the UI
 /// spec's `tokenSheet()` (app.js:2245).
 ///
-/// Two shapes, exactly as the spec splits them: an **Enterprise** package shows
-/// what's left of the team's allowance, while **pay-as-you-go** shows a credit
-/// balance. Copy rule from the integration plan §3: tokens are "session
-/// credits" in anything customer-facing.
+/// EVERY plan — Free, pay-as-you-go or a package — is presented in the same
+/// Enterprise shape: the plan's own name heads the sheet, and each quota is a
+/// card with its label on the left and what's left as a pill on the right.
+/// Only the category word in the heading and the CTA differ. Copy rule from the
+/// integration plan §3: tokens are "session credits" in anything
+/// customer-facing.
 void showTokenDetailsSheet(BuildContext context) {
   showModalBottomSheet<void>(
     context: context,
@@ -86,10 +88,7 @@ class _TokenDetailsSheet extends ConsumerWidget {
                         padding: EdgeInsets.symmetric(vertical: 48),
                         child: Center(child: CircularProgressIndicator()),
                       )
-                    : _isEnterprise(plan)
-                        ? _EnterpriseBody(plan: plan!, grant: grant)
-                        : _CreditsBody(
-                            tokens: tokens, plan: plan, grant: grant),
+                    : _PlanBody(plan: plan, tokens: tokens, grant: grant),
               ),
             ),
             Padding(
@@ -127,43 +126,85 @@ class _TokenDetailsSheet extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Enterprise — a package billed in session hours
+// One body for every plan.
+//
+// A package and a Free/pay-as-you-go plan differ only in the category word in
+// the heading and the CTA at the bottom — the gauges are the same quantities
+// off the same token pool, so they get the same layout. Previously a
+// non-package plan fell to a stripped-down "Session credits" body with no plan
+// name and no per-quota rows, which is what made Free look like a different
+// (and emptier) product than Enterprise.
 // ---------------------------------------------------------------------------
 
-class _EnterpriseBody extends ConsumerWidget {
-  final SubscriptionPlan plan;
+class _PlanBody extends ConsumerWidget {
+  final SubscriptionPlan? plan;
+
+  /// Live (socket-backed) credit balance; preferred over the plan snapshot.
+  final double? tokens;
+
+  /// The period's token grant — the denominator behind every bar.
   final double? grant;
-  const _EnterpriseBody({required this.plan, required this.grant});
+
+  const _PlanBody({
+    required this.plan,
+    required this.tokens,
+    required this.grant,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     final org = ref.watch(authStateProvider).selectedOrgName;
-    final seconds = plan.sessionDurationSeconds;
-    final reports = plan.aiReportsAvailable;
-    final devices = plan.deviceLimit;
-    // One pool drives every gauge, so one fraction fills every bar.
-    final fraction = plan.fractionOfGrant(grant);
-    final secondsTotal = plan.totalForGrant(seconds, grant);
-    final reportsTotal = plan.totalForGrant(reports, grant);
+    final enterprise = _isEnterprise(plan);
+    final seconds = plan?.sessionDurationSeconds;
+    final reports = plan?.aiReportsAvailable;
+    final devices = plan?.deviceLimit;
+
+    // One pool drives every gauge, so one fraction fills every bar. The live
+    // balance wins over the plan snapshot when both are known.
+    final left = tokens ?? plan?.remainingTokens;
+    final total = plan?.tokensTotal ?? grant;
+    final fraction = (left != null && total != null && total > 0)
+        ? (left / total).clamp(0.0, 1.0).toDouble()
+        : null;
+    final secondsTotal = plan?.totalForGrant(seconds, grant);
+    final reportsTotal = plan?.totalForGrant(reports, grant);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          '${plan.name} · Enterprise',
-          style: TextStyle(
-            fontSize: HwType.lg,
-            fontWeight: FontWeight.w700,
-            color: p.ink,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          org == null || org.isEmpty
-              ? "Your team's package"
-              : "$org · your team's package",
-          style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+        // Plan on the left, credits left on the right — the balance belongs to
+        // the plan line itself, not to a card of its own.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _heading(plan),
+                    style: TextStyle(
+                      fontSize: HwType.lg,
+                      fontWeight: FontWeight.w700,
+                      color: p.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _subheading(org, plan, enterprise),
+                    style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: HwSpace.s2),
+            HwPill(
+              left == null ? '—' : '${left.round()} credits',
+              tone: HwPillTone.copper,
+              tabular: true,
+            ),
+          ],
         ),
         const SizedBox(height: HwSpace.s3),
 
@@ -186,7 +227,7 @@ class _EnterpriseBody extends ConsumerWidget {
               ],
               const SizedBox(height: 6),
               Text(
-                _hoursUsedLine(seconds, secondsTotal, devices),
+                _hoursUsedLine(seconds, secondsTotal, devices, enterprise),
                 style: TextStyle(fontSize: HwType.eyebrow, color: p.ink2),
               ),
             ],
@@ -215,28 +256,59 @@ class _EnterpriseBody extends ConsumerWidget {
                 reportsTotal != null && reports != null
                     ? '${reportsTotal.round() - reports} of '
                         '${reportsTotal.round()} AI reports used this period'
-                    : 'AI reports available on this package',
+                    : 'AI reports available on this plan',
                 style: TextStyle(fontSize: HwType.eyebrow, color: p.ink2),
               ),
             ],
           ),
         ),
 
-        if (plan.currentPeriodEnd != null) ...[
-          const SizedBox(height: HwSpace.s3),
-          Text(
-            'Renews on ${_fmtDate(plan.currentPeriodEnd!)}',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
-          ),
-        ],
+        const SizedBox(height: HwSpace.s3),
+        Text(
+          plan?.currentPeriodEnd != null
+              ? 'Renews on ${_fmtDate(plan!.currentPeriodEnd!)} · credits are '
+                  'shared across every practitioner in this organization'
+              : 'Credits are shared across every practitioner in this '
+                  'organization',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+        ),
       ],
     );
   }
 
+  /// `<plan name> · <category>`, collapsed to just the name when the two are
+  /// the same — a Free plan badges as "Free", and "Free · Free" reads as a bug.
+  static String _heading(SubscriptionPlan? plan) {
+    if (plan == null || plan.name.isEmpty) return 'Session credits';
+    final badge = plan.badgeLabel;
+    return badge == plan.name ? plan.name : '${plan.name} · $badge';
+  }
+
+  static String _subheading(
+    String? org,
+    SubscriptionPlan? plan,
+    bool enterprise,
+  ) {
+    final status = plan?.status;
+    if (org == null || org.isEmpty) {
+      if (enterprise) return "Your team's package";
+      return (status != null && status.isNotEmpty) ? status : 'Session credits';
+    }
+    if (enterprise) return "$org · your team's package";
+    return (status != null && status.isNotEmpty)
+        ? '$org · ${status.toLowerCase()}'
+        : '$org · session credits';
+  }
+
   /// The spec's line: "12.5 of 40 device-hours used · 6 units". Falls back to
   /// just the unit count while the allowance is unknown.
-  static String _hoursUsedLine(int? left, num? total, int? devices) {
+  static String _hoursUsedLine(
+    int? left,
+    num? total,
+    int? devices,
+    bool enterprise,
+  ) {
     final unitsSuffix = devices == null
         ? ''
         : (devices == 0
@@ -244,9 +316,10 @@ class _EnterpriseBody extends ConsumerWidget {
             : ' · $devices unit${devices == 1 ? '' : 's'}');
 
     if (total == null || left == null) {
-      return devices == null
+      final base = enterprise
           ? 'Device-hours are shared across your team'
-          : 'Device-hours are shared across your team$unitsSuffix';
+          : 'Session time is drawn from your credits';
+      return '$base$unitsSuffix';
     }
 
     String hrs(num seconds) {
@@ -271,74 +344,6 @@ class _EnterpriseBody extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Pay-as-you-go — a session-credit balance
-// ---------------------------------------------------------------------------
-
-class _CreditsBody extends StatelessWidget {
-  final double? tokens;
-  final SubscriptionPlan? plan;
-  final double? grant;
-  const _CreditsBody({
-    required this.tokens,
-    required this.plan,
-    required this.grant,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = RefPalette.of(context);
-    final total = plan?.tokensTotal ?? grant;
-    final fraction = plan?.fractionOfGrant(total);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Session credits',
-          style: TextStyle(
-            fontSize: HwType.lg,
-            fontWeight: FontWeight.w700,
-            color: p.ink,
-          ),
-        ),
-        const SizedBox(height: HwSpace.s3),
-        Center(
-          child: Text(
-            tokens == null ? '—' : tokens!.round().toString(),
-            style: TextStyle(
-              fontSize: 52,
-              fontWeight: FontWeight.w800,
-              height: 1,
-              letterSpacing: -1.5,
-              color: p.copperInk,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          total == null
-              ? '1 credit ≈ one ~9-min session'
-              : 'of ${total.round()} this month · 1 credit ≈ one ~9-min session',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
-        ),
-        const SizedBox(height: HwSpace.s3),
-        if (fraction != null) ...[
-          HwBar(fraction),
-          const SizedBox(height: HwSpace.s2),
-        ],
-        Text(
-          'Credits are shared across every practitioner in this organization.',
-          textAlign: TextAlign.center,
-          style:
-              TextStyle(fontSize: HwType.cap, height: 1.5, color: p.ink2),
-        ),
-      ],
-    );
-  }
-}
 
 class _PrimaryButton extends StatelessWidget {
   final String label;

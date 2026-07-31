@@ -164,6 +164,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// connectedâ†’disconnected edge, cancelled if the unit comes back.
   final Map<String, Timer> _outOfRangeTimers = {};
 
+  /// Remaining time frozen at the moment a device was paused, keyed by device
+  /// id. Cleared on resume/stop. See the pause branch in
+  /// [_buildDeviceSessionCard].
+  final Map<String, Duration> _pausedRemainingByDevice = {};
+
   /// One out-of-range dialog at a time, and the device it is about (so it can be
   /// dismissed when that device reconnects).
   String? _outOfRangeDialogDeviceId;
@@ -3091,15 +3096,37 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final useBackendTimer = !deviceTerminal &&
         backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
-    final displayRemaining = useBackendTimer
+    var displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)
         : timer.remaining;
+
+    // PAUSED holds the clock. The feed only freezes once the backend has
+    // applied the pause, so between the button press and the server's
+    // acknowledgement (and permanently, if that POST fails) the countdown kept
+    // running while the device was already stopped. Latch the last value shown
+    // before the pause and display that until the run resumes.
+    if (status == SessionStatus.paused) {
+      final held = _pausedRemainingByDevice[id];
+      if (held == null) {
+        _pausedRemainingByDevice[id] = displayRemaining;
+      } else if (held < displayRemaining) {
+        // The feed caught up and reports MORE time left than we froze at
+        // (it rewinds to the elapsed-at-pause value) — trust the backend.
+        _pausedRemainingByDevice[id] = displayRemaining;
+      } else {
+        displayRemaining = held;
+      }
+    } else {
+      _pausedRemainingByDevice.remove(id);
+    }
     final double displayProgress;
     if (useBackendTimer &&
         backendTotalSeconds != null &&
         backendTotalSeconds > 0) {
-      displayProgress =
-          (1 - backendRemainingSeconds / backendTotalSeconds).clamp(0.0, 1.0);
+      // Derived from the (possibly pause-held) remaining, so the ring and bar
+      // stop exactly where the digits do.
+      displayProgress = (1 - displayRemaining.inSeconds / backendTotalSeconds)
+          .clamp(0.0, 1.0);
     } else {
       displayProgress = timer.progress;
     }
@@ -3237,16 +3264,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // `.lc-time` — 50px/900, tabular, tight tracking.
-                      Text(
-                        displayRemaining.formatted,
-                        style: TextStyle(
-                          fontSize: 50,
-                          fontWeight: FontWeight.w900,
-                          height: 0.92,
-                          color: pal.ink,
-                          letterSpacing: -1.5,
-                          fontFeatures: const [FontFeature.tabularFigures()],
+                      // `.lc-time` — 50px/900, tabular, tight tracking. Paused
+                      // drops it to opacity .45 (app.js:1336).
+                      Opacity(
+                        opacity: status == SessionStatus.paused
+                            ? _TimerRing._pausedFade
+                            : 1,
+                        child: Text(
+                          displayRemaining.formatted,
+                          style: TextStyle(
+                            fontSize: 50,
+                            fontWeight: FontWeight.w900,
+                            height: 0.92,
+                            color: pal.ink,
+                            letterSpacing: -1.5,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ),
                       // `.lc-mod` — both pads 22px, 9px apart.
@@ -3860,14 +3893,22 @@ class _TimerRing extends CustomPainter {
   /// next to the spec's heavy ring.
   static const double _stroke = 13;
 
+  /// How far the ring dims while paused — the same rest the spec gives the
+  /// paused timer digits (`opacity:.45`, app.js:1336).
+  static const double _pausedFade = 0.45;
+
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.shortestSide - _stroke - 8) / 2;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
+    // `.livecard.paused` (styles.css:483/502) drops the ring to a resting
+    // state. The `active` flag was accepted and then never used, so a paused
+    // ring was indistinguishable from a running one — and `shouldRepaint`
+    // ignored the colours too, so even a colour change wouldn't have painted.
     Paint stroke(Color c) => Paint()
-      ..color = c
+      ..color = active ? c : c.withValues(alpha: c.a * _pausedFade)
       ..style = PaintingStyle.stroke
       ..strokeWidth = _stroke
       ..strokeCap = StrokeCap.round;
@@ -3947,5 +3988,11 @@ class _TimerRing extends CustomPainter {
       elapsedSeconds != old.elapsedSeconds ||
       activeFill != old.activeFill ||
       activeIndex != old.activeIndex ||
-      segments.length != old.segments.length;
+      segments.length != old.segments.length ||
+      // Pause/resume changes only these. Leaving them out meant the ring kept
+      // its running appearance until some OTHER value happened to change —
+      // and while paused nothing else changes, so it never repainted at all.
+      active != old.active ||
+      accentColor != old.accentColor ||
+      trackColor != old.trackColor;
 }

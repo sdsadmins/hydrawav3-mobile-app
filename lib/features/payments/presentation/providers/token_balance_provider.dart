@@ -45,18 +45,28 @@ final currentPlanProvider =
 /// so that value is the period allowance and the honest denominator for the
 /// plan sheet's usage bars. Null when the product can't be resolved, in which
 /// case the sheet omits the bars rather than guessing a total.
+///
+/// A FREE org's plan points at the product named "Free", and `GET /products`
+/// strips that one out server-side (`product.service.ts:150`) because it can't
+/// be bought. That lookup therefore always missed on a free plan, so the sheet
+/// had no denominator and drew no usage bar at all. `/products/subscriptions`
+/// applies no such filter, so it's the fallback.
 final planTokenGrantProvider =
     FutureProvider.autoDispose<double?>((ref) async {
   final plan = await ref.watch(currentPlanProvider.future);
   final productId = plan?.productId;
   if (productId == null || productId.isEmpty) return null;
+  final repo = ref.read(paymentRepositoryProvider);
   try {
-    final products = await ref.read(paymentRepositoryProvider).getProducts();
+    final products = await repo.getProducts();
     for (final p in products) {
       if (p.id == productId) return p.aiCredit;
     }
   } catch (_) {
-    // Products unavailable — no denominator, so no bar.
+    // Purchasable-product list unavailable — fall through to the full list.
+  }
+  for (final p in await repo.getSubscriptionProducts()) {
+    if (p.id == productId) return p.aiCredit;
   }
   return null;
 });

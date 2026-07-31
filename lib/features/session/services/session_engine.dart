@@ -2525,6 +2525,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       deviceStatuses: statuses,
       status: _deriveOverallStatus(statuses),
     );
+    // Same reason as [stopDevice]: without this the backend keeps the device
+    // RUNNING, so its clock never freezes for anyone else watching the feed.
+    unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
   }
 
   Future<void> resumeDevice(String deviceId) async {
@@ -2549,6 +2552,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (_timer == null) {
       _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
     }
+    unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
   }
 
   Future<void> stopDevice(String deviceId) async {
@@ -2593,6 +2597,24 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       deviceStatuses: statuses,
       status: overallStatus,
     );
+
+    // Tell the backend that THIS device stopped. Only the firmware-reported
+    // `rs=stop` path did this before, so an in-app Stop on one device of a
+    // multi-device run left the server believing it was still RUNNING: it kept
+    // appearing in the org-wide live feed, its locked tokens were never
+    // released, and it went on consuming a slot against the plan's
+    // concurrent-device limit — so the device the user had just freed could not
+    // be started again ("your plan allows N device(s) at a time"). The backend
+    // removes the device from the session, so a later session-level stopAll
+    // can't double-charge it.
+    if (_protocolPlusDeviceIds.contains(deviceId)) {
+      // A Plus device owns its own server session; the controller closes it
+      // (idempotently) through this hook and cancels its remaining switches.
+      onPlusDeviceStoppedByUser?.call(deviceId);
+    } else {
+      unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
+    }
+
     if (overallStatus == SessionStatus.stopped ||
         overallStatus == SessionStatus.completed) {
       unawaited(_syncBackgroundRuntime('stopped'));

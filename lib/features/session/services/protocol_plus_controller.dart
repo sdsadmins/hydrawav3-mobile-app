@@ -59,11 +59,21 @@ class ProtocolPlusBinding {
   /// The Protocol Plus template id running on this device.
   final String plusId;
 
+  /// The name this device was REGISTERED under (`deviceName` in the
+  /// `/protocol-plus/start` body). It is the only identity the backend's
+  /// pause/resume DTOs can match for a BLE device: those DTOs accept
+  /// `macAddress` / `deviceName` / `slotId`, and a BLE device is stored with
+  /// `bluetoothId` set and `macAddress` UNSET — so a macAddress-keyed pause
+  /// silently matches nothing and the server keeps the device RUNNING (which is
+  /// what left the on-screen countdown ticking through a pause).
+  final String deviceName;
+
   const ProtocolPlusBinding({
     required this.localMac,
     required this.serverDeviceId,
     required this.serverSessionId,
     required this.plusId,
+    this.deviceName = '',
   });
 
   Map<String, String> toMap() => {
@@ -71,6 +81,7 @@ class ProtocolPlusBinding {
         'serverDeviceId': serverDeviceId,
         'serverSessionId': serverSessionId,
         'plusId': plusId,
+        'deviceName': deviceName,
       };
 
   static ProtocolPlusBinding? fromMap(Map map) {
@@ -82,8 +93,16 @@ class ProtocolPlusBinding {
       serverDeviceId: map['serverDeviceId']?.toString() ?? localMac,
       serverSessionId: serverSessionId,
       plusId: map['plusId']?.toString() ?? '',
+      deviceName: map['deviceName']?.toString() ?? '',
     );
   }
+
+  /// Identity body for the backend session lifecycle endpoints. Prefers the
+  /// registered name (BLE-safe); falls back to the mac for a Wi-Fi device
+  /// registered before the name was tracked.
+  Map<String, dynamic> get identityBody => deviceName.isNotEmpty
+      ? {'deviceName': deviceName}
+      : {'macAddress': localMac};
 }
 
 final protocolPlusControllerProvider = Provider<ProtocolPlusController>((ref) {
@@ -356,7 +375,7 @@ class ProtocolPlusController {
       try {
         final res = await dio.post(
           ApiEndpoints.sessionPause(b.serverSessionId, ctx.orgId),
-          data: {'macAddress': b.localMac},
+          data: b.identityBody,
           options: ctx.options,
         );
         appLogger
@@ -382,7 +401,7 @@ class ProtocolPlusController {
       try {
         final res = await dio.post(
           ApiEndpoints.sessionResume(b.serverSessionId, ctx.orgId),
-          data: {'macAddress': b.localMac},
+          data: b.identityBody,
           options: ctx.options,
         );
         appLogger
@@ -579,6 +598,9 @@ class ProtocolPlusController {
           serverDeviceId: serverDeviceId,
           serverSessionId: result.sessionId,
           plusId: plan.plusId,
+          // Same name we just registered with — the identity pause/resume must
+          // use (see [ProtocolPlusBinding.deviceName]).
+          deviceName: deviceName,
         );
       } on DioException catch (e) {
         // Flag token/subscription rejections; we throw after publishing (below)

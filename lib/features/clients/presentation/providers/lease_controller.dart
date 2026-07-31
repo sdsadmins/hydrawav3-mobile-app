@@ -90,6 +90,11 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     }
 
     state = state.copyWith(busy: true, error: null, step: 'Connecting to device…');
+    // Only a link WE opened may be closed again — the picker now offers
+    // already-connected units, and tearing down a link the practitioner
+    // established elsewhere (a paired unit, a device staged for a session)
+    // would be a side effect of merely reading it.
+    final wasConnected = _ble.isConnected(device.remoteId.str);
     var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
@@ -97,7 +102,7 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
-      didConnect = true;
+      didConnect = !wasConnected;
 
       state = state.copyWith(busy: true, step: 'Loading lease to device…');
       final acked = await _commands.setLeaseId(
@@ -140,6 +145,11 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
     final leaseId = client.leaseId ?? '';
 
     state = state.copyWith(busy: true, error: null, step: 'Connecting to device…');
+    // Only a link WE opened may be closed again — the picker now offers
+    // already-connected units, and tearing down a link the practitioner
+    // established elsewhere (a paired unit, a device staged for a session)
+    // would be a side effect of merely reading it.
+    final wasConnected = _ble.isConnected(device.remoteId.str);
     var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
@@ -147,7 +157,7 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
-      didConnect = true;
+      didConnect = !wasConnected;
 
       state = state.copyWith(busy: true, step: 'Clearing lease on device…');
       final acked = await _commands.clearLeaseId(
@@ -200,6 +210,11 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
   /// Returns null (and sets an error) if it can't be resolved.
   Future<String?> readDeviceMac(BluetoothDevice device) async {
     state = state.copyWith(busy: true, error: null, step: 'Reading device…');
+    // Only a link WE opened may be closed again — the picker now offers
+    // already-connected units, and tearing down a link the practitioner
+    // established elsewhere (a paired unit, a device staged for a session)
+    // would be a side effect of merely reading it.
+    final wasConnected = _ble.isConnected(device.remoteId.str);
     var didConnect = false;
     try {
       final connected = await _ble.connectDevice(device, cachePairedDevice: false);
@@ -207,7 +222,7 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
         state = state.copyWith(busy: false, error: 'Could not connect to the device.');
         return null;
       }
-      didConnect = true;
+      didConnect = !wasConnected;
       final mac = await _commands.resolveHardwareMac(device.remoteId.str);
       if (mac == null) {
         state = state.copyWith(
@@ -233,10 +248,13 @@ class LeaseController extends StateNotifier<LeaseFlowState> {
   }
 
   /// Best-effort disconnect after a one-off lease BLE operation. Every lease
-  /// step (read MAC / load lease / deactivate) connects, does its work, and must
-  /// release the device: a still-connected unit stops advertising and vanishes
-  /// from the next scan picker. Only disconnects if [didConnect] is true; a
-  /// later explicit connect() re-enables the device for the next step.
+  /// step (read MAC / load lease / deactivate) connects, does its work, and
+  /// releases the device again.
+  ///
+  /// [didConnect] is true only when THIS step opened the link. A unit that was
+  /// already connected when the step began is left connected: the picker lists
+  /// connected units now, so releasing it buys nothing and would silently drop a
+  /// link the user set up for something else.
   Future<void> _releaseDevice(bool didConnect, BluetoothDevice device) async {
     if (!didConnect) return;
     try {

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../history/data/history_repository.dart';
 import '../../data/session_repository.dart';
 import '../../domain/pending_session_outcome_model.dart';
 import '../../domain/question_answer_model.dart';
@@ -95,9 +96,19 @@ class PendingOutcomesNotifier
   /// (marked `syncPending`) so `drainSyncPending` can retry later.
   ///
   /// `outcomes` is null for a plain "Skip" (logs the session with no answers).
-  Future<void> finalize(String sessionId, PostSessionOutcomes? outcomes) async {
+  ///
+  /// [isRetry] re-posts an entry that is already marked answered — the path
+  /// [drainSyncPending] uses. Without it the "already answered" guard below
+  /// rejected every retry, so an outcome whose POST failed once was never sent
+  /// again and never appeared in history.
+  Future<void> finalize(
+    String sessionId,
+    PostSessionOutcomes? outcomes, {
+    bool isRetry = false,
+  }) async {
     final entry = getById(sessionId);
-    if (entry == null || entry.answers != null) return; // gone / already answered
+    if (entry == null) return; // gone
+    if (entry.answers != null && !isRetry) return; // already answered
 
     // Mark answered IMMEDIATELY (even before the POST resolves) so it can never
     // re-prompt on Stop All or re-appear as a "Needs review" card. It stays in
@@ -121,6 +132,10 @@ class PendingOutcomesNotifier
     final ok = await _ref.read(sessionRepositoryProvider).finalizeSession(record);
     if (ok) {
       await remove(sessionId); // fully done — drop the retry entry
+      // The intake now exists server-side; drop the cached history so the
+      // session (and its outcome check) shows up straight away instead of on
+      // the next cold start.
+      _ref.invalidate(allSessionsProvider);
     } else {
       appLogger.w('Finalize POST failed; kept $sessionId (answered) for retry');
     }
@@ -130,7 +145,7 @@ class PendingOutcomesNotifier
   Future<void> drainSyncPending() async {
     final pending = state.where((e) => e.syncPending).toList();
     for (final entry in pending) {
-      await finalize(entry.sessionId, entry.answers);
+      await finalize(entry.sessionId, entry.answers, isRetry: true);
     }
   }
 }

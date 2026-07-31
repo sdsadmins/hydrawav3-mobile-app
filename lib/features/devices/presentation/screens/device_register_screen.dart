@@ -14,6 +14,7 @@ import '../../../ble/data/ble_command_service.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../ble/presentation/providers/ble_scan_provider.dart';
+import '../../../ble/services/ble_connector.dart';
 import '../../../ble/services/ble_scanner.dart';
 import '../../data/device_repository.dart';
 import '../../domain/device_model.dart';
@@ -359,16 +360,73 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     await ref.read(startScanProvider)();
   }
 
+  /// Devices this app is ALREADY connected to, as scan-result entries.
+  ///
+  /// A BLE peripheral stops advertising the moment it accepts a connection, so
+  /// a unit connected from the Devices list can never appear in scan results —
+  /// which is why the register sheet showed nothing until the user went back
+  /// and disconnected. These are folded into the discovery list so an
+  /// already-connected unit is registerable straight away.
+  ///
+  /// The synthesised advertisement declares the Hydrawav3 service UUID so the
+  /// "Hydrawav3 only" toggle keeps them (they are Hydra units by definition —
+  /// the connector only ever connects to those).
+  List<ScanResult> _connectedScanResults() {
+    final connectedIds = ref.read(bleConnectorProvider).connectedDeviceIds;
+    if (connectedIds.isEmpty) return const <ScanResult>[];
+    final idSet = connectedIds.toSet();
+
+    final expected = BleConstants.preferredServiceUuid;
+    final serviceUuids = <Guid>[
+      if (expected != null && expected.isNotEmpty) Guid(expected),
+    ];
+
+    final now = DateTime.now();
+    final out = <ScanResult>[];
+    for (final device in FlutterBluePlus.connectedDevices) {
+      if (!idSet.contains(device.remoteId.str)) continue;
+      out.add(ScanResult(
+        device: device,
+        advertisementData: AdvertisementData(
+          advName: device.platformName,
+          txPowerLevel: null,
+          appearance: null,
+          connectable: true,
+          manufacturerData: const {},
+          serviceData: const {},
+          serviceUuids: serviceUuids,
+        ),
+        rssi: 0,
+        timeStamp: now,
+      ));
+    }
+    return out;
+  }
+
+  /// Live scan results plus the already-connected units, de-duped by remote id
+  /// (a device can be in both lists right after connecting).
+  List<ScanResult> _candidateDevices() {
+    final byId = <String, ScanResult>{};
+    for (final r in _discoveredDevices) {
+      byId[r.device.remoteId.str] = r;
+    }
+    for (final r in _connectedScanResults()) {
+      byId.putIfAbsent(r.device.remoteId.str, () => r);
+    }
+    return byId.values.toList();
+  }
+
   List<ScanResult> _getFilteredDevices() {
+    final candidates = _candidateDevices();
     // Mirror the Devices list screen's filter exactly: when the Hydrawav3
     // toggle is on, keep only devices advertising the configured service UUID.
-    if (!_isHydrawav3Only) return _discoveredDevices;
+    if (!_isHydrawav3Only) return candidates;
 
     final expected = BleConstants.preferredServiceUuid;
     if (expected == null || expected.isEmpty) return const <ScanResult>[];
 
     final targetUuid = BleConstants.normalizeUuid(expected);
-    return _discoveredDevices.where((result) {
+    return candidates.where((result) {
       return result.advertisementData.serviceUuids.any(
         (uuid) => BleConstants.normalizeUuid(uuid.str) == targetUuid,
       );
@@ -383,7 +441,9 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
       await ref.read(stopScanProvider)();
     } catch (_) {}
 
-    final selected = _discoveredDevices
+    // Candidates, not raw scan results: an already-connected unit isn't
+    // advertising, so it only exists in the merged list.
+    final selected = _candidateDevices()
         .where(
             (d) => _normalizeMac(d.device.id.toString()) == _selectedDeviceMac)
         .toList();

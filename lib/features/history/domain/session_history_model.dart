@@ -50,11 +50,18 @@ class HistoryProtocol {
   final int? duration;
   final String? deviceName;
 
+  /// The post-session outcome check, as answered on the outcomes sheet and
+  /// POSTed inside `protocols[].questionAnswers`. This — not the discomfort
+  /// scores — is what the outcomes sheet actually collects, so it's the only
+  /// source the history row can read an outcome from.
+  final List<HistoryQuestionAnswer> questionAnswers;
+
   const HistoryProtocol({
     this.bodyPart,
     this.protocol,
     this.duration,
     this.deviceName,
+    this.questionAnswers = const [],
   });
 
   factory HistoryProtocol.fromJson(Map<String, dynamic> json) {
@@ -63,6 +70,35 @@ class HistoryProtocol {
       protocol: json['protocol'] as String?,
       duration: json['duration'] as int?,
       deviceName: json['deviceName'] as String?,
+      questionAnswers: (json['questionAnswers'] as List<dynamic>?)
+              ?.whereType<Map>()
+              .map((e) => HistoryQuestionAnswer.fromJson(
+                  Map<String, dynamic>.from(e)))
+              .toList() ??
+          const [],
+    );
+  }
+}
+
+/// One answered outcome-check question logged against a protocol.
+class HistoryQuestionAnswer {
+  final String question;
+  final String answer;
+
+  /// 1–5 for a preset answer (higher = better outcome), 0 for free text.
+  final int rank;
+
+  const HistoryQuestionAnswer({
+    required this.question,
+    required this.answer,
+    this.rank = 0,
+  });
+
+  factory HistoryQuestionAnswer.fromJson(Map<String, dynamic> json) {
+    return HistoryQuestionAnswer(
+      question: (json['question'] ?? '').toString(),
+      answer: (json['answer'] ?? '').toString(),
+      rank: (json['rank'] as num?)?.toInt() ?? 0,
     );
   }
 }

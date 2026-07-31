@@ -234,6 +234,12 @@ class ApiEndpoints {
   static const String paymentUser = '/payments/user';
   static const String products = '/products';
 
+  /// Every SUBSCRIPTION product. `GET /products` deliberately drops the one
+  /// named "Free" (`product.service.ts:150`) because it isn't purchasable — but
+  /// that is the product a free org's plan points at, so its `aiCredit` (the
+  /// period's token grant) is only reachable here.
+  static const String subscriptionProducts = '/products/subscriptions';
+
   // Device Control (Wi-Fi)
   static const String sendTreatment = '/send_treatment2.php';
 

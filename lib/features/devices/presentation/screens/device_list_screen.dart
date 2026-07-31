@@ -34,6 +34,7 @@ import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/domain/active_session_model.dart' as live;
 import '../../../session/presentation/providers/active_sessions_provider.dart';
+import '../../../session/presentation/providers/busy_devices_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/ble_run_state_provider.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
@@ -1046,16 +1047,19 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     // we're about to start must not exceed it.
     final deviceLimit = ref.read(planDeviceLimitProvider).valueOrNull;
     if (deviceLimit != null && deviceLimit > 0) {
-      final runningOrg = <String>{
-        ...busyDevices,
-        for (final s in ref.read(liveSessionsProvider)) ...s.deviceIds,
-      };
-      if (runningOrg.length + runnableIds.length > deviceLimit) {
+      // One entry per physical device, per-device status honoured — see
+      // [liveDeviceCountProvider]. The old inline set unioned `busyDevices`
+      // (which expands every MAC into its ±1 variants) with every
+      // `session.deviceIds` (which includes devices already stopped inside a
+      // still-running session), so the count ran several times higher than the
+      // number of devices actually running.
+      final runningCount = ref.read(liveDeviceCountProvider);
+      if (runningCount + runnableIds.length > deviceLimit) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               'Your plan allows $deviceLimit device(s) at a time '
-              '(${runningOrg.length} already running). Stop a device or '
+              '($runningCount already running). Stop a device or '
               'upgrade your plan to run more.',
             ),
             backgroundColor: ThemeConstants.error,
@@ -1809,9 +1813,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final newlySelectedCount = currentSessionDeviceIds
         .where((id) => !inUseDeviceIds.contains(id))
         .length;
+    // `inUseDeviceIds.length` is NOT the running-device count: the same unit
+    // lands in it twice when the local advertised id and the backend's
+    // firmware id (which differ by ±1) are both present, so a single running
+    // device could already read as two and lock out the plan.
+    final runningDeviceCount = ref.watch(liveDeviceCountProvider);
     final deviceLimitReached = deviceLimit != null &&
         deviceLimit > 0 &&
-        (inUseDeviceIds.length + newlySelectedCount) >= deviceLimit;
+        (runningDeviceCount + newlySelectedCount) >= deviceLimit;
     // Picking a client no longer requires an area of focus. The body-part /
     // guided-assessment step is optional intake, not a precondition — Start
     // only needs devices with a protocol configured, in Client and Guest mode
