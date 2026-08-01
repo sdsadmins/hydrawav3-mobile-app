@@ -25,12 +25,17 @@ const String kPerformanceStackName = 'Performance Activation';
 ///
 /// The pad-set service returns no protocol, duration, or intensity — so nothing
 /// about the session is inferred from the chain.
+/// [preloadProtocol] is off for a RECOVERY placement. The handoff is otherwise
+/// identical — same pad set, same client, same destination — but the stack this
+/// pre-loads is named "Performance Activation", and loading it off a recovery
+/// placement announces a protocol nothing in that flow asked for.
 Future<void> goToSessionFromPlacement(
   BuildContext context,
   WidgetRef ref, {
   required PadSetPayload payload,
   Client? client,
   String? clientName,
+  bool preloadProtocol = true,
 }) async {
   ref.read(activePadSetProvider.notifier).state = payload;
 
@@ -41,7 +46,8 @@ Future<void> goToSessionFromPlacement(
     ref.read(sessionClientModeProvider.notifier).state = ClientMode.guest;
   }
 
-  final protocol = await _resolvePerformanceProtocol(ref);
+  final protocol =
+      preloadProtocol ? await _resolvePerformanceProtocol(ref) : null;
   if (protocol != null) {
     ref.read(pendingSessionProtocolProvider.notifier).state = protocol.id;
   }
