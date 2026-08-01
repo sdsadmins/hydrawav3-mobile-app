@@ -27,6 +27,7 @@ class RouteNames {
   // Session
   static const String session = 'session';
   static const String sessionSetup = 'session-setup';
+  static const String sessionAfter = 'session-after';
 
   // AI report
   static const String aiReport = 'ai-report';
@@ -97,6 +98,7 @@ class RoutePaths {
   static const String protocolPlus = '/protocol-plus';
   static const String session = '/session';
   static const String sessionSetup = '/session-setup';
+  static const String sessionAfter = '/session-after';
   static const String aiReport = '/ai-report';
   static const String aiReports = '/ai-reports';
   static const String aiReportClients = '/ai-report-clients';

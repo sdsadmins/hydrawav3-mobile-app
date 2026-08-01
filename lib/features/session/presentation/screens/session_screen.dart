@@ -29,11 +29,8 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
-import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
-import '../../../session/presentation/providers/pending_outcomes_provider.dart';
-import '../widgets/post_session_outcomes_sheet.dart';
 import '../../../session/services/background_session_runtime.dart';
 import '../../../session/services/wifi_remote_control.dart';
 
@@ -153,9 +150,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       _bleConnectionSub;
   bool _startingSession = false;
   bool _terminalSessionCleanupInFlight = false;
-  bool _outcomesPromptShown = false;
+  bool _navigatedToAfter = false;
   String? _activeSessionId;
-  String? _historySnapshotSessionId;
   late final String _engineKey;
 
   Timer? _padPollTimer;
@@ -218,7 +214,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Subscription to the normal-run backend sessionId delivery provider.
   ProviderSubscription<String?>? _normalServerIdSub;
 
-  /// One-shot guard so the normal-run backend stop POST fires at most once.
+  /// One-shot guard for the "backend session vanished from the feed → stop the
+  /// local engine too" reconcile. Ending the backend session itself is the
+  /// ENGINE's job now ([SessionEngine._endBackendSessionOnce]), so it happens
+  /// even when this screen isn't mounted.
   bool _normalServerStopped = false;
 
   /// One-shot guard so the session-setup reset (clears the guided-assessment
@@ -748,7 +747,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       // but only if we'd actually seen it (so we don't stop a run whose backend
       // session simply hasn't appeared in the feed yet).
       if (_backendSessionSeen && !_normalServerStopped && localLive) {
-        _normalServerStopped = true; // remote already stopped the server side
+        _normalServerStopped = true;
+        // The server side is already stopped, so the engine must not POST a stop
+        // of its own when this local stop takes it terminal.
+        engineCtrl.markBackendSessionEnded();
         appLogger
             .i('Session: backend $backendId removed â€” applying remote stop');
         unawaited(engineCtrl.stop());
@@ -817,18 +819,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       appLogger.i('Reconcile[$backendId]: remote changed to $remote but '
           'local=$localStatus â€” no engine action');
     }
-  }
-
-  /// Stop the backend session for a NORMAL run exactly once (on terminal). This
-  /// is what clears the run from every client's live feed and prevents a stale
-  /// RUNNING session lingering on the web.
-  void _stopNormalServerSession() {
-    if (_normalServerStopped) return;
-    final backendId = _normalBackendSessionId;
-    if (backendId == null || backendId.isEmpty) return;
-    _normalServerStopped = true;
-    unawaited(
-        ref.read(sessionSyncServiceProvider).stopServerSession(backendId));
   }
 
   Future<void> _loadDeviceNames() async {
@@ -1291,46 +1281,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
   }
 
-  Future<void> _captureSessionHistorySnapshot(SessionEngineState engine) async {
-    final sessionId = _activeSessionId;
-    if (sessionId == null || _historySnapshotSessionId == sessionId) {
-      return;
-    }
-
-    // Claim the snapshot synchronously (before any await) so concurrent
-    // engine-state listener callbacks can't each fire a duplicate save/POST
-    // while the first one is still in flight.
-    _historySnapshotSessionId = sessionId;
-
-    final auth = ref.read(authStateProvider);
-    final userId = auth.user?.id;
-    final now = DateTime.now();
-    final sessionEngine =
-        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
-    // clientType / clientId / intake come from the engine context set by the
-    // launcher (setClientContext) â€” guest when none was provided.
-    final record = sessionEngine.getSessionRecord(
-      sessionId: sessionId,
-      createdBy: userId,
-      updatedBy: userId,
-      createdAt: now,
-      updatedAt: now,
-      discomfortBefore: 6,
-      discomfortAfter: 2,
-      notes: 'Session started from mobile app',
-    );
-
-    if (record == null) {
-      // Couldn't build a record yet â€” release the claim so a later, valid
-      // engine state can retry.
-      _historySnapshotSessionId = null;
-      return;
-    }
-
-    await ref.read(sessionRepositoryProvider).saveSession(record);
-    appLogger.i('Captured session history snapshot for $sessionId');
-  }
-
   bool _areDeviceListsEqual(List<String> list1, List<String> list2) {
     if (list1.length != list2.length) return false;
     final set1 = Set<String>.from(list1);
@@ -1614,8 +1564,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       protocolName:
           engine.protocol?.templateName ?? widget.protocol?.templateName,
     );
-    await _captureSessionHistorySnapshot(engine);
+    // Session draft is captured once on start by [SessionEngine._captureSessionHistoryOnce]
+    // — do NOT POST `/intake` here; finalize happens on the after-screen.
     await _syncEngineStateToActiveSessions(engine);
+  }
+
+  /// Queue the post-session snapshot. Opening `#scr-ready-after` is NOT done
+  /// here — [SessionOutcomeGate] watches the queue app-wide and presents it, so
+  /// a run that ends on this screen, on the devices list, or in remote view all
+  /// land on the same screen. Doing it in both places would stack two of them.
+  void _queuePostSessionReview() {
+    if (_navigatedToAfter || widget.remoteView) return;
+    _navigatedToAfter = true;
+    ref
+        .read(sessionEngineFamilyProvider(_engineKey).notifier)
+        .enqueuePendingOutcome();
   }
 
   Future<void> _handleTerminalSessionState(SessionEngineState engine) async {
@@ -1623,22 +1586,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         engine.status != SessionStatus.completed) {
       return;
     }
-    // End the backend session for a normal run first, so the run clears from
-    // every client's live feed even if there's no local active-session record.
-    _stopNormalServerSession();
+    // Ending the backend session is NOT done here any more — [SessionEngine]
+    // does it on the terminal transition itself, so it also happens when this
+    // screen isn't mounted. Doing it here as well meant a run that finished
+    // off-screen never cleared from the live feed, pinning its devices "In use".
 
-    // Queue the post-session review snapshot (idempotent, client-only). We do
-    // NOT auto-open the sheet here â€” web parity: the questions appear on the
-    // explicit Stop All / Done end-action. If the session ended off-screen, the
-    // queued snapshot surfaces as a "Needs review" card on the Live feed.
+    // Queue the post-session snapshot (idempotent). [SessionOutcomeGate] turns
+    // that into the after-screen (`#scr-ready-after` handoff parity) from
+    // wherever the user happens to be — this screen no longer navigates itself.
     if (!widget.remoteView) {
-      ref
-          .read(sessionEngineFamilyProvider(_engineKey).notifier)
-          .enqueuePendingOutcome();
-      // On Stop All (or any terminal), clear the per-session intake so the
-      // session setup resets â€” in Client mode this empties the area of focus,
-      // which disables "Start Session" until a new assessment is done. Safe:
-      // the outcomes sheet finalizes off the engine's snapshot, not this state.
+      _queuePostSessionReview();
       if (!_setupResetAfterStop) {
         _setupResetAfterStop = true;
         ref.read(guidedAssessmentProvider.notifier).reset();
@@ -1666,24 +1623,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     } finally {
       _terminalSessionCleanupInFlight = false;
     }
-  }
-
-  /// Present the post-session outcomes sheet for this session (if it has a
-  /// queued review), then finalize â€” a single `/intake` POST with the answers,
-  /// or a bare log on Skip/dismiss. Idempotent via [_outcomesPromptShown].
-  Future<void> _promptSessionOutcomes() async {
-    if (_outcomesPromptShown) return;
-    final notifier = ref.read(pendingOutcomesProvider.notifier);
-    final pending = notifier.needsReviewById(_engineKey);
-    if (pending == null) return; // nothing queued, or already answered
-    _outcomesPromptShown = true;
-    if (!mounted) return;
-    final outcomes = await showPostSessionOutcomesSheet(
-      context,
-      protocolQuestions: pending.orderedProtocolQuestions,
-    );
-    // outcomes == null â†’ Skip/dismiss: still log the session (no answers).
-    await notifier.finalize(_engineKey, outcomes);
   }
 
   bool _isDisconnectTransition(
@@ -3139,22 +3078,32 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // The goal is read off the protocol name: `GoalColor.of` matches on the goal
     // words ("Recovery", "Comfort", "Calm", "Vitality") that protocol names
     // already carry, and falls back to Performance copper.
-    final gc = GoalColor.of(
+    //
+    // Via [_protocolAccentColor], which keeps the accent out of the break's blue
+    // — a Plus stack re-resolves this per sub-protocol, so a Calm/Recovery stage
+    // used to repaint the whole ring in the break colour mid-run.
+    final gc = _protocolAccentColor(
       protocolName.isNotEmpty ? protocolName : plusName,
       pal,
-    ).text;
+    );
 
     // Whole-run total, for the spec's "MM:SS elapsed of MM:SS total" line. The
-    // backend total wins when we're following its clock; otherwise derive it
-    // from the local timer so the two halves of the line always agree.
+    // backend total wins when we're following its clock; otherwise read the
+    // local timer's own total.
+    //
+    // This used to back-compute the total as
+    // `remaining / (1 - progress)`. `progress` is clamped to [0, 1], so the
+    // moment a local-timer run reached its end the divisor became 0 — giving
+    // Infinity (or NaN once `remaining` had also hit 0) and throwing
+    // "Unsupported operation: Infinity or NaN toInt" out of `round()`, mid-build
+    // of the device card. [TimerState] already carries `totalDuration`, which is
+    // exactly what that expression was trying to reconstruct.
     final displayTotal = (useBackendTimer &&
             backendTotalSeconds != null &&
             backendTotalSeconds > 0)
         ? Duration(seconds: backendTotalSeconds)
-        : (timer.progress > 0
-            ? Duration(
-                seconds:
-                    (timer.remaining.inSeconds / (1 - timer.progress)).round())
+        : (timer.totalDuration > Duration.zero
+            ? timer.totalDuration
             : timer.remaining);
 
     return Container(
@@ -3616,10 +3565,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     Future<void> onStopAll() async {
       if (!widget.remoteView) {
         ctrl.stop();
-        // Web parity: the post-session questions appear on the explicit Stop
-        // All (client sessions only â€” the enqueue no-ops for guests).
-        ctrl.enqueuePendingOutcome();
-        await _promptSessionOutcomes();
         return;
       }
       if (isBleRemote) {
@@ -3752,13 +3697,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           width: double.infinity,
           child: ElevatedButton(
               onPressed: () async {
-                // Ask the post-session questions before leaving, if not already
-                // handled by the auto-prompt (idempotent).
+                // The after-screen is presented by [SessionOutcomeGate] the
+                // moment the run goes terminal, so this is only ever the way
+                // back from a live card the user returned to — same behaviour
+                // for an own run and a remote view.
                 if (!widget.remoteView) {
-                  ref
-                      .read(sessionEngineFamilyProvider(_engineKey).notifier)
-                      .enqueuePendingOutcome();
-                  await _promptSessionOutcomes();
+                  _queuePostSessionReview();
                 }
                 await _removeTrackedSessionIfAny();
                 ctrl.reset();
@@ -3832,8 +3776,37 @@ class _RingSegment {
   const _RingSegment(this.seconds, {this.isBreak = false});
 }
 
-/// Break colour, matching the UI handoff's `BREAK_COL` (app.js:1274).
+/// Break colour, matching the UI handoff's `BREAK_COL` (app.js:1274). The break
+/// stays blue; it's the PROTOCOL colour that has to keep clear of it — see
+/// [_protocolAccentColor].
 const Color _kBreakColor = Color(0xFF4E7A8A);
+
+/// How close (in degrees of hue) a protocol accent may come to [_kBreakColor]
+/// before it stops reading as "protocol" and starts reading as "break".
+const double _kBreakHueGuard = 25;
+
+/// The `--gc` accent for a running protocol — its goal colour, EXCEPT when that
+/// colour would be mistaken for the break.
+///
+/// `goalColor()` returns `#4E7A8A` for **Calm** — byte-for-byte the handoff's
+/// own `BREAK_COL` (app.js:3722 vs app.js:1274) — and `#2F4A5A` for **Recovery**,
+/// which is the same blue a shade darker. So the moment a stack switched to a
+/// Calm or Recovery sub-protocol, the ring arcs, progress bar, stage chips and
+/// legend all turned the break colour and the whole ring read as one long break.
+/// The first stage looked right only because it happened to be a copper goal.
+///
+/// Blue belongs to the break. A protocol whose goal colour lands in that hue
+/// window falls back to the default Performance copper, so protocol arcs stay
+/// copperish and the break stays the only blue on the ring. The other goals
+/// (Comfort brown, Vitality green) are nowhere near it and keep their colour.
+Color _protocolAccentColor(String goalSource, RefPalette p) {
+  final goalColor = GoalColor.of(goalSource, p).text;
+  final breakHue = HSLColor.fromColor(_kBreakColor).hue;
+  var delta = (HSLColor.fromColor(goalColor).hue - breakHue).abs();
+  if (delta > 180) delta = 360 - delta; // hue is a circle
+  if (delta > _kBreakHueGuard) return goalColor;
+  return GoalColor.of('', p).text; // Performance / default copper
+}
 
 /// The session progress ring.
 ///
@@ -3907,11 +3880,11 @@ class _TimerRing extends CustomPainter {
     // state. The `active` flag was accepted and then never used, so a paused
     // ring was indistinguishable from a running one — and `shouldRepaint`
     // ignored the colours too, so even a colour change wouldn't have painted.
-    Paint stroke(Color c) => Paint()
+    Paint stroke(Color c, {StrokeCap cap = StrokeCap.round}) => Paint()
       ..color = active ? c : c.withValues(alpha: c.a * _pausedFade)
       ..style = PaintingStyle.stroke
       ..strokeWidth = _stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeCap = cap;
 
     // No glow on the arc. The spec's `.lc-arc` has a
     // `drop-shadow(0 0 4px gc)`, but at a 13px stroke on a phone screen it read
@@ -3927,8 +3900,13 @@ class _TimerRing extends CustomPainter {
     final total = segments.fold<double>(0, (a, s) => a + s.seconds);
     if (total <= 0) return;
 
-    // A small gap between arcs so adjacent stages read as separate.
-    const gapFraction = 0.012;
+    // Segment arcs are cut SQUARE, not rounded, so protocol → break → protocol
+    // reads as one unbroken ring divided by straight edges. A round cap bulges
+    // half the stroke past the arc's own sweep at each end (≈0.012 of a turn at
+    // this stroke and radius), which is what the old gap was compensating for.
+    // Arcs butt hard against each other — no gap. The colour change at each
+    // straight edge is the divider, so the ring stays a solid unbroken circle.
+    const segmentCap = StrokeCap.butt;
 
     // PASS 1 — every segment's empty track. The spec draws all tracks first,
     // then the fills over them, so a partially-filled arc still shows the rest
@@ -3939,7 +3917,7 @@ class _TimerRing extends CustomPainter {
     for (var i = 0; i < segments.length; i++) {
       final seg = segments[i];
       final span = seg.seconds / total;
-      final sweep = (span - gapFraction).clamp(0.002, 1.0) * 2 * pi;
+      final sweep = span.clamp(0.002, 1.0) * 2 * pi;
       final from = -pi / 2 + startFraction * 2 * pi;
       starts.add(from);
       sweeps.add(sweep);
@@ -3948,7 +3926,10 @@ class _TimerRing extends CustomPainter {
         from,
         sweep,
         false,
-        stroke(seg.isBreak ? _kBreakColor.withValues(alpha: 0.28) : trackColor),
+        stroke(
+          seg.isBreak ? _kBreakColor.withValues(alpha: 0.28) : trackColor,
+          cap: segmentCap,
+        ),
       );
       startFraction += span;
     }
@@ -3964,7 +3945,7 @@ class _TimerRing extends CustomPainter {
 
       if (activeIndex >= 0 && i < activeIndex) {
         canvas.drawArc(rect, starts[i], sweeps[i], false,
-            stroke(fill.withValues(alpha: 0.55)));
+            stroke(fill.withValues(alpha: 0.55), cap: segmentCap));
       } else if (i == activeIndex) {
         // `sp` — the spec's per-segment progress. Prefer the caller's exact
         // value (breaks report their own countdown); otherwise derive it from
@@ -3975,7 +3956,8 @@ class _TimerRing extends CustomPainter {
                     : 0.0))
             .clamp(0.0, 1.0);
         if (sp > 0) {
-          canvas.drawArc(rect, starts[i], sweeps[i] * sp, false, stroke(fill));
+          canvas.drawArc(rect, starts[i], sweeps[i] * sp, false,
+              stroke(fill, cap: segmentCap));
         }
       }
       elapsedBefore += seg.seconds;

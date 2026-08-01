@@ -8,25 +8,6 @@ import '../../domain/active_session_model.dart';
 import '../../services/session_sync_service.dart';
 import '../providers/active_sessions_provider.dart';
 import '../providers/live_sessions_provider.dart';
-import '../providers/pending_outcomes_provider.dart';
-
-/// A session counts as live while the backend feed still carries it and it
-/// hasn't been stopped — that includes fully-paused and completed runs, which
-/// stay until the user hits Stop All (same rule the Live tab used).
-bool _isVisibleStatus(SessionStatus status) =>
-    status == SessionStatus.running ||
-    status == SessionStatus.paused ||
-    status == SessionStatus.completed;
-
-bool _isVisibleActiveSession(ActiveSession session) {
-  if (_isVisibleStatus(session.status)) return true;
-  for (final deviceId in session.deviceIds) {
-    if (_isVisibleStatus(session.deviceStatuses[deviceId] ?? SessionStatus.idle)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /// Open [session]'s live screen. An OWN run whose local engine is still alive
 /// opens against that engine (full control); everything else — foreign WiFi,
@@ -45,7 +26,7 @@ void openLiveSession(BuildContext context, WidgetRef ref, ActiveSession session)
     }
   }
 
-  if (session.isOwn && _isVisibleActiveSession(session) && local != null) {
+  if (session.isOwn && isVisibleActiveSession(session) && local != null) {
     context.pushNamed(
       RouteNames.session,
       extra: {
@@ -91,16 +72,18 @@ class LiveSessionsBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // A session awaiting post-session answers already shows as a "Needs review"
-    // card in History — don't also announce it as live here.
-    final pendingIds = {
-      for (final e in ref.watch(pendingOutcomesProvider))
-        if (e.answers == null) e.sessionId,
-    };
+    // A run this phone has already finished is NOT announced as live. The
+    // backend keeps a session in `/sessions/active` until it is stopped, so this
+    // card used to go on saying "1 session running" — and its devices stayed
+    // "In use" — long after the device had stopped and the post-session question
+    // had been answered. The engine now POSTs the stop on the terminal
+    // transition, so the feed drops it within a poll; this filter just closes
+    // the gap in between rather than being the fix on its own.
+    final finishedIds = ref.watch(finishedOwnSessionIdsProvider);
     final sessions = ref
         .watch(liveSessionsProvider)
-        .where(_isVisibleActiveSession)
-        .where((s) => !pendingIds.contains(s.id))
+        .where(isVisibleActiveSession)
+        .where((s) => !finishedIds.contains(s.id))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
@@ -108,6 +91,13 @@ class LiveSessionsBanner extends ConsumerWidget {
 
     final p = RefPalette.of(context);
     final multiple = sessions.length > 1;
+    final accent = p.good;
+
+    final title =
+        multiple ? '${sessions.length} sessions running' : '1 session running';
+    final subtitle = multiple
+        ? 'Tap to view & switch'
+        : '${_sessionLabel(sessions.first)} — tap to view';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -124,21 +114,19 @@ class LiveSessionsBanner extends ConsumerWidget {
             decoration: BoxDecoration(
               color: p.card,
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: p.good.withValues(alpha: 0.55)),
+              border: Border.all(color: accent.withValues(alpha: 0.55)),
               boxShadow: p.shadow,
             ),
             child: Row(
               children: [
-                _LivePulse(color: p.good),
+                _LivePulse(color: accent),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        multiple
-                            ? '${sessions.length} sessions running'
-                            : '1 session running',
+                        title,
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
@@ -147,9 +135,7 @@ class LiveSessionsBanner extends ConsumerWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        multiple
-                            ? 'Tap to view & switch'
-                            : '${_sessionLabel(sessions.first)} — tap to view',
+                        subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 12.5, color: p.ink3),
@@ -170,7 +156,7 @@ class LiveSessionsBanner extends ConsumerWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: p.good,
+                      color: accent,
                     ),
                   ),
                 ),

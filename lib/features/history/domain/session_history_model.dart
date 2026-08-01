@@ -44,6 +44,22 @@ class SessionHistoryItem {
   }
 }
 
+int? _parseHistoryDuration(Map<String, dynamic> json) {
+  final raw = json['duration'] ??
+      json['durationSeconds'] ??
+      json['duration_seconds'] ??
+      json['totalDurationSeconds'] ??
+      json['totalDuration'];
+
+  if (raw is num) return raw.toInt();
+  if (raw is String) {
+    final parsed = int.tryParse(raw);
+    if (parsed != null) return parsed;
+    return double.tryParse(raw)?.toInt();
+  }
+  return null;
+}
+
 class HistoryProtocol {
   final String? bodyPart;
   final String? protocol;
@@ -68,12 +84,12 @@ class HistoryProtocol {
     return HistoryProtocol(
       bodyPart: json['bodyPart'] as String?,
       protocol: json['protocol'] as String?,
-      duration: json['duration'] as int?,
+      duration: _parseHistoryDuration(json),
       deviceName: json['deviceName'] as String?,
       questionAnswers: (json['questionAnswers'] as List<dynamic>?)
               ?.whereType<Map>()
-              .map((e) => HistoryQuestionAnswer.fromJson(
-                  Map<String, dynamic>.from(e)))
+              .map((e) =>
+                  HistoryQuestionAnswer.fromJson(Map<String, dynamic>.from(e)))
               .toList() ??
           const [],
     );

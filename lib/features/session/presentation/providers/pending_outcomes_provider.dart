@@ -27,9 +27,19 @@ class PendingOutcomesNotifier
   final Ref _ref;
   static const _key = 'pending_session_outcomes';
 
+  /// Sessions whose after-screen is on screen RIGHT NOW. Their auto-save is held
+  /// back until the screen is left, so the answer the user is about to give
+  /// still makes it into the single `/intake` POST.
+  final Set<String> _underReview = {};
+
   PendingOutcomesNotifier(this._ref) : super([]) {
     _load();
   }
+
+  /// Mark/unmark a session as being reviewed on the after-screen.
+  void markUnderReview(String sessionId) => _underReview.add(sessionId);
+  void clearUnderReview(String sessionId) => _underReview.remove(sessionId);
+  bool isUnderReview(String sessionId) => _underReview.contains(sessionId);
 
   void _load() {
     try {
@@ -146,6 +156,36 @@ class PendingOutcomesNotifier
     final pending = state.where((e) => e.syncPending).toList();
     for (final entry in pending) {
       await finalize(entry.sessionId, entry.answers, isRetry: true);
+    }
+  }
+
+  /// Save a finished session to history WITHOUT waiting for the user — the
+  /// automatic log that runs the moment a run ends (or when the after-screen is
+  /// left without answering). A session that already carries answers, or one
+  /// whose after-screen is still open, is left alone.
+  ///
+  /// [outcomes] carries whatever the user did manage to answer; null logs the
+  /// session bare. Either way the record lands in history with no button tap.
+  Future<void> autoLog(
+    String sessionId, {
+    PostSessionOutcomes? outcomes,
+    bool force = false,
+  }) async {
+    final entry = getById(sessionId);
+    if (entry == null || entry.answers != null) return;
+    if (!force && _underReview.contains(sessionId)) return;
+    _underReview.remove(sessionId);
+    await finalize(sessionId, outcomes);
+  }
+
+  /// Auto-log every queued session nobody is reviewing. Runs on app start /
+  /// History open so a run whose after-screen was never reached (app killed,
+  /// off-screen end in a previous run) still reaches history on its own.
+  Future<void> autoLogUnreviewed() async {
+    for (final entry in [...state]) {
+      if (entry.answers != null) continue;
+      if (_underReview.contains(entry.sessionId)) continue;
+      await finalize(entry.sessionId, null);
     }
   }
 }

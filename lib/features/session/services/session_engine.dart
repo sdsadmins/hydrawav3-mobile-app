@@ -392,9 +392,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// Idempotent; only fires for sessions that actually ran (a draft was saved).
   void enqueuePendingOutcome() {
     if (_pendingOutcomeEnqueued) return;
-    // Post-session questions are asked for CLIENT sessions only (web parity —
-    // guests are never prompted). Guest = no client context.
-    if (_clientId == null) return;
+    // Snapshot every session that actually ran so the after-screen (or History
+    // "Needs review") can finalize a single `/intake` POST. Pulse questions are
+    // client-only — guests still log from the after screen without prompting.
     if (!_historyCaptured) return; // never started running
     if (state.protocol == null || state.deviceIds.isEmpty) return;
     _pendingOutcomeEnqueued = true;
@@ -448,6 +448,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     final resolvedClientType = _clientId != null ? 'client' : 'guest';
+    // Stamp "stopped early" here, at the moment the run goes terminal, so any
+    // presenter of the after-screen (live card OR the app-wide gate, when the
+    // run ended off-screen) shows the same copy without a live engine.
+    final totalSeconds = state.timer.totalDuration.inSeconds;
+    final remainingSeconds = state.timer.remaining.inSeconds;
+    final stoppedEarly = state.status == SessionStatus.stopped &&
+        totalSeconds > 0 &&
+        (remainingSeconds / totalSeconds) > 0.5;
     return PendingSessionOutcome(
       sessionId: sessionId,
       protocolId: state.protocol!.id,
@@ -463,6 +471,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
       elapsedSeconds: _effectiveElapsed.inSeconds,
       createdAt: DateTime.now(),
+      stoppedEarly: stoppedEarly,
       intake: _intake,
     );
   }
@@ -551,7 +560,51 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   static const String _debugLightProtocolId = 'light-on';
 
   SessionEngine(this._ref, {required this.sessionId})
-      : super(const SessionEngineState());
+      : super(const SessionEngineState()) {
+    // Every terminal transition funnels through here, whatever caused it (timer
+    // completion, Stop All, a firmware `rs:stop`, a device dropping off) and
+    // whether or not any screen is watching. See [_endBackendSessionOnce].
+    addListener(
+      (s) {
+        if (s.status == SessionStatus.stopped ||
+            s.status == SessionStatus.completed) {
+          _endBackendSessionOnce();
+        }
+      },
+      fireImmediately: false,
+    );
+  }
+
+  /// True once the backend session for this run has been told to stop.
+  bool _backendSessionEnded = false;
+
+  /// End the BACKEND session as soon as the run goes terminal — from the ENGINE,
+  /// not the live card.
+  ///
+  /// This used to live on `SessionScreen._handleTerminalSessionState`, which only
+  /// runs while that screen is mounted. So a run that finished while the user was
+  /// on the devices list (or watching it in remote view) never stopped its server
+  /// session: `GET /sessions/active` kept returning it, which left its devices
+  /// pinned "In use" org-wide and the banner announcing "1 session running" —
+  /// permanently, until someone re-opened the run and hit Stop All.
+  ///
+  /// Protocol Plus runs already had this covered by [ProtocolPlusController]'s
+  /// own app-scoped engine listener; only normal runs were orphaned.
+  /// The backend session is already gone (it was stopped from the web / another
+  /// phone, or dropped out of the live feed), so [_endBackendSessionOnce] must
+  /// not POST a stop for it when this engine follows it into a terminal state.
+  void markBackendSessionEnded() => _backendSessionEnded = true;
+
+  void _endBackendSessionOnce() {
+    if (_backendSessionEnded) return;
+    final backendId = _ref.read(normalServerSessionIdProvider(sessionId));
+    if (backendId == null || backendId.isEmpty) return;
+    _backendSessionEnded = true;
+    appLogger.i('Session: ending backend session $backendId (run terminal)');
+    unawaited(
+      _ref.read(sessionSyncServiceProvider).stopServerSession(backendId),
+    );
+  }
 
   /// Public, read-only view of the session transport (the underlying [state] is
   /// protected on StateNotifier). Used by [ProtocolPlusController] to decide
@@ -2737,6 +2790,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _deviceClockOffset.clear();
     _startInProgress = false;
     _historyCaptured = false;
+    // A reused engine gets a fresh backend session, so it must be allowed to end
+    // that one too.
+    _backendSessionEnded = false;
     _cycleIndex = -1;
     _repetition = 0;
     _isProtocolPlus = false;

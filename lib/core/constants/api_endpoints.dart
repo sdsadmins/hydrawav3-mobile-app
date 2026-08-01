@@ -21,7 +21,7 @@ class ApiEndpoints {
   static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
-  //static const String nodeBaseUrl =     'https://happiness-pollution-que-oklahoma.trycloudflare.com/hydrawav/v1/';
+  //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
   static const String nodeBaseUrl =
       'https://api.hydrawav3.studio/api/hydrawav/v1/';

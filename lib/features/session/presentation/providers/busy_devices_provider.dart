@@ -30,11 +30,17 @@ Iterable<String> _macVariants(String mac) {
 
 /// Devices currently in use by any RUNNING/PAUSED session in the org-wide live
 /// feed (the backend is the source of truth — mirrors the web's busy logic).
+///
+/// Runs THIS phone has already finished are excluded: the engine POSTs the stop
+/// the instant a run goes terminal, but the feed is a 1s poll, so without this a
+/// device stayed greyed out as "In use" for a beat after its own session ended.
 final busyDevicesProvider = Provider<Set<String>>((ref) {
   final liveSessions = ref.watch(liveSessionsProvider);
+  final finished = ref.watch(finishedOwnSessionIdsProvider);
 
   final busyDevices = <String>{};
   for (final session in liveSessions) {
+    if (finished.contains(session.id)) continue;
     if (session.status == SessionStatus.running ||
         session.status == SessionStatus.paused) {
       for (final id in session.deviceIds) {
@@ -81,8 +87,11 @@ final liveDeviceCountProvider = Provider<int>((ref) {
       s == SessionStatus.running || s == SessionStatus.paused;
 
   // The org-wide backend feed is the source of truth and already covers this
-  // phone's own registered runs.
+  // phone's own registered runs. Runs we've already finished don't occupy a
+  // plan slot while the feed catches up.
+  final finished = ref.watch(finishedOwnSessionIdsProvider);
   for (final session in ref.watch(liveSessionsProvider)) {
+    if (finished.contains(session.id)) continue;
     if (!isLive(session.status)) continue;
     for (final id in session.deviceIds) {
       final status = session.deviceStatuses[id];

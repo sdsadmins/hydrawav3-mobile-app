@@ -29,6 +29,7 @@ import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
 import '../../features/session/presentation/providers/live_sessions_provider.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
+import '../../features/session/presentation/screens/session_after_screen.dart';
 import '../../features/session/presentation/screens/session_setup_screen.dart';
 import '../../features/ai_hub/presentation/screens/ai_hub_screen.dart';
 import '../../features/notifications/presentation/screens/notifications_screen.dart';
@@ -325,6 +326,21 @@ final routerProvider = Provider<GoRouter>((ref) {
               backendSessionId: extra?['backendSessionId'] as String?,
             );
           }),
+      GoRoute(
+        path: RoutePaths.sessionAfter,
+        name: RouteNames.sessionAfter,
+        builder: (c, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? const {};
+          // Both overrides are optional: when the app-wide gate opens this
+          // screen there is no live engine to read them from, so the queued
+          // snapshot supplies them instead.
+          return SessionAfterScreen(
+            sessionId: (extra['sessionId'] ?? '').toString(),
+            stoppedEarly: extra['stoppedEarly'] as bool?,
+            remainingSeconds: (extra['remainingSeconds'] as num?)?.toInt(),
+          );
+        },
+      ),
       GoRoute(
           path: RoutePaths.deviceRegister,
           name: RouteNames.deviceRegister,

@@ -5,6 +5,7 @@ import 'core/router/app_router.dart';
 import 'core/constants/theme_constants.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_mode_provider.dart';
+import 'features/session/presentation/widgets/session_outcome_gate.dart';
 
 class HydrawavApp extends ConsumerWidget {
   const HydrawavApp({super.key});
@@ -31,6 +32,10 @@ class HydrawavApp extends ConsumerWidget {
       themeMode: themeMode,
       scrollBehavior: const _AppScrollBehavior(),
       routerConfig: router,
+      // Sits above every route so a session that ends off-screen still gets its
+      // post-session screen — see [SessionOutcomeGate].
+      builder: (context, child) =>
+          SessionOutcomeGate(child: child ?? const SizedBox.shrink()),
     );
   }
 }

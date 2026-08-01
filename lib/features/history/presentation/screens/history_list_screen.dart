@@ -182,7 +182,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     try {
       final outcomes = await showPostSessionOutcomesSheet(
         context,
-        protocolQuestions: entry.orderedProtocolQuestions,
+        pendingOutcome: entry,
       );
       await ref
           .read(pendingOutcomesProvider.notifier)
@@ -296,13 +296,27 @@ class _SessionRow extends StatelessWidget {
   }
 
   static String _label(SessionHistoryItem s) {
-    final protocol =
-        s.protocols.isEmpty ? 'Session' : (s.protocols.first.protocol ?? 'Session');
+    final protocol = s.protocols.isEmpty
+        ? 'Session'
+        : (s.protocols.first.protocol ?? 'Session');
     final at = s.createdAt?.toLocal();
-    if (at == null) return protocol;
-    final time = '${at.hour.toString().padLeft(2, '0')}:'
-        '${at.minute.toString().padLeft(2, '0')}';
-    return '$protocol · $time';
+    final time = at == null
+        ? null
+        : '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final duration = _formatDuration(s.protocols.firstOrNull?.duration);
+    final device = s.protocols.firstOrNull?.deviceName;
+    final parts = <String>[];
+    if (protocol.isNotEmpty) parts.add(protocol);
+    if (time != null) parts.add(time);
+    if (duration != null && duration.isNotEmpty) parts.add(duration);
+    if (device != null && device.isNotEmpty) parts.add(device);
+    return parts.join(' · ');
+  }
+
+  static String? _formatDuration(int? seconds) {
+    if (seconds == null || seconds <= 0) return null;
+    final minutes = (seconds / 60).ceil();
+    return '$minutes min';
   }
 
   static String _initials(String name) {
@@ -315,13 +329,10 @@ class _SessionRow extends StatelessWidget {
 }
 
 /// The spec's trailing status, in its precedence order (app.js:1338): the
-/// outcome check first, then the discomfort delta, then "—".
+/// outcome check first, then "—".
 ///
 /// The outcome check is the ONLY thing the post-session sheet collects, and it
-/// lands in `protocols[].questionAnswers`. Reading only `discomfortAreas` (as
-/// this did) meant every row showed "—": nothing ever writes a
-/// `discomfortAfter`, because per-area discomfort is deliberately not asked
-/// post-session.
+/// lands in `protocols[].questionAnswers`.
 class _OutcomePill extends StatelessWidget {
   final SessionHistoryItem session;
   const _OutcomePill(this.session);
@@ -337,20 +348,11 @@ class _OutcomePill extends StatelessWidget {
       if (normalized == 'no') return const HwPill('NO', tone: HwPillTone.low);
       // Preset sets aren't always yes/no — show what was actually answered
       // rather than forcing it into a verdict the data doesn't support.
-      return HwPill(answer.length > 14 ? '${answer.substring(0, 13)}…' : answer);
+      return HwPill(
+          answer.length > 14 ? '${answer.substring(0, 13)}…' : answer);
     }
 
-    var scored = 0;
-    var improved = 0;
-    for (final d in session.discomfortAreas) {
-      if (d.discomfortBefore == null || d.discomfortAfter == null) continue;
-      scored++;
-      if (d.discomfortAfter! < d.discomfortBefore!) improved++;
-    }
-    if (scored == 0) return const HwPill('—');
-    return improved > 0
-        ? const HwPill('YES ✓', tone: HwPillTone.good)
-        : const HwPill('NO', tone: HwPillTone.low);
+    return const HwPill('—');
   }
 
   /// The first non-empty outcome answer logged on any of the session's
@@ -406,8 +408,7 @@ class _Message extends StatelessWidget {
           Text(
             text,
             textAlign: TextAlign.center,
-            style:
-                TextStyle(fontSize: HwType.sm, height: 1.5, color: p.ink2),
+            style: TextStyle(fontSize: HwType.sm, height: 1.5, color: p.ink2),
           ),
           if (onRetry != null) ...[
             const SizedBox(height: HwSpace.s3),

@@ -76,23 +76,25 @@ class _Detail extends ConsumerWidget {
               ),
               const SizedBox(height: HwSpace.s2),
 
-              // Facts — the spec's five non-interactive rows.
-              HwRowGroup(children: [
-                _Fact('Client', name),
-                _Fact('Session', first?.protocol ?? '—'),
-                _Fact('Body area', first?.bodyPart ?? '—'),
-                _Fact(
-                  'Duration',
-                  first?.duration == null
-                      ? '—'
-                      : '${((first!.duration ?? 0) / 60).round()} min',
+              // Match the handoff detail layout: key facts first, then the
+              // outcome-readiness summary and notes.
+              HwCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DetailRow('Client', name),
+                    const Divider(height: 1),
+                    _DetailRow('Session', first?.protocol ?? '—'),
+                    const Divider(height: 1),
+                    _DetailRow('Duration', _formatDuration(first?.duration)),
+                    const Divider(height: 1),
+                    _DetailRow('Device', first?.deviceName ?? '—'),
+                    const Divider(height: 1),
+                    _DetailRow('Music', 'Off'),
+                  ],
                 ),
-                _Fact('Device', first?.deviceName ?? '—'),
-              ]),
+              ),
 
-              // The post-session outcome check — what the outcomes sheet
-              // actually collects (`protocols[].questionAnswers`). It was never
-              // rendered here, so a submitted review left no trace in history.
               if (_answers(session).isNotEmpty) ...[
                 const SizedBox(height: HwSpace.s2),
                 const HwEyebrow('Outcome check'),
@@ -101,21 +103,6 @@ class _Detail extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       for (final qa in _answers(session)) _AnswerRow(qa),
-                    ],
-                  ),
-                ),
-              ],
-
-              // Every scored area, before → after.
-              if (session.discomfortAreas.isNotEmpty) ...[
-                const SizedBox(height: HwSpace.s2),
-                const HwEyebrow('Discomfort'),
-                HwCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (final d in session.discomfortAreas)
-                        _DiscomfortRow(d),
                     ],
                   ),
                 ),
@@ -155,6 +142,12 @@ class _Detail extends ConsumerWidget {
     return out;
   }
 
+  static String _formatDuration(int? seconds) {
+    if (seconds == null || seconds <= 0) return '—';
+    final minutes = (seconds / 60).ceil();
+    return '$minutes min';
+  }
+
   static String _stamp(DateTime at) {
     two(int v) => v.toString().padLeft(2, '0');
     return '${at.year}-${two(at.month)}-${two(at.day)} · '
@@ -170,25 +163,37 @@ class _Detail extends ConsumerWidget {
   }
 }
 
-class _Fact extends StatelessWidget {
+class _DetailRow extends StatelessWidget {
   final String label;
   final String value;
-  const _Fact(this.label, this.value);
+  const _DetailRow(this.label, this.value);
 
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    return HwRow(
-      title: label,
-      trailing: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 190),
-        child: Text(
-          value,
-          textAlign: TextAlign.right,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: HwType.cap, color: p.ink2),
-        ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              label,
+              style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: HwType.sm, color: p.ink),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -220,73 +225,6 @@ class _AnswerRow extends StatelessWidget {
               color: p.ink,
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-/// `{before} → {after}` with the after-value coloured by its zone — the spec's
-/// delta treatment, per body area.
-class _DiscomfortRow extends StatelessWidget {
-  final HistoryDiscomfort area;
-  const _DiscomfortRow(this.area);
-
-  @override
-  Widget build(BuildContext context) {
-    final p = RefPalette.of(context);
-    final before = area.discomfortBefore;
-    final after = area.discomfortAfter;
-    final label = [area.bodyPart, area.side]
-        .where((e) => e != null && e.isNotEmpty)
-        .join(' · ');
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label.isEmpty ? 'Area' : label,
-              style: TextStyle(
-                fontSize: HwType.base,
-                fontWeight: FontWeight.w600,
-                color: p.ink,
-              ),
-            ),
-          ),
-          if (before == null || after == null)
-            const HwPill('not scored')
-          else
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$before',
-                  style: TextStyle(
-                    fontSize: HwType.lg,
-                    fontWeight: FontWeight.w600,
-                    color: p.ink3,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: Text('→', style: TextStyle(color: p.copper)),
-                ),
-                Text(
-                  '$after',
-                  style: TextStyle(
-                    fontSize: HwType.xl,
-                    fontWeight: FontWeight.w800,
-                    color: after < before
-                        ? p.good
-                        : (after > before ? p.low : p.mid),
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ],
-            ),
         ],
       ),
     );

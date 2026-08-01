@@ -1,7 +1,7 @@
 # Hydrawav3 Mobile App — Bug & Feature Tracker
 
 > Source: SharePoint app-update notes (5/21 → 6/8 2026), filtered to **mobile app only** (iPhone / Android / tablet / APK).
-> Last updated: **2026-06-17**
+> Last updated: **2026-08-01**
 
 **How this works:**
 - A line that is **~~crossed out~~** is **fixed** — full detail (date, root cause, files) lives in [FIXES_BY_DATE.md](FIXES_BY_DATE.md).
@@ -15,7 +15,7 @@
 
 | Status | Count |
 |--------|-------|
-| ✅ Fixed (crossed out below) | 36 |
+| ✅ Fixed (crossed out below) | 42 |
 | ❌ Open | 3 |
 | ⚠️ Needs device testing | 3 |
 
@@ -68,6 +68,12 @@
 - ~~**B-35** — Devices page showed the previous user's devices~~
 - ~~**B-36** — Device fetch threw a red error on 401/403/404/204~~
 - ~~**B-37** — No pull-to-refresh on Device Registration & Protocol List~~
+- ~~**B-40** — Session history only saved when the user tapped "Save & done"~~
+- ~~**B-41** — Post-session screen missing when a run ended off the live card (e.g. opened from the devices list)~~
+- ~~**B-42** — Ring turned break-coloured after the first break (Calm/Recovery goal colour = break blue)~~
+- ~~**B-43** — Ring segment ends rounded + gapped; now straight-edged and butted~~
+- ~~**B-44** — Finished session stuck as "1 session running"; devices never released from "In use"~~
+- ~~**B-45** — Post-session screen asked only the first question, as a guessed YES/NO; extra options unreachable, no remarks~~
 - ~~**U-02** — General timing not correct for any session~~ (confirmed working)
 - ~~**U-05** — Device not detected during WiFi registration scan~~ (confirmed working)
 - ~~**U-06** — Colors exactly match web app~~

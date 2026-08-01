@@ -10,7 +10,7 @@ final historyRepositoryProvider = Provider<HistoryRepository>((ref) {
   return HistoryRepository(
     remoteSource: ref.read(historyRemoteSourceProvider),
     db: ref.read(databaseProvider),
-    isOnline: ref.read(isOnlineProvider),
+    ref: ref,
   );
 });
 
@@ -54,15 +54,17 @@ final clientHistoryProvider =
 class HistoryRepository {
   final HistoryRemoteSource _remoteSource;
   final AppDatabase _db;
-  final bool _isOnline;
+  final Ref _ref;
 
   HistoryRepository({
     required HistoryRemoteSource remoteSource,
     required AppDatabase db,
-    required bool isOnline,
+    required Ref ref,
   })  : _remoteSource = remoteSource,
         _db = db,
-        _isOnline = isOnline;
+        _ref = ref;
+
+  bool get _isOnline => _ref.read(isOnlineProvider);
 
   /// Watch local sessions (always available, offline-safe).
   Stream<List<LocalSession>> watchLocalSessions() => _db.watchLocalSessions();

@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../protocols/domain/protocol_model.dart';
+import '../../domain/pending_session_outcome_model.dart';
 import '../../domain/question_answer_model.dart';
 
 /// A protocol and its post-session questions (each with preset answers).
-typedef ProtocolQuestions = ({String protocolName, List<ProtocolQuestion> questions});
+typedef ProtocolQuestions = ({
+  String protocolName,
+  List<ProtocolQuestion> questions
+});
 
 /// Post-session "Session Outcomes" sheet. Captures, for a completed session:
 /// the protocol's session questions (preset-answer chips) and practitioner
@@ -16,9 +20,10 @@ typedef ProtocolQuestions = ({String protocolName, List<ProtocolQuestion> questi
 /// Submit, or `null` on Skip / dismiss.
 Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
   BuildContext context, {
-  required List<ProtocolQuestions> protocolQuestions,
+  required PendingSessionOutcome pendingOutcome,
   bool dismissible = true,
 }) {
+  final protocolQuestions = pendingOutcome.sheetProtocolQuestions;
   // Selected preset answer per "protocol::question".
   final selected = <String, String>{};
   // Free-text answer per "protocol::question" (only for questions with no presets).
@@ -116,7 +121,9 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
                                   ],
                                 ),
                               ),
-                              for (var qi = 0; qi < pq.questions.length; qi++) ...[
+                              for (var qi = 0;
+                                  qi < pq.questions.length;
+                                  qi++) ...[
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 6),
                                   child: Text(
@@ -133,11 +140,11 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
                                     answers: pq.questions[qi].answers
                                         .map((o) => o.answer)
                                         .toList(),
-                                    selected: selected[
-                                        key(pq.protocolName, pq.questions[qi].text)],
-                                    onSelect: (a) => setSheet(() => selected[key(
-                                        pq.protocolName,
-                                        pq.questions[qi].text)] = a),
+                                    selected: selected[key(pq.protocolName,
+                                        pq.questions[qi].text)],
+                                    onSelect: (a) => setSheet(() => selected[
+                                        key(pq.protocolName,
+                                            pq.questions[qi].text)] = a),
                                   )
                                 else
                                   _field(
@@ -173,7 +180,8 @@ Future<PostSessionOutcomes?> showPostSessionOutcomesSheet(
                           ),
                           child: Text(
                             'Skip',
-                            style: TextStyle(color: ThemeConstants.textSecondary),
+                            style:
+                                TextStyle(color: ThemeConstants.textSecondary),
                           ),
                         ),
                       ),
@@ -307,8 +315,7 @@ Widget _field(
       hintStyle: TextStyle(color: ThemeConstants.textTertiary),
       filled: true,
       fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.7),
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: ThemeConstants.border),

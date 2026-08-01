@@ -35,6 +35,12 @@ class PendingSessionOutcome {
   final int elapsedSeconds;
   final DateTime createdAt;
 
+  /// True when the run was stopped with most of its time left. Captured here
+  /// (rather than recomputed from a live engine) so the after-screen renders the
+  /// same "stopped early" copy no matter who presents it — the live card, or the
+  /// app-wide gate when the run ended off-screen.
+  final bool stoppedEarly;
+
   /// Guided Assessment intake captured for this session (null for Quick Start).
   /// Carried here so the single finalize POST includes ROM / activities / real
   /// discomfort areas, independent of any live engine.
@@ -61,6 +67,7 @@ class PendingSessionOutcome {
     this.totalDurationSeconds = 0,
     this.elapsedSeconds = 0,
     required this.createdAt,
+    this.stoppedEarly = false,
     this.intake,
     this.answers,
     this.syncPending = false,
@@ -84,6 +91,7 @@ class PendingSessionOutcome {
       totalDurationSeconds: totalDurationSeconds,
       elapsedSeconds: elapsedSeconds,
       createdAt: createdAt,
+      stoppedEarly: stoppedEarly,
       intake: intake,
       answers: answers ?? this.answers,
       syncPending: syncPending ?? this.syncPending,
@@ -109,6 +117,12 @@ class PendingSessionOutcome {
     return out;
   }
 
+  /// Review-sheet data derived from the queued snapshot. This is the single
+  /// source of truth for the post-session outcomes UI, including ordered
+  /// protocol sections and their questions.
+  List<({String protocolName, List<ProtocolQuestion> questions})>
+      get sheetProtocolQuestions => orderedProtocolQuestions;
+
   /// Whether there is anything to ask (protocol questions). The sheet still
   /// shows for pain/notes even when this is empty.
   bool get hasQuestions => orderedProtocolQuestions.isNotEmpty;
@@ -119,7 +133,8 @@ class PendingSessionOutcome {
         'protocolName': protocolName,
         'deviceIds': deviceIds,
         'protocolByDeviceId': protocolByDeviceId.map(
-          (k, v) => MapEntry(k, {'name': v.name, 'duration': v.durationSeconds}),
+          (k, v) =>
+              MapEntry(k, {'name': v.name, 'duration': v.durationSeconds}),
         ),
         'protocolNamesByDeviceId': protocolNamesByDeviceId,
         'questionsByProtocolName': questionsByProtocolName.map(
@@ -131,6 +146,7 @@ class PendingSessionOutcome {
         'totalDurationSeconds': totalDurationSeconds,
         'elapsedSeconds': elapsedSeconds,
         'createdAt': createdAt.toIso8601String(),
+        'stoppedEarly': stoppedEarly,
         if (intake != null) 'intake': intake!.toJson(),
         if (answers != null) 'answers': answers!.toJson(),
         'syncPending': syncPending,
@@ -192,10 +208,12 @@ class PendingSessionOutcome {
       clientType: (json['clientType'] ?? 'guest').toString(),
       clientId: json['clientId']?.toString(),
       discomfortBefore: (json['discomfortBefore'] as num?)?.toInt(),
-      totalDurationSeconds: (json['totalDurationSeconds'] as num?)?.toInt() ?? 0,
+      totalDurationSeconds:
+          (json['totalDurationSeconds'] as num?)?.toInt() ?? 0,
       elapsedSeconds: (json['elapsedSeconds'] as num?)?.toInt() ?? 0,
       createdAt: DateTime.tryParse((json['createdAt'] ?? '').toString()) ??
           DateTime.now(),
+      stoppedEarly: json['stoppedEarly'] as bool? ?? false,
       intake: json['intake'] is Map
           ? GuidedAssessmentData.fromJson(
               Map<String, dynamic>.from(json['intake'] as Map))
