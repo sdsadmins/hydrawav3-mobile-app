@@ -135,6 +135,63 @@ class ApiEndpoints {
   /// gate runs before anything else, so a reply can come back as a refusal.
   static const String recoveryChat = 'recovery-chat/message';
 
+  /// The RECOVERY ENGINE, guided (non-conversational) front door — the chip flow's
+  /// counterpart to [recoveryChat] and the recovery equivalent of
+  /// [perfDisciplines] → [perfChain]. Web parity: `RecoveryEngineFlow.jsx` +
+  /// `engine/recoveryGeneration.js`.
+  ///
+  /// ASK [recoveryCutover] FIRST, AND THEN USE ONE GENERATION'S WHOLE SET.
+  ///
+  /// There are two live generations. A generation's screen, its catalogue and its
+  /// resolve are ONE set and must never be composed from two: region keys and
+  /// pathway values are not the same across them, so asking v3's questions and
+  /// resolving against v2 sends values v2 cannot match — which is how a pathway
+  /// holding 156 points reports zero. The web shipped exactly that bug.
+  ///
+  /// There is also NO SENSIBLE DEFAULT. "Still loading", "the request failed" and
+  /// "it is v2" are different facts, and a dispatch that treats the first two as
+  /// v2 is a guess that is right until the day it is not. An unknown generation
+  /// means wait, not fall back.
+  static const String recoveryCutover = 'recovery-engine-v3/cutover';
+
+  // ── v2: the older corpus, still serving wherever v3 has no live points ─────
+
+  static const String recoveryV2Screen = 'recovery-engine/screen';
+
+  /// Regions grouped per pathway, derived from the v2 corpus. A different shape
+  /// from [recoveryIntake] — per-region `points`, `hasMovementTest`,
+  /// `movementTests` as plain strings, `referrals` — and NOT a fallback for it.
+  static const String recoveryV2Catalog = 'recovery-engine/catalog';
+
+  /// Runs the v2 engine unconditionally. Its DTO is strict and narrower than
+  /// v3's, so `movementTest`, `aspect` and `referral_side` are 400s here.
+  static const String recoveryV2Resolve = 'recovery-engine/resolve';
+
+  // ── v3.1 ───────────────────────────────────────────────────────────────────
+
+  /// The AUTHORED CATALOGUE, and the reason the chip flow can't be hardcoded: the
+  /// regions the live corpus can actually answer for, each with its CANONICAL id
+  /// (`low-back`, not "Lower Back"), its own movement tests, its referral menu
+  /// and the aspects it permits. The engine matches on those ids, so a body-map
+  /// label sent as `region` resolves to nothing.
+  ///
+  /// Read `pathways[].regions` once a goal is chosen, NOT the whole-corpus
+  /// `regions`: the selector hard-filters on `goal_pathway`, so the corpus-wide
+  /// list offers combinations no point can answer.
+  static const String recoveryIntake = 'recovery-engine-v3/intake';
+
+  /// ★ The pad set. Gated twice — the universal safety gate runs before the
+  /// engine and the engine's own pre-gate runs inside it — so a 200 can still be
+  /// a refer-out with `sets: []`.
+  ///
+  /// This one goes through the cutover service SERVER-side, so it is correct even
+  /// in the instant after a rollback. [recoveryV2Resolve] has no such property.
+  static const String recoveryResolve = 'recovery-engine-v3/resolve';
+
+  /// The universal red-flag screen (questions + the authored client disclaimer).
+  static const String recoveryScreen = 'recovery-engine-v3/screen';
+
+
   /// Builds `path?a=b&c=d`, dropping null/blank values and encoding the rest.
   static String _perfUri(String path, Map<String, String?> params) {
     final q = params.entries

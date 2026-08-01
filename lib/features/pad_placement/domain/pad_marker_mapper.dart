@@ -283,10 +283,19 @@ class PadPlacementViewData {
 
   const PadPlacementViewData({required this.payload, required this.pads});
 
+  /// APPLIED sets only.
+  ///
+  /// A recovery payload also carries the sets the engine authored but held back
+  /// this session (`chain.conditional.withheld_sets`). Those have no pads by
+  /// definition, so letting them through here would shift every positional
+  /// `setIndex` — which is what the markers, the set colours and the focus chips
+  /// all key off — and put a pad-less entry in the legend. The pad map lists
+  /// them separately, from `payload.withheldSets`.
   factory PadPlacementViewData.from(PadSetPayload payload) {
+    final applied = payload.appliedSets;
     final pads = <ResolvedPad>[];
-    for (var i = 0; i < payload.sets.length; i++) {
-      final set = payload.sets[i];
+    for (var i = 0; i < applied.length; i++) {
+      final set = applied[i];
       for (final entry in [('sun', set.sun), ('moon', set.moon)]) {
         final pad = entry.$2;
         if (pad == null) continue;
@@ -303,7 +312,7 @@ class PadPlacementViewData {
     return PadPlacementViewData(payload: payload, pads: pads);
   }
 
-  List<PadSet> get sets => payload.sets;
+  List<PadSet> get sets => payload.appliedSets;
 
   /// Pads for one set, or all of them when [setIndex] is null (the reference's
   /// "All areas" chip).

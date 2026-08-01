@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../domain/anatomy_scene_marker.dart';
+import '../../domain/set_colors.dart';
 import '../widgets/anatomy_scene_flag.dart';
 import '../widgets/anatomy_scene_view.dart';
 import '../widgets/pad_anatomy_view.dart';
@@ -311,6 +312,25 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
               _LegendDot(color: _moon, label: 'Moon'),
             ],
           ),
+          // Set legend, matching the performance pad map. The 3D stage already
+          // paints per-set badges and arcs from [kAnatomySetColors]; without
+          // this the recovery screen was the only surface where those colours
+          // appeared on the model but were named nowhere in the chrome.
+          if (sets.length > 1) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 14,
+              runSpacing: 6,
+              children: [
+                for (var i = 0; i < sets.length; i++)
+                  _LegendDot(
+                    color: anatomySetColor(i),
+                    label: 'Set ${i + 1}',
+                    square: true,
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 10),
           Flexible(
             child: SingleChildScrollView(
@@ -328,7 +348,9 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
   }
 
   Widget _setRow(int index, Map<String, dynamic> set) {
-    final title = set['title']?.toString() ?? 'Set ${index + 1}';
+    // The number is carried by the badge now, so an absent title falls back to
+    // nothing rather than repeating it ("1  Set 1").
+    final title = set['title']?.toString().trim() ?? '';
     final sun = set['sun'] is Map ? (set['sun']['label']?.toString() ?? '') : '';
     final moon =
         set['moon'] is Map ? (set['moon']['label']?.toString() ?? '') : '';
@@ -350,22 +372,59 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFFEEF2F5) : Colors.transparent,
+            color: selected
+                ? anatomySetColor(index).withValues(alpha: 0.10)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: selected ? const Color(0xFF132A35) : Colors.transparent,
+              // Selection takes the SET's colour, so the highlighted row and the
+              // pads lit on the model are visibly the same set.
+              color: selected ? anatomySetColor(index) : Colors.transparent,
             ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: _ink,
-                ),
+              // "Set N" in its own colour, then the authored title — the same
+              // badge-then-title shape the performance pad map uses for its set
+              // notes, so a set is identified the same way on both screens.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: anatomySetColor(index).withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: anatomySetColor(index),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Text(
+                      '${index + 1}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: anatomySetColor(index),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title.isEmpty ? 'Set ${index + 1}' : title,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        height: 1.6,
+                        color: _ink,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               if (sun.isNotEmpty) _padLine('S${index + 1}', sun, _sun),
@@ -452,7 +511,17 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
 class _LegendDot extends StatelessWidget {
   final Color color;
   final String label;
-  const _LegendDot({required this.color, required this.label});
+
+  /// Sets use a rounded SQUARE swatch, Sun/Moon a circle — the same shape split
+  /// the performance pad map uses, so the two legends can't be confused for one
+  /// another at a glance.
+  final bool square;
+
+  const _LegendDot({
+    required this.color,
+    required this.label,
+    this.square = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -462,7 +531,11 @@ class _LegendDot extends StatelessWidget {
         Container(
           width: 10,
           height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          decoration: BoxDecoration(
+            color: color,
+            shape: square ? BoxShape.rectangle : BoxShape.circle,
+            borderRadius: square ? BorderRadius.circular(3) : null,
+          ),
         ),
         const SizedBox(width: 6),
         Text(

@@ -655,6 +655,80 @@ class RecoveryPlacement {
   /// refer-out instead, which suppresses the pads.
   final List<String> cautions;
 
+  // ── the DERIVATION, which is the teaching: driver, not site ────────────────
+
+  /// `local_isolated` → `Local isolated`. The web's "Case" row: how the pattern
+  /// is DISTRIBUTED (local, referred, bilateral).
+  final String caseType;
+  final String tissueType;
+
+  /// `presentation` — what the engine understood it was answering. A different
+  /// fact from [caseType]: this is what KIND of problem it is, and where.
+  /// Not rendered by the web panel; shown here because the practitioner is the
+  /// only reader and it is the engine's own reading of their input.
+  final String conditionFamily;
+  final String acuity;
+  final String presentationSide;
+  final String presentationAspect;
+
+  /// Only on a lymphatic placement.
+  final String lymphaticRegion;
+
+  /// What the practitioner said the pattern travels to, when they said so.
+  final String referralTargetReported;
+
+  // ── thermal ────────────────────────────────────────────────────────────────
+
+  /// A RECOMMENDATION, not an instruction — the engine says so itself and the
+  /// UI has to repeat it, because a mode named next to a placement reads as part
+  /// of the placement.
+  final bool thermalRecommendationOnly;
+  final List<String> thermalAlternatives;
+
+  /// Set when the engine ADJUSTED the thermal mode for congestion. Never shown
+  /// as if it were authored.
+  final String thermalDowngrade;
+
+  // ── clinical intent ────────────────────────────────────────────────────────
+
+  final List<String> whatItHelpsRelieve;
+  final String mobilityBenefit;
+  final String lymphaticBenefit;
+  final String tissueBenefit;
+
+  // ── reassessment ───────────────────────────────────────────────────────────
+
+  final String expectedWindow;
+  final String expectedWindowNote;
+
+  /// The engine's note about a GENERIC reassessment marker. It is about the
+  /// sentence, not the placement — which is why the web prints it right against
+  /// that sentence and says so.
+  final String reassessmentNoteLabel;
+  final String reassessmentNoteMessage;
+  final List<String> reassessmentTestsOffered;
+
+  // ── routing / provenance ───────────────────────────────────────────────────
+
+  /// The engine rerouted the goal (the "heavy / puffy / swollen" lymphatic
+  /// reroute). Stated plainly, never silent.
+  final bool pathwayRerouted;
+  final String requestedPathway;
+
+  /// `authored` / `composed`. A COMPOSED placement must be impossible to mistake
+  /// for an authored one — the web marks the whole frame, not a badge, because a
+  /// badge is what gets cropped out of a screenshot.
+  final String pointSource;
+  final String pointVersion;
+
+  /// Practitioner-only data-quality notes on the point. Never engine-internal
+  /// selection detail.
+  final List<String> reviewFlags;
+
+  /// The two authored disclaimers, printed verbatim.
+  final String clientDisclaimer;
+  final String practitionerDisclaimer;
+
   /// The pads, in the shape the performance card and pad map already read.
   final PadSetPayload payload;
 
@@ -677,13 +751,60 @@ class RecoveryPlacement {
     this.expectedSensation = '',
     this.reassessmentMarker = '',
     this.cautions = const [],
+    this.caseType = '',
+    this.tissueType = '',
+    this.conditionFamily = '',
+    this.acuity = '',
+    this.presentationSide = '',
+    this.presentationAspect = '',
+    this.lymphaticRegion = '',
+    this.referralTargetReported = '',
+    this.thermalRecommendationOnly = false,
+    this.thermalAlternatives = const [],
+    this.thermalDowngrade = '',
+    this.whatItHelpsRelieve = const [],
+    this.mobilityBenefit = '',
+    this.lymphaticBenefit = '',
+    this.tissueBenefit = '',
+    this.expectedWindow = '',
+    this.expectedWindowNote = '',
+    this.reassessmentNoteLabel = '',
+    this.reassessmentNoteMessage = '',
+    this.reassessmentTestsOffered = const [],
+    this.pathwayRerouted = false,
+    this.requestedPathway = '',
+    this.pointSource = '',
+    this.pointVersion = '',
+    this.reviewFlags = const [],
+    this.clientDisclaimer = '',
+    this.practitionerDisclaimer = '',
     this.payload = const PadSetPayload(),
     this.raw = const {},
   });
 
+  /// Rebuild the full detail from a payload the pad map already holds.
+  ///
+  /// `PadSetPayload.raw` IS the resolve envelope for a recovery placement, so
+  /// every block the pad shape didn't need — driver, thermal, intent,
+  /// reassessment, disclaimers — is still there to read. Returns null for a
+  /// performance payload, which has none of it.
+  static RecoveryPlacement? fromPayload(PadSetPayload payload) {
+    if (payload.discipline != 'recovery' || payload.raw.isEmpty) return null;
+    return RecoveryPlacement.fromJson(
+      payload.raw,
+      regionLabel: payload.displayName,
+    );
+  }
+
+  /// True when the placement was COMPOSED rather than authored.
+  bool get isComposed =>
+      pointSource.trim().isNotEmpty && pointSource.trim() != 'authored';
+
   /// A placement was resolved AND may be drawn. A refer-out returns a point and
-  /// no sets, so "there is a point" is not the test.
-  bool get hasPads => !referOut && payload.sets.isNotEmpty;
+  /// no sets, so "there is a point" is not the test — and neither is
+  /// `payload.sets`, which also carries the sets the engine held back for this
+  /// session. Those have no pads, so only APPLIED sets count.
+  bool get hasPads => !referOut && payload.appliedSets.isNotEmpty;
 
   /// What to say when there are no pads: the refer-out reason if the gate gave
   /// one, otherwise the honest "nothing authored for this combination".
@@ -750,7 +871,7 @@ class RecoveryPlacement {
       referOutReason: referOutReason,
       driverDescription: driverDescription,
       finding: finding,
-      movementTest: (assessment['movement_test'] ?? '').toString(),
+      movementTest: _movementTestOf(assessment),
       thermalMode: (thermal['mode'] ?? '').toString(),
       thermalRationale: (thermal['rationale'] ?? '').toString(),
       wellnessClaim: (intent['wellness_claim_wording'] ?? '').toString(),
@@ -761,12 +882,74 @@ class RecoveryPlacement {
               '')
           .toString(),
       cautions: _strings(pointSafety['cautions_relative']),
+      // The web reads a top-level `case_type`; v3 carries it on the assessment
+      // and the point instead. NOT `presentation.condition_family` — that is a
+      // different fact (what kind of problem, vs how the pattern is distributed)
+      // and using it as a fallback would put a confident wrong value in the row.
+      caseType: _humanize(_firstNonEmpty([
+            data['case_type'],
+            assessment['case_type'],
+            point['case_type'],
+          ]) ??
+          ''),
+      conditionFamily:
+          _humanize((_map(data['presentation'])['condition_family'] ?? '').toString()),
+      acuity: _humanize((_map(data['presentation'])['acuity'] ?? '').toString()),
+      presentationSide:
+          (_map(data['presentation'])['side'] ?? '').toString(),
+      presentationAspect:
+          (_map(data['presentation'])['aspect'] ?? '').toString(),
+      tissueType: (driver['tissue_type'] ?? '').toString(),
+      lymphaticRegion: (driver['lymphatic_region'] ?? '').toString(),
+      referralTargetReported: _firstNonEmpty([
+            assessment['referral_target_reported'],
+            assessment['referral_target'],
+          ]) ??
+          '',
+      thermalRecommendationOnly: thermal['recommendation_only'] == true,
+      thermalAlternatives:
+          _strings(thermal['alternatives']).map(_humanize).toList(),
+      thermalDowngrade: _firstNonEmpty([
+            _map(thermal['downgrade'])['message'],
+            _map(data['thermalDowngrade'])['message'],
+          ]) ??
+          '',
+      whatItHelpsRelieve: _strings(intent['what_it_helps_relieve']),
+      mobilityBenefit:
+          (intent['expected_mobility_rom_benefit'] ?? '').toString(),
+      lymphaticBenefit:
+          (intent['lymphatic_circulatory_benefit'] ?? '').toString(),
+      tissueBenefit: (intent['tissue_recovery_benefit'] ?? '').toString(),
+      expectedWindow: (_map(intent['expected_response_time'])['typical_window'] ??
+              _map(_map(data['session'])['expected_response_time'])['typical_window'] ??
+              '')
+          .toString(),
+      expectedWindowNote: (_map(intent['expected_response_time'])['note'] ??
+              _map(_map(data['session'])['expected_response_time'])['note'] ??
+              '')
+          .toString(),
+      reassessmentNoteLabel:
+          (_map(data['reassessmentNote'])['label'] ?? '').toString(),
+      reassessmentNoteMessage:
+          (_map(data['reassessmentNote'])['message'] ?? '').toString(),
+      reassessmentTestsOffered:
+          _strings(_map(data['reassessmentNote'])['tests_offered']),
+      pathwayRerouted: _map(data['pathwayRouting'])['rerouted'] == true,
+      requestedPathway:
+          (_map(data['pathwayRouting'])['requested'] ?? '').toString(),
+      pointSource: (point['source'] ?? '').toString(),
+      pointVersion: (point['version'] ?? '').toString(),
+      reviewFlags: _reviewFlags(data['reviewFlags']),
+      clientDisclaimer:
+          (_map(data['reference'])['client_disclaimer'] ?? '').toString(),
+      practitionerDisclaimer:
+          (_map(data['reference'])['disclaimer'] ?? '').toString(),
       payload: _payloadFrom(
         data,
         regionLabel: label,
         pathway: pathway,
         finding: finding.trim().isEmpty ? driverDescription : finding,
-        movementTest: (assessment['movement_test'] ?? '').toString(),
+        movementTest: _movementTestOf(assessment),
         thermalMode: (thermal['mode'] ?? '').toString(),
         mechanism: (intent['mechanism_rationale'] ?? '').toString(),
       ),
@@ -827,8 +1010,27 @@ class RecoveryPlacement {
           clinicalReasoning: note.isEmpty ? mechanism : '$note\n\n$mechanism',
           sun: sun,
           moon: moon,
+          padGeometry: (set['pad_geometry'] ?? '').toString(),
         ));
       }
+    }
+
+    // Sets the point AUTHORS but the engine held back this session, each with
+    // the reason. `document_sets: 2` with one applied set is the normal case —
+    // set 2 exists, it just doesn't apply — and listing it is the only way the
+    // practitioner learns it's there and what would bring it in.
+    for (final row in _withheldRows(data)) {
+      final index = _int(row['set_index'], 0);
+      if (index <= 0) continue;
+      if (sets.any((s) => s.setIndex == index)) continue; // applied — not held
+      final note = (row['note'] ?? '').toString().trim();
+      sets.add(PadSet(
+        setIndex: index,
+        role: _humanize((row['set_role'] ?? '').toString()).toLowerCase(),
+        placementLabel: note.isEmpty ? regionLabel : note,
+        withheld: true,
+        withheldReason: (row['reason'] ?? '').toString().trim(),
+      ));
     }
     sets.sort((a, b) => a.setIndex.compareTo(b.setIndex));
 
@@ -839,7 +1041,17 @@ class RecoveryPlacement {
       // A non-null chain is what makes `isRefusal` false, so it is built only
       // when there are pads — an empty chain with empty sets would read as a
       // placement to every caller that checks the flag.
-      chain: sets.isEmpty
+      guidance: _firstNonEmpty([
+            _map(data['session'])['guidance'],
+            _map(data['chain'])['guidance'],
+          ]) ??
+          '',
+      sequencingNote:
+          (_map(data['session'])['sequencing_note'] ?? '').toString(),
+      // A chain is what makes `isRefusal` false, so it is built only when a set
+      // is actually APPLIED — withheld sets carry no pads, and a payload of
+      // nothing but withheld sets is still a refusal.
+      chain: sets.every((s) => s.withheld)
           ? null
           : ChainInfo(
               chainId: (_map(data['point'])['recovery_id'] ?? '').toString(),
@@ -867,6 +1079,81 @@ class RecoveryPlacement {
 }
 
 // ── local helpers ────────────────────────────────────────────────────────────
+
+/// Practitioner-only data notes on the point (`reviewFlags[]`), each rendered as
+/// "`code` message".
+///
+/// Deliberately NOT the engine's selection internals — `selection.excludedByGate`
+/// and `exclusions` are about how the answer was chosen, which is noise next to
+/// a placement. These are notes about the POINT's own data quality.
+List<String> _reviewFlags(dynamic raw) {
+  if (raw is! List) return const [];
+  final out = <String>[];
+  for (final row in raw) {
+    if (row is Map) {
+      final code = (row['code'] ?? '').toString().trim();
+      final message = (row['message'] ?? '').toString().trim();
+      final text = [code, message].where((s) => s.isNotEmpty).join(' — ');
+      if (text.isNotEmpty) out.add(text);
+    } else {
+      final text = row?.toString().trim() ?? '';
+      if (text.isNotEmpty) out.add(text);
+    }
+  }
+  return out;
+}
+
+/// Withheld sets, deduped by `set_index`.
+///
+/// The engine reports the same held-back set under `chain.conditional` AND, when
+/// the reason is a referral, again under `chain.referral` — the payload's set 2
+/// appears in both. Reading only one would miss sets held for a different
+/// reason; reading both without deduping would list set 2 twice.
+List<Map<String, dynamic>> _withheldRows(Map<String, dynamic> data) {
+  final chain = _map(data['chain']);
+  final out = <int, Map<String, dynamic>>{};
+  for (final source in [
+    _map(chain['conditional'])['withheld_sets'],
+    _map(chain['referral'])['withheld_sets'],
+    data['withheld_sets'],
+  ]) {
+    if (source is! List) continue;
+    for (final row in source.whereType<Map>()) {
+      final map = Map<String, dynamic>.from(row);
+      final index = _int(map['set_index'], 0);
+      if (index <= 0) continue;
+      out.putIfAbsent(index, () => map);
+    }
+  }
+  return out.values.toList();
+}
+
+/// The movement test to show, from `assessment`.
+///
+/// There is no `movement_test` key — v3 splits it into `movement_test_run` (the
+/// one actually performed, null until the practitioner runs one) and
+/// `movement_test_authored` (the one the point is written against, always
+/// present). Reading the non-existent key meant the test line was ALWAYS empty,
+/// so the chain's "movement" was blank on every recovery placement.
+///
+/// The run test wins when there is one — it's what happened, not what was
+/// planned — and `tests_offered[0].test` is the last resort.
+String _movementTestOf(Map<String, dynamic> assessment) {
+  final offered = assessment['tests_offered'];
+  final firstOffered = offered is List
+      ? offered
+          .whereType<Map>()
+          .map((e) => (e['test'] ?? '').toString())
+          .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '')
+      : '';
+  return _firstNonEmpty([
+        assessment['movement_test_run'],
+        assessment['movement_test_authored'],
+        assessment['movement_test'],
+        firstOffered,
+      ]) ??
+      '';
+}
 
 Map<String, dynamic> _map(dynamic v) =>
     v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};

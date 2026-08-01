@@ -15,7 +15,7 @@
 
 | Status | Count |
 |--------|-------|
-| ✅ Fixed (crossed out below) | 42 |
+| ✅ Fixed (crossed out below) | 45 |
 | ❌ Open | 3 |
 | ⚠️ Needs device testing | 3 |
 
@@ -74,6 +74,9 @@
 - ~~**B-43** — Ring segment ends rounded + gapped; now straight-edged and butted~~
 - ~~**B-44** — Finished session stuck as "1 session running"; devices never released from "In use"~~
 - ~~**B-45** — Post-session screen asked only the first question, as a guessed YES/NO; extra options unreachable, no remarks~~
+- ~~**B-46** — "Show all sets" removed every set colour in the Z-Anatomy stage~~
+- ~~**B-47** — Recovery placement dropped the movement test, pad geometry, withheld sets and guidance~~
+- ~~**B-48** — Set chips never showed the set number; recovery 3D screen had no set colours~~
 - ~~**U-02** — General timing not correct for any session~~ (confirmed working)
 - ~~**U-05** — Device not detected during WiFi registration scan~~ (confirmed working)
 - ~~**U-06** — Colors exactly match web app~~

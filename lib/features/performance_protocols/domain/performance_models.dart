@@ -263,6 +263,18 @@ class PadSet {
   final Pad? sun;
   final Pad? moon;
 
+  /// Recovery's `pad_geometry` — `sandwich` / `wrap` / `side_by_side` /
+  /// `diagonal` / `bracket`. HOW the pair sits relative to each other, which the
+  /// pad list alone doesn't say. Empty for performance, which doesn't author it.
+  final String padGeometry;
+
+  /// A set the engine authored but did NOT apply this session, with the reason
+  /// it was held back (`chain.conditional.withheld_sets[]`). It has no pads —
+  /// that is the point — and is shown so the practitioner can see the set exists
+  /// and what would bring it in.
+  final bool withheld;
+  final String withheldReason;
+
   const PadSet({
     this.setIndex = 1,
     this.role = '',
@@ -270,6 +282,9 @@ class PadSet {
     this.clinicalReasoning = '',
     this.sun,
     this.moon,
+    this.padGeometry = '',
+    this.withheld = false,
+    this.withheldReason = '',
   });
 
   factory PadSet.fromJson(Map<String, dynamic> json) => PadSet(
@@ -287,11 +302,61 @@ class PadSet {
         moon: json['moon'] is Map
             ? Pad.fromJson(Map<String, dynamic>.from(json['moon'] as Map))
             : null,
+        padGeometry:
+            (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
       );
 
   String get title => placementLabel.trim().isEmpty
       ? 'Set $setIndex'
       : 'Set $setIndex · $placementLabel';
+}
+
+/// Recovery's pad-geometry catalogue — the Flutter port of `PAD_GEOMETRY_INFO`
+/// in Hydrawave3 `apps/web/src/anatomy/recoveryPadMarkers.js`, wording included.
+///
+/// The engine sends the key only, so the label, the one-word "reads" and the
+/// intent all have to live client-side; they're the same strings the web shows.
+class PadGeometryInfo {
+  final String label;
+
+  /// The one-word summary the web puts under the chip label.
+  final String reads;
+  final String intent;
+
+  const PadGeometryInfo(this.label, this.reads, this.intent);
+
+  static const Map<String, PadGeometryInfo> catalogue = {
+    'sandwich': PadGeometryInfo(
+      'Sandwich',
+      'through',
+      'Anterior and posterior facing each other, reaching a deep structure from both sides.',
+    ),
+    'wrap': PadGeometryInfo(
+      'Wrap',
+      'across',
+      'Opposite sides of a joint, bracketing it.',
+    ),
+    'side_by_side': PadGeometryInfo(
+      'Side by side',
+      'along',
+      'Both pads on one surface, along a muscle belly or border.',
+    ),
+    'diagonal': PadGeometryInfo(
+      'Diagonal',
+      'offset',
+      'Offset pairing so contact holds on a curved surface.',
+    ),
+    'bracket': PadGeometryInfo(
+      'Bracket',
+      'around, not on',
+      'Around a lymphatic node cluster or sensitive area, without direct pressure on it.',
+    ),
+  };
+
+  /// Null for an unknown or absent key — the caller shows the raw key rather
+  /// than inventing copy for a geometry we don't have wording for.
+  static PadGeometryInfo? of(String key) =>
+      catalogue[key.trim().toLowerCase()];
 }
 
 /// The pad-set payload — identical whether it came from the catalogue, a query,
@@ -310,6 +375,15 @@ class PadSetPayload {
   final String? refusalMessage;
   final Map<String, dynamic> raw;
 
+  /// Recovery's `session.guidance` — "Apply all 1 set this session. 1
+  /// referral-link set is authored on this point and is not shown (set 2)…".
+  /// The engine's own words about how many sets to run and why the rest aren't
+  /// here; shown verbatim.
+  final String guidance;
+
+  /// Recovery's `session.sequencing_note`.
+  final String sequencingNote;
+
   const PadSetPayload({
     this.discipline = '',
     this.displayName = '',
@@ -319,9 +393,19 @@ class PadSetPayload {
     this.sets = const [],
     this.refusalMessage,
     this.raw = const {},
+    this.guidance = '',
+    this.sequencingNote = '',
   });
 
-  bool get isRefusal => chain == null || sets.isEmpty;
+  /// Sets that will actually be applied — the ones with pads. [sets] also
+  /// carries withheld sets so they can be listed and explained.
+  List<PadSet> get appliedSets => sets.where((s) => !s.withheld).toList();
+
+  List<PadSet> get withheldSets => sets.where((s) => s.withheld).toList();
+
+  /// A withheld set has no pads, so it can never make a refusal into a
+  /// placement — the test is whether anything is actually applied.
+  bool get isRefusal => chain == null || appliedSets.isEmpty;
 
   String get disciplineLabel =>
       displayName.trim().isEmpty ? discipline : displayName;

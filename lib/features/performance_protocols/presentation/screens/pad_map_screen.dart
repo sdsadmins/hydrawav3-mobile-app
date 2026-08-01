@@ -6,6 +6,8 @@ import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../pad_placement/domain/anatomy_scene_marker.dart';
 import '../../../pad_placement/domain/pad_marker_mapper.dart';
+import '../../../pad_placement/domain/recovery_engine_models.dart';
+import '../../../pad_placement/domain/set_colors.dart';
 import '../../../pad_placement/presentation/screens/anatomy_scene_fullscreen_screen.dart';
 import '../../../pad_placement/presentation/widgets/anatomy_scene_flag.dart';
 import '../../../pad_placement/presentation/widgets/anatomy_scene_view.dart';
@@ -13,23 +15,11 @@ import '../../../pad_placement/presentation/widgets/pad_anatomy_view.dart';
 import '../../domain/performance_models.dart';
 import 'go_to_session.dart';
 
-/// Okabe-Ito, mirroring `SET_COLORS` in `tool/kinetic_chain_viewer/set_colors.js`.
-///
-/// The 3D stage paints set badges and arcs from that palette, so the chips,
-/// legend and set-note badges on this screen have to use the same hues — a
-/// legend that disagrees with the model is worse than either colour scheme
-/// alone. Deliberately NOT changed on `RefPalette.set1/2/3`, which is a theme
-/// token used elsewhere and has no reason to follow the 3D viewer.
-const List<Color> kAnatomySetColors = [
-  Color(0xFFF0E442), // Set 1 — yellow
-  Color(0xFF0072B2), // Set 2 — blue
-  Color(0xFF009E73), // Set 3 — green
-  Color(0xFFD55E00), // Set 4 — vermillion
-  Color(0xFF56B4E9), // Set 5 — sky blue
-  Color(0xFFCC79A7), // Set 6 — reddish purple
-  Color(0xFFE69F00), // Set 7 — orange
-  Color(0xFF999999), // Set 8 — grey
-];
+// The set palette now lives in `pad_placement/domain/set_colors.dart` — the same
+// standalone-module shape the web uses — so the recovery pad screen can paint
+// its sets from it too. Re-exported here because callers already import it from
+// this screen.
+export '../../../pad_placement/domain/set_colors.dart' show kAnatomySetColors;
 
 /// The pad-map screen — a port of the UI spec's `scr-padmap` (`renderPadMap()`
 /// in `hydrawav3-ui-handoff/app.js`), with the Z-Anatomy viewer as the body
@@ -74,8 +64,19 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   final _legacyAnatomy = PadAnatomyController();
   late final PadPlacementViewData _data;
 
+  /// Everything the recovery engine returned BEYOND the pads — driver, thermal,
+  /// clinical intent, reassessment, disclaimers. Null for a performance
+  /// placement, which authors none of it.
+  ///
+  /// Read back out of `payload.raw`, which is the whole `/recovery-engine-v3/resolve`
+  /// envelope, so no call site had to change to start showing it.
+  late final RecoveryPlacement? _recovery;
+
   /// null = the spec's "All areas" chip.
   int? _focusSet;
+
+  /// Sets the engine authored but held back this session.
+  int get _withheldCount => widget.payload.withheldSets.length;
   late String _view;
   bool _showLabels = true;
   bool _showMuscles = false;
@@ -113,6 +114,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   void initState() {
     super.initState();
     _data = PadPlacementViewData.from(widget.payload);
+    _recovery = RecoveryPlacement.fromPayload(widget.payload);
     _view = _data.viewFor(null);
   }
 
@@ -133,6 +135,31 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       _focusSet = index;
       _view = _data.viewFor(index);
     });
+  }
+
+  /// Which markers the viewer should treat as ACTIVE — and therefore paint.
+  ///
+  /// `activeMarkers` is not just "what is selected": in the viewer's badge path
+  /// it is the whole basis of the colouring. `applyHighlights` builds its id set
+  /// from this list, hides every `muscle-highlight` whose id isn't in it, and
+  /// hands the same list to `setActiveAnatomyMeshHighlight` — which is what
+  /// applies the per-set colour under `colorBySet`.
+  ///
+  /// This used to send an EMPTY list whenever no single set was focused, which
+  /// is exactly the "Show all sets" case (and the "All areas" chip). Empty meant
+  /// no ids matched, so every highlight was hidden and nothing was coloured:
+  /// turning on "Show all sets" showed all the sets and removed all the colour
+  /// that told them apart. Showing every set means every marker is active —
+  /// nothing is dimmed either, since `dimUnselected` is already off.
+  ///
+  /// The one case that still needs the empty list is the flat "Muscles" overlay:
+  /// the viewer only falls through to `applyFlatHighlight()` when there is no
+  /// per-marker selection to express, so a non-empty list would suppress it.
+  List<Map<String, dynamic>> _activeMarkers(List<Map<String, dynamic>> markers) {
+    if (_visibleSetIndex == null && _highlightMuscles.isNotEmpty) {
+      return const [];
+    }
+    return markers;
   }
 
   bool _isUnmapped(ResolvedPad pad) =>
@@ -179,6 +206,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 children: [
                   _head(p, sets.length),
                   const SizedBox(height: HwSpace.s3),
+                  // A composed point or a rerouted pathway changes what the
+                  // whole placement MEANS, so they sit above it, not below.
+                  if (_recovery case final r?) ..._recoveryNotices(p, r),
                   const HwEyebrow('Placement areas · tap to focus one'),
                   _focusChips(p, sets),
                   const SizedBox(height: HwSpace.s3),
@@ -190,7 +220,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   _legend(p, sets),
                   const SizedBox(height: HwSpace.s3),
                   for (final set in _shownSets(sets)) _setNote(p, set),
+                  for (final set in widget.payload.withheldSets)
+                    _withheldNote(p, set),
+                  _sessionGuidance(p),
                   _padGuide(p),
+                  // Driver → thermal → intent → reassessment → disclaimers,
+                  // in the web panel's order.
+                  if (_recovery case final r?) ..._recoveryDetail(p, r),
                   if (_data.hasUnmapped || _unmappedByViewer.isNotEmpty)
                     _unmappedNotice(p),
                   const SizedBox(height: HwSpace.s3),
@@ -254,6 +290,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         const SizedBox(height: 3),
         Text(
           '$count placement set${count == 1 ? '' : 's'}'
+          // Web parity with "N set(s) of max M": say when the point authors more
+          // than this session applies, so the count never reads as the whole
+          // story.
+          '${_withheldCount == 0 ? '' : ' · $_withheldCount more authored'}'
           '${widget.payload.contextLine.isEmpty ? '' : ' · ${widget.payload.contextLine}'}',
           style: TextStyle(fontSize: HwType.cap, color: p.ink3),
         ),
@@ -301,16 +341,115 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             const SizedBox(width: HwSpace.s2),
             _setChip(p, i, sets[i]),
           ],
+          // Sets the engine authored but held back. They sit here, after the
+          // ones that apply, so "2 sets authored, 1 applied" is visible at the
+          // control where sets are picked rather than only in the guidance copy.
+          for (final set in widget.payload.withheldSets) ...[
+            const SizedBox(width: HwSpace.s2),
+            _withheldChip(p, set),
+          ],
         ],
+      ),
+    );
+  }
+
+  /// A withheld set has no pads to focus, so the chip states that instead of
+  /// pretending to be a filter. Tapping it explains why the set isn't applied.
+  Widget _withheldChip(RefPalette p, PadSet set) {
+    return HwPress(
+      scale: 0.92,
+      onTap: () => _explainWithheld(set),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: p.chipBg,
+          borderRadius: BorderRadius.circular(HwRadius.md),
+          border: Border.all(color: p.line, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline_rounded, size: 13, color: p.ink3),
+            const SizedBox(width: HwSpace.s2),
+            Text(
+              'Set ${set.setIndex} · not this session',
+              style: TextStyle(
+                fontSize: HwType.sm,
+                fontWeight: FontWeight.w600,
+                color: p.ink3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _explainWithheld(PadSet set) {
+    final p = RefPalette.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
+      ),
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Set ${set.setIndex}'
+                '${set.role.trim().isEmpty ? '' : ' · ${set.role}'}',
+                style: TextStyle(
+                  fontSize: HwType.lg,
+                  fontWeight: FontWeight.w800,
+                  color: p.ink,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Authored on this point, not applied this session',
+                style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+              ),
+              const SizedBox(height: HwSpace.s3),
+              Text(
+                set.withheldReason.trim().isEmpty
+                    ? 'The engine held this set back for this presentation.'
+                    : set.withheldReason,
+                style: TextStyle(
+                  fontSize: HwType.sm,
+                  height: 1.5,
+                  color: p.ink2,
+                ),
+              ),
+              const SizedBox(height: HwSpace.s4),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _setChip(RefPalette p, int i, PadSet set) {
     final selected = _focusSet == i;
-    final label = set.placementLabel.trim().isEmpty
-        ? 'Set ${set.setIndex}'
-        : set.placementLabel;
+    // "Set 1" / "Set 2" LEADS, as it does everywhere else this set is named —
+    // the legend, the set-note badge and the 3D stage's own badges all key off
+    // the set number, and the web says "Set N" too (`RecoveryResultPanel.jsx`
+    // and the performance set chip, which reads "N · role"). This chip used to
+    // show ONLY the placement label when there was one, so the one control for
+    // picking a set was the one place its number never appeared.
+    //
+    // The role (performance) or placement label (recovery) rides along as a
+    // quieter suffix so the chip still says WHAT the set is.
+    final suffix = set.role.trim().isNotEmpty
+        ? set.role.trim()
+        : set.placementLabel.trim();
     return HwPress(
       scale: 0.92,
       onTap: () => _focus(i),
@@ -341,13 +480,32 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               ),
             ),
             const SizedBox(width: HwSpace.s2),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: HwType.sm,
-                fontWeight: FontWeight.w600,
-                color: selected ? p.copperInk : p.ink,
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: 'Set ${set.setIndex}',
+                    style: TextStyle(
+                      fontSize: HwType.sm,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? p.copperInk : p.ink,
+                    ),
+                  ),
+                  if (suffix.isNotEmpty)
+                    TextSpan(
+                      text: ' · $suffix',
+                      style: TextStyle(
+                        fontSize: HwType.sm,
+                        fontWeight: FontWeight.w600,
+                        color: selected
+                            ? p.copperInk.withValues(alpha: 0.75)
+                            : p.ink3,
+                      ),
+                    ),
+                ],
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -473,7 +631,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       showSetLinks: true,
       focusSetIndex: _visibleSetIndex,
       dimUnselected: !_showAllSets,
-      activeMarkers: _visibleSetIndex == null ? const [] : markers,
+      activeMarkers: _activeMarkers(markers),
       highlightMuscles: _highlightMuscles,
       // Matching the card behind it rather than staying transparent lets the
       // WebView composite opaquely, which is a measurable win while orbiting.
@@ -533,13 +691,15 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           showSetLinks: true,
           focusSetIndex: _visibleSetIndex,
           dimUnselected: !_showAllSets,
-          activeMarkers: _visibleSetIndex == null
-              ? const []
-              : _data.markers(
-                  focusSetIndex: _visibleSetIndex,
-                  mirrored: _mirrored,
-                  bilateral: _bilateral,
-                ),
+          // Same rule as the inline stage — full screen has to colour the sets
+          // the same way, or expanding one changes what it shows.
+          activeMarkers: _activeMarkers(
+            _data.markers(
+              focusSetIndex: _visibleSetIndex,
+              mirrored: _mirrored,
+              bilateral: _bilateral,
+            ),
+          ),
           highlightMuscles: _highlightMuscles,
         ),
       ),
@@ -759,13 +919,24 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        set.title,
-                        style: TextStyle(
-                          fontSize: HwType.base,
-                          fontWeight: FontWeight.w700,
-                          color: p.ink,
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              set.title,
+                              style: TextStyle(
+                                fontSize: HwType.base,
+                                fontWeight: FontWeight.w700,
+                                color: p.ink,
+                              ),
+                            ),
+                          ),
+                          if (set.padGeometry.trim().isNotEmpty) ...[
+                            const SizedBox(width: HwSpace.s2),
+                            _geometryChip(p, set.padGeometry),
+                          ],
+                        ],
                       ),
                       if (set.role.trim().isNotEmpty) ...[
                         const SizedBox(height: 2),
@@ -798,6 +969,18 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             const SizedBox(height: HwSpace.s2),
             if (sun != null) _padLine(p, sun),
             if (moon != null) _padLine(p, moon),
+            if (PadGeometryInfo.of(set.padGeometry) case final geometry?) ...[
+              Text(
+                geometry.intent,
+                style: TextStyle(
+                  fontSize: HwType.eyebrow,
+                  height: 1.5,
+                  fontStyle: FontStyle.italic,
+                  color: p.ink3,
+                ),
+              ),
+              const SizedBox(height: HwSpace.s1),
+            ],
             if (set.clinicalReasoning.trim().isNotEmpty) ...[
               const SizedBox(height: HwSpace.s2),
               Theme(
@@ -834,6 +1017,52 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         ),
       ),
     );
+  }
+
+  /// Recovery's `pad_geometry` — HOW the Sun/Moon pair sits relative to each
+  /// other, which the two pad lines alone never say. Web parity: the
+  /// `recovery-geometry-chip` in `RecoveryResultPanel.jsx` — label, with the
+  /// one-word "reads" beneath it, and the full intent under the pad lines.
+  Widget _geometryChip(RefPalette p, String key) {
+    final info = PadGeometryInfo.of(key);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: p.infoSoft,
+        borderRadius: BorderRadius.circular(HwRadius.xs),
+        border: Border.all(color: p.info.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            info?.label ?? _humanizeKey(key),
+            style: TextStyle(
+              fontSize: HwType.eyebrow,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.3,
+              color: p.info,
+            ),
+          ),
+          if (info != null)
+            Text(
+              info.reads,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                color: p.info.withValues(alpha: 0.8),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _humanizeKey(String key) {
+    final s = key.replaceAll(RegExp(r'[-_]+'), ' ').trim();
+    if (s.isEmpty) return '';
+    return '${s[0].toUpperCase()}${s.substring(1)}';
   }
 
   Widget _padLine(RefPalette p, ResolvedPad resolved) {
@@ -951,6 +1180,522 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         return role.toUpperCase();
     }
   }
+
+  /// The card for a set the engine authored but did not apply. Deliberately
+  /// muted and pad-less — it is here so the practitioner can see the set exists
+  /// and what would bring it in, not so it can be run.
+  Widget _withheldNote(RefPalette p, PadSet set) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: Container(
+        padding: const EdgeInsets.all(HwSpace.s3),
+        decoration: BoxDecoration(
+          color: p.chipBg,
+          borderRadius: BorderRadius.circular(HwRadius.lg),
+          border: Border.all(color: p.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: p.chipBg,
+                    borderRadius: BorderRadius.circular(HwRadius.xs),
+                    border: Border.all(color: p.line, width: 1.5),
+                  ),
+                  child: Text(
+                    '${set.setIndex}',
+                    style: TextStyle(
+                      fontSize: HwType.cap,
+                      fontWeight: FontWeight.w800,
+                      color: p.ink3,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: HwSpace.s3),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        set.title,
+                        style: TextStyle(
+                          fontSize: HwType.base,
+                          fontWeight: FontWeight.w700,
+                          color: p.ink2,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'NOT APPLIED THIS SESSION'
+                        '${set.role.trim().isEmpty ? '' : ' · ${set.role.toUpperCase()}'}',
+                        style: TextStyle(
+                          fontSize: HwType.eyebrow,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                          color: p.ink3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (set.withheldReason.trim().isNotEmpty) ...[
+              const SizedBox(height: HwSpace.s2),
+              Text(
+                set.withheldReason,
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  height: 1.5,
+                  color: p.ink3,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The engine's own words on how many sets to run this session and how to
+  /// sequence the rest — web parity with `RecoveryResultPanel`'s guidance and
+  /// `recovery-sequencing` lines. Rendered verbatim; the backend owns it.
+  Widget _sessionGuidance(RefPalette p) {
+    final guidance = widget.payload.guidance.trim();
+    final sequencing = widget.payload.sequencingNote.trim();
+    if (guidance.isEmpty && sequencing.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const HwEyebrow('This session'),
+            const SizedBox(height: HwSpace.s2),
+            if (guidance.isNotEmpty)
+              Text(
+                guidance,
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  height: 1.5,
+                  color: p.ink2,
+                ),
+              ),
+            if (sequencing.isNotEmpty) ...[
+              if (guidance.isNotEmpty) const SizedBox(height: HwSpace.s2),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: 'Sequencing: ',
+                      style: TextStyle(
+                        fontSize: HwType.cap,
+                        fontWeight: FontWeight.w800,
+                        color: p.ink,
+                      ),
+                    ),
+                    TextSpan(
+                      text: sequencing,
+                      style: TextStyle(
+                        fontSize: HwType.cap,
+                        height: 1.5,
+                        color: p.ink2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── recovery detail ────────────────────────────────────────────────────────
+  //
+  // Everything `/recovery-engine-v3/resolve` returns beyond the pads, in the
+  // web's order and with the web's wording (`RecoveryResultPanel.jsx`): driver →
+  // thermal → what this is for → reassessment → disclaimer → authored cautions →
+  // data notes → source. The engine authors all of it; none of it is composed
+  // here, and the two disclaimers and the wellness claim are printed verbatim.
+
+  /// A titled block of rows — the web's `recovery-block`.
+  Widget _recoveryBlock(
+    RefPalette p,
+    String title,
+    List<Widget> children, {
+    Widget? trailing,
+  }) {
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: HwEyebrow(title)),
+                if (trailing != null) trailing,
+              ],
+            ),
+            const SizedBox(height: HwSpace.s2),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _body(RefPalette p, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: HwSpace.s2),
+        child: Text(
+          text,
+          style: TextStyle(fontSize: HwType.cap, height: 1.5, color: p.ink2),
+        ),
+      );
+
+  /// A `dt`/`dd` pair from the web's `recovery-meta` / benefit grid.
+  Widget _metaRow(RefPalette p, String label, String value) {
+    if (value.trim().isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: HwType.eyebrow,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.3,
+              color: p.ink3,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(fontSize: HwType.cap, height: 1.45, color: p.ink2),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bullets(RefPalette p, List<String> items) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('•', style: TextStyle(fontSize: HwType.cap, color: p.copperInk)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      item,
+                      style: TextStyle(
+                        fontSize: HwType.cap,
+                        height: 1.45,
+                        color: p.ink2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// A tinted callout — the web's `recovery-notice`.
+  Widget _notice(RefPalette p, String title, String body, {Color? tint}) {
+    final color = tint ?? p.info;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(HwSpace.s3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(HwRadius.lg),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: HwType.cap,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
+            ),
+            if (body.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                body,
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  height: 1.5,
+                  color: p.ink2,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A collapsed list — the web's `<details>`. Used for the practitioner-only
+  /// lists, which are deliberately not client-facing.
+  Widget _collapsible(RefPalette p, String title, List<String> items) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: HwSpace.s2),
+            title: Text(
+              '$title (${items.length})',
+              style: TextStyle(
+                fontSize: HwType.cap,
+                fontWeight: FontWeight.w700,
+                color: p.copperInk,
+              ),
+            ),
+            children: [_bullets(p, items)],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The notices that must sit ABOVE the placement, because they change what the
+  /// placement means: a composed point, and a rerouted pathway.
+  List<Widget> _recoveryNotices(RefPalette p, RecoveryPlacement r) {
+    return [
+      if (r.isComposed)
+        _notice(
+          p,
+          'Composed placement — not authored',
+          'This placement was composed by the engine rather than taken from an '
+              'authored point. Read it as a starting position, not a prescription.',
+          tint: p.mid,
+        ),
+      if (r.pathwayRerouted)
+        _notice(
+          p,
+          'This is a lymphatic drainage placement',
+          'You mentioned heaviness or swelling, so the engine routed this to the '
+              'lymphatic branch instead of '
+              '${_humanizeKey(r.requestedPathway).toLowerCase()}.',
+        ),
+    ];
+  }
+
+  /// Everything below the pads.
+  List<Widget> _recoveryDetail(RefPalette p, RecoveryPlacement r) {
+    return [
+      // DRIVER — the core teaching: the driver, not the site.
+      _recoveryBlock(p, 'Driver', [
+        if (r.driverDescription.trim().isNotEmpty) _body(p, r.driverDescription),
+        _metaRow(p, 'Case', r.caseType),
+        _metaRow(p, 'You reported it travels to', r.referralTargetReported),
+        _metaRow(p, 'Lymphatic hub', r.lymphaticRegion),
+        _metaRow(p, 'Tissue', r.tissueType),
+        _metaRow(p, 'Movement test', r.movementTest),
+        // The engine's own reading of the presentation. Not on the web panel;
+        // shown here because the practitioner is the only reader.
+        _metaRow(
+          p,
+          'Presentation',
+          [
+            r.conditionFamily,
+            r.acuity,
+            [r.presentationSide, r.presentationAspect]
+                .where((s) => s.trim().isNotEmpty)
+                .join(' '),
+          ].where((s) => s.trim().isNotEmpty).join(' · '),
+        ),
+      ]),
+
+      // THERMAL — a recommendation, never an instruction. The tag says so.
+      _recoveryBlock(
+        p,
+        'Thermal',
+        [
+          if (r.thermalRationale.trim().isNotEmpty) _body(p, r.thermalRationale),
+          if (r.thermalDowngrade.trim().isNotEmpty)
+            _notice(p, 'Adjusted from Fast switch', r.thermalDowngrade,
+                tint: p.mid),
+          if (r.thermalAlternatives.isNotEmpty) ...[
+            Text(
+              'Alternatives that may be justified:',
+              style: TextStyle(
+                fontSize: HwType.eyebrow,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+                color: p.ink3,
+              ),
+            ),
+            const SizedBox(height: 4),
+            _bullets(p, r.thermalAlternatives),
+          ] else
+            Text(
+              'No alternative authored for this case.',
+              style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+            ),
+        ],
+        trailing: r.thermalMode.trim().isEmpty
+            ? null
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  HwPill(r.thermalLabel),
+                  if (r.thermalRecommendationOnly) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'RECOMMENDATION',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.4,
+                        color: p.ink3,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+      ),
+
+      // WHAT THIS IS FOR — mechanism is authored on every point, so it renders
+      // unconditionally: a point missing it should look wrong, not silently drop
+      // the section.
+      _recoveryBlock(p, 'What this is for', [
+        _bullets(p, r.whatItHelpsRelieve),
+        _metaRow(
+          p,
+          'Mechanism',
+          r.mechanismRationale.trim().isEmpty
+              ? 'No mechanism is authored for this point.'
+              : r.mechanismRationale,
+        ),
+        _metaRow(p, 'Mobility and range', r.mobilityBenefit),
+        _metaRow(p, 'Lymphatic and circulatory', r.lymphaticBenefit),
+        _metaRow(p, 'Tissue recovery', r.tissueBenefit),
+        _metaRow(p, 'What it should feel like', r.expectedSensation),
+        if (r.wellnessClaim.trim().isNotEmpty) _claim(p, r.wellnessClaim),
+      ]),
+
+      // REASSESSMENT — marker + window, authored on every point.
+      _recoveryBlock(p, 'Reassessment', [
+        _body(
+          p,
+          r.reassessmentMarker.trim().isEmpty
+              ? 'No reassessment marker is authored for this point.'
+              : r.reassessmentMarker,
+        ),
+        // Sits directly against the sentence it is about, and says so — a
+        // warning beside a placement reads as a warning ABOUT the placement
+        // unless it says otherwise.
+        if (r.reassessmentNoteMessage.trim().isNotEmpty)
+          _body(
+            p,
+            'Note — ${r.reassessmentNoteLabel}. ${r.reassessmentNoteMessage}'
+            '${r.reassessmentTestsOffered.isEmpty ? '' : ' This region’s authored tests: ${r.reassessmentTestsOffered.join('; ')}.'}',
+          ),
+        if (r.expectedWindow.trim().isNotEmpty)
+          _metaRow(
+            p,
+            'Typical window',
+            '${r.expectedWindow}'
+            '${r.expectedWindowNote.trim().isEmpty ? '' : ' — ${r.expectedWindowNote}'}',
+          ),
+      ]),
+
+      // The client-facing contraindication LIST is deliberately not rendered
+      // (Jul 25 review) — this short disclaimer replaces it. Nothing about what
+      // is BLOCKED changed: the pre-gate still runs and a refer-out still
+      // suppresses the pads.
+      if (r.clientDisclaimer.trim().isNotEmpty)
+        _disclaimer(p, r.clientDisclaimer),
+
+      // Practitioner-only, collapsed.
+      _collapsible(p, 'Authored cautions', r.cautions),
+      _collapsible(p, 'Data notes on this point', r.reviewFlags),
+
+      if (r.recoveryId.trim().isNotEmpty)
+        _sourceLine(p, [
+          r.recoveryId,
+          if (r.pointVersion.trim().isNotEmpty) 'v${r.pointVersion}',
+          if (r.generation.trim().isNotEmpty) r.generation,
+          if (r.pointSource.trim().isNotEmpty) r.pointSource,
+        ].join(' · ')),
+      if (r.practitionerDisclaimer.trim().isNotEmpty)
+        _sourceLine(p, r.practitionerDisclaimer),
+    ];
+  }
+
+  /// The wellness claim, verbatim, set apart as the web's blockquote — it is
+  /// compliance-authored wording and is never rephrased.
+  Widget _claim(RefPalette p, String text) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 4, bottom: HwSpace.s1),
+        padding: const EdgeInsets.fromLTRB(HwSpace.s3, HwSpace.s2, HwSpace.s3,
+            HwSpace.s2),
+        decoration: BoxDecoration(
+          color: p.tanSoft,
+          borderRadius: BorderRadius.circular(HwRadius.sm),
+          border: Border(left: BorderSide(color: p.copper, width: 3)),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: HwType.cap,
+            height: 1.5,
+            fontStyle: FontStyle.italic,
+            color: p.ink2,
+          ),
+        ),
+      );
+
+  Widget _disclaimer(RefPalette p, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: HwSpace.s3),
+        child: Text(
+          text,
+          style: TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+        ),
+      );
+
+  Widget _sourceLine(RefPalette p, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: HwSpace.s2),
+        child: Text(
+          text,
+          style: TextStyle(fontSize: 10, height: 1.5, color: p.ink3),
+        ),
+      );
 
   // ── guide + notices ────────────────────────────────────────────────────────
 
