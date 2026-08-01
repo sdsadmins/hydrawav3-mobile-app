@@ -44,7 +44,24 @@ class PadMapScreen extends ConsumerStatefulWidget {
   /// The client this placement is for, when one was picked ("Guest" otherwise).
   final String? clientName;
 
-  const PadMapScreen({super.key, required this.payload, this.clientName});
+  /// The head line. Recovery resolves to the SAME pad shape — a Sun/Moon pair
+  /// per set, anchored to a landmark — so it renders through this screen too and
+  /// only needs to be named correctly.
+  final String title;
+
+  /// Whether "Go to Session" should pre-load the performance stack. Off for a
+  /// recovery placement: nothing about it asked for "Performance Activation",
+  /// and announcing a protocol that was never chosen is worse than leaving the
+  /// practitioner to pick one.
+  final bool preloadProtocol;
+
+  const PadMapScreen({
+    super.key,
+    required this.payload,
+    this.clientName,
+    this.title = 'Performance Placement',
+    this.preloadProtocol = true,
+  });
 
   @override
   ConsumerState<PadMapScreen> createState() => _PadMapScreenState();
@@ -195,6 +212,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                             ref,
                             payload: widget.payload,
                             clientName: widget.clientName,
+                            preloadProtocol: widget.preloadProtocol,
                           ),
                         ),
                       ),
@@ -225,7 +243,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Performance Placement',
+          widget.title,
           style: TextStyle(
             fontSize: HwType.xxl,
             fontWeight: FontWeight.w700,

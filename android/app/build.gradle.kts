@@ -8,6 +8,19 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// A key.properties that EXISTS is not the same as one that is COMPLETE, and the
+// difference used to fail the build with "null cannot be cast to non-null type
+// kotlin.String" — a missing/misspelled entry read back as null and the `as String`
+// cast threw, on `assembleDebug`, which never needed the release keystore at all
+// (signingConfigs is evaluated at configuration time regardless of the task).
+// Gate on all four values instead, so an incomplete file falls back to debug signing
+// the same way a missing one already does.
+fun keystoreValue(name: String): String? =
+    keystoreProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
+
+val releaseSigningReady = listOf("keyAlias", "keyPassword", "storeFile", "storePassword")
+    .all { keystoreValue(it) != null }
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -41,21 +54,21 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (releaseSigningReady) {
             create("release") {
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreValue("keyAlias")
+                keyPassword = keystoreValue("keyPassword")
+                storeFile = file(keystoreValue("storeFile")!!)
+                storePassword = keystoreValue("storePassword")
             }
         }
     }
 
     buildTypes {
         release {
-            // Use the release signing config only when key.properties is present;
-            // otherwise fall back to debug signing so local builds work.
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            // Use the release signing config only when key.properties is present
+            // and complete; otherwise fall back to debug signing so local builds work.
+            signingConfig = if (releaseSigningReady) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")

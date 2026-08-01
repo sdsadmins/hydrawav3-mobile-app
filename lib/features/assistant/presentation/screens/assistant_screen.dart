@@ -14,11 +14,10 @@ import '../../../devices/presentation/widgets/ref_palette.dart';
 import '../../../intake/domain/intake_enums.dart';
 import '../../../intake/domain/intake_models.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
-import '../../../intake/presentation/widgets/body_map.dart';
-import '../../../pad_placement/data/pad_placement_remote_source.dart';
 import '../../../pad_placement/data/recovery_chat_remote_source.dart';
+import '../../../pad_placement/data/recovery_engine_remote_source.dart';
 import '../../../pad_placement/domain/recovery_chat_models.dart';
-import '../../../pad_placement/presentation/screens/pad_placement_3d_screen.dart';
+import '../../../pad_placement/domain/recovery_engine_models.dart';
 import '../../../performance_protocols/data/performance_remote_source.dart';
 import '../../../performance_protocols/domain/performance_models.dart';
 import '../../../performance_protocols/presentation/providers/performance_catalog_providers.dart';
@@ -56,62 +55,41 @@ class _Msg {
         rich = null;
 }
 
-/// A range-of-motion movement test (parity with the guided-assessment
-/// `_romTests`): a test name + the body region it targets.
-class _RomTest {
-  final String name;
-  final String target;
-  const _RomTest(this.name, this.target);
-}
+// The seven hardcoded range-of-motion tests that used to live here are gone.
+// They were a guess at the corpus: the engine selects on the test a point is
+// AUTHORED against, so a name that isn't one of those matches nothing, and a
+// region's real tests ("Neck lateral flexion (ear to shoulder)") were not on the
+// list at all. The chips now come from the region's own `movement_tests`.
 
-const _kRomTests = <_RomTest>[
-  _RomTest('Forward Bend', 'Lower back / Pelvis'),
-  _RomTest('Squat', 'Knees'),
-  _RomTest('Trunk Rotation', 'Mid-back / Thoracic Spine'),
-  _RomTest('Ankle Dorsiflexion', 'Ankles / lower leg'),
-  _RomTest('Shoulder Flexion', 'Shoulders'),
-  _RomTest('Neck Flexion', 'Neck / Cervical Spine'),
-  _RomTest('Neck Rotation', 'Neck / Cervical Spine'),
+/// The complaint's side, and the referral's — two fields with two vocabularies,
+/// neither borrowed from the other.
+///
+/// The third option differs on purpose: the complaint's is `bilateral`, the
+/// schema enum for `presentation.side`, while the referral's is `both`, which is
+/// what the DTO accepts for `referral_side`. Web parity (`SIDE_CHOICES` /
+/// `REFERRAL_SIDE_CHOICES`) — and "both" on a referral is a rendering
+/// instruction (draw it on both sides) rather than a crossing.
+const _kRecoverySides = <(String, String)>[
+  ('right', 'Right'),
+  ('left', 'Left'),
+  ('bilateral', 'Both'),
 ];
 
-/// One guided-assessment question rendered as a chat step (single-select).
-class _Step {
-  final String key;
-  final String prompt;
-  final List<String> options;
-  final IconData icon;
-  const _Step(this.key, this.prompt, this.options, this.icon);
-}
+const _kReferralSides = <(String, String)>[
+  ('left', 'Left'),
+  ('right', 'Right'),
+  ('both', 'Both'),
+];
 
-// Option lists copied from the guided-assessment panel (intake) so the chat
-// mirrors that flow. Kept local to the assistant.
-const _kSensations = <String>[
-  'Tight', 'Stiff', 'Achy', 'Heavy or fatigued', 'Sharp', 'Burning',
-  'Tingling', 'Numb',
-];
-const _kDurations = <String>[
-  'Less than 6 weeks', '6 weeks to 3 months', '3 to 6 months',
-  '6 months to 1 year', 'More than 1 year',
-];
-const _kBehaviors = <String>[
-  'Always Present', 'Comes and Goes', 'Only with certain Activities',
-  'Varies day to day',
-];
-const _kLevels = <String>['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
-const _kActivities = <String>[
-  'Office / desk work', 'Standing work', 'Manual work', 'Sports / training',
-  'Yoga / mobility', 'Running / cycling', 'Prolonged driving',
-];
-const _kWorse = <String>[
-  'Sitting >30 min', 'Standing >30 min', 'Getting up from sitting', 'Walking',
-  'Stairs', 'Bending backward', 'Twisting', 'Reaching', 'Morning',
-  'End of day', 'During exercise', 'After exercise', 'None', 'Not sure',
-];
-const _kBetter = <String>[
-  'Sitting', 'Standing and moving', 'Walking', 'Stretching', 'Knees-to-chest',
-  'Heat', 'Cold', 'Gentle movement', 'Massage', 'Changing positions', 'Rest',
-  'Exercise', 'Nothing yet',
-];
+// The seven guided-assessment questions that used to run here are GONE, matching
+// the web's Jul 25 review: the discomfort intake is region + side + movement
+// test + referral, and nothing else.
+//
+// "How does it feel?" and "How long has it been going on?" fed `symptom_quality`
+// and `acuity`, which do score point selection — the referral question is what
+// replaced them, and it is the answer that changes the chain most. Thermal is
+// unaffected either way: it comes from the retrieved point's own
+// `thermal_config` and was never computed from acuity here.
 
 /// A tappable suggestion chip.
 class _ChipAction {
@@ -135,17 +113,47 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   // untouched.
   bool _recovery = false;
 
-  // Guided-assessment chat state (recovery only).
-  /// Raw `placement-session` response for the last generated placement — kept so
-  /// the "3D pad placement" chip can hand its `markers` to the 3D viewer.
-  Map<String, dynamic>? _lastPlacement;
+  // Guided-assessment chat state (recovery only). `_answers` is what the
+  // recovery CHAT surface sends as its screen answers and what the area-of-focus
+  // record is built from; the guided flow below fills it as it goes.
   String? _assessmentArea;
-  int _stepIndex = 0;
   final Map<String, String> _answers = {};
 
-  // Manual-entry ROM: the next typed input becomes the movement test name.
-  bool _awaitingManualRom = false;
-  String? _manualRomArea;
+  // ── Recovery flow state (the authored recovery corpus) ────────────────────
+  //
+  // These hold the ENGINE'S CANONICAL VALUES, never the chip labels. The region
+  // the practitioner tapped carries its own id and the resolve matches on that
+  // and nothing else: a body-map label sent as `region` resolves to no point at
+  // all, and the flow dead-ends with nothing to show for it.
+  RecoveryGoal? _recoveryGoal;
+  RecoveryRegion? _recoveryRegion;
+  String? _recoverySide;
+  String? _recoveryAspect;
+  String? _recoveryReferral;
+  String? _recoveryReferralSide;
+  String? _recoveryMovementTest;
+
+  /// Ronel Option B — a region's movement test is skippable when it is too
+  /// painful or too limited. Sent explicitly, because the engine reads a missing
+  /// test as "no test was offered", which is a different fact.
+  bool _recoveryTestSkipped = false;
+
+  // The Part 11 radicular gate. `_nerveReferral` alone is a SELECTION signal
+  // (it sets condition_family) and blocks nothing; only its combination with
+  // one of the other two is the refer-out.
+  bool _nerveReferral = false;
+  bool _motorWeakness = false;
+  bool _bladderBowelChange = false;
+
+  /// The safety disclaimer is shown once per conversation, not once per topic —
+  /// it is the same sentence every time and repeating it above every placement
+  /// turns the one thing that must be read into noise.
+  bool _disclaimerShown = false;
+
+  // The last placement is deliberately NOT held in a field. It rides on the
+  // message that rendered it (`_Msg.card`), which is what the pad map opens
+  // from — a "last placement" field and a scrollback of cards disagree the
+  // moment a second area is run, and the card you tapped is the one you meant.
 
   // ── Performance flow state (the pad_protocols catalogue) ──────────────────
   /// The client this prep is for; null = Guest.
@@ -185,25 +193,6 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// hold different slots (`region`/`side`/`goal` vs `discipline`/`role`), so
   /// feeding one's memory to the other resolves nothing and confuses both.
   Map<String, dynamic> _recoverySlots = const {};
-
-  // The guided-assessment questions, as chat steps (parity with the intake
-  // panel's Area of Focus → Daily Activities steps).
-  static const _steps = <_Step>[
-    _Step('sensation', 'How does it feel?', _kSensations,
-        Icons.spa_outlined),
-    _Step('duration', 'How long has this been going on?', _kDurations,
-        Icons.schedule_rounded),
-    _Step('behavior', 'Is it constant, or does it come and go?', _kBehaviors,
-        Icons.sync_rounded),
-    _Step('level', 'On a 0–10 scale, how much discomfort right now?', _kLevels,
-        Icons.speed_rounded),
-    _Step('activity', 'What does a typical day look like?', _kActivities,
-        Icons.work_outline_rounded),
-    _Step('worse', 'What tends to make it worse?', _kWorse,
-        Icons.trending_down_rounded),
-    _Step('better', 'What helps it feel better?', _kBetter,
-        Icons.trending_up_rounded),
-  ];
 
   static const _greeting = 'Hey — what are we working on today?';
 
@@ -668,12 +657,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     ]);
   }
 
+  /// The pad map — ONE screen for both surfaces.
+  ///
+  /// Which one this is comes off the payload itself rather than off flow state:
+  /// the card that opened it is a widget in a scrolled list and may well be from
+  /// a recovery turn the conversation has since moved past, so reading
+  /// `_recovery` here would title an old card by what is happening now.
   void _openPadMap(PadSetPayload payload) {
+    final isRecovery = payload.discipline == 'recovery';
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PadMapScreen(
           payload: payload,
           clientName: _perfWho,
+          title: isRecovery ? 'Recovery Placement' : 'Performance Placement',
+          // "Performance Activation" is the performance flow's default stack.
+          // Loading it off a recovery placement would announce a protocol
+          // nothing about this placement asked for.
+          preloadProtocol: !isRecovery,
         ),
       ),
     );
@@ -725,6 +726,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     resetPerformanceSessionFromWidget(ref);
     _slots = const {};
     _recoverySlots = const {};
+    _resetRecovery();
+    // The transcript is cleared, so the disclaimer goes with it and has to be
+    // said again — a placement reached without it on screen is the one state
+    // this must not have.
+    _disclaimerShown = false;
     setState(_initialize);
   }
 
@@ -805,169 +811,588 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     return null;
   }
 
-  // Recovery → pick a discomfort area, then a range-of-motion check.
+  // ── Recovery: the guided flow, ported from the web's RecoveryEngineFlow ─────
+  //
+  // GOAL FIRST, THEN THE AREA. "What are we working on?" is the opening question
+  // in both clients, and the order is load-bearing rather than a preference: the
+  // engine's selector hard-filters on `goal_pathway` before it looks at anything
+  // else, so the region list is SCOPED to the chosen pathway. Asking for the area
+  // first means offering areas the pathway has no point for — which is how
+  // `performance_recovery` + `full-body` became offerable on the web and answered
+  // nothing.
+  //
+  // EVERY CHIP IS AUTHORED DATA. The goals' counts, the areas, the movement tests
+  // and their `reveals`, the aspects, the sides and the referral menu all come
+  // from the serving library's own catalogue. The hardcoded body-map labels and
+  // the seven-item ROM list that used to be here were the bug: they offered areas
+  // the corpus cannot answer for and named tests no point is authored against.
+  //
+  // WHAT THIS PATHWAY NO LONGER ASKS, matching the web's Jul 25 review: the
+  // "how does it feel?" and "how long has it been going on?" steps are gone from
+  // the discomfort intake. Thermal comes from the retrieved point's own
+  // `thermal_config` and was never computed from acuity, so dropping them cannot
+  // change a thermal recommendation; they DID feed point selection, and the
+  // referral question is what replaced them.
   Future<void> _onRecovery() async {
     _recovery = true;
     // Recovery keeps its slots CLIENT-side only (the service has no session
     // memory of its own), so an empty map really does start a new topic here.
     _recoverySlots = const {};
+    _resetRecovery();
     _me('Recovery');
-    await _ai('Recovery — let’s find where you need it. Where’s the discomfort?');
-    _showAreas();
+    _askGoal();
   }
 
-  void _showAreas() {
-    // The full body-map region list (front + back, de-duped) — the same areas
-    // the intake body map uses.
+  void _resetRecovery() {
+    _recoveryGoal = null;
+    _recoveryRegion = null;
+    _recoverySide = null;
+    _recoveryAspect = null;
+    _recoveryReferral = null;
+    _recoveryReferralSide = null;
+    _recoveryMovementTest = null;
+    _recoveryTestSkipped = false;
+    _nerveReferral = false;
+    _motorWeakness = false;
+    _bladderBowelChange = false;
+    _assessmentArea = null;
+    _answers.clear();
+  }
+
+  // ── Step 1: "What are we working on?" ──────────────────────────────────────
+
+  /// The four pathways, ASKED IMMEDIATELY.
+  ///
+  /// They are a fixed list — the same `PATHWAYS` constant the web renders — so
+  /// the question does not wait on a request. The dispatch is kicked off behind
+  /// it and awaited at the next step, which is the web's shape too: its goal grid
+  /// renders on mount while the cutover/screen/intake effect is still in flight.
+  ///
+  /// That ordering matters here more than it does on the web. The v3 intake
+  /// derives the catalogue from the whole live corpus and takes ~40 s against a
+  /// dev tunnel; blocking the first question on it means staring at a typing
+  /// bubble before there is anything to even choose between.
+  ///
+  /// Stays a `VoidCallback` — "change goal" and "start over" both come back here.
+  void _askGoal() {
+    // Start the fetch NOW, without awaiting it. By the time a goal is tapped and
+    // its blurb has been read, this has usually landed.
+    //
+    // The `.ignore()` swallows the rejection HERE and nowhere else: the failure
+    // is still held by the provider and is surfaced by the step that awaits it
+    // (`_askRegion`), which is where there is something to say about it. Without
+    // it an early failure is an unhandled async error that crashes the zone
+    // before the flow ever gets to report it.
+    ref.read(recoveryDispatchProvider.future).ignore();
+    _showGoalChips();
+  }
+
+  Future<void> _showGoalChips() async {
+    // ALWAYS SHOWN, WITH NOTHING TO CLICK. This is the whole of what replaced
+    // the red-flag screen as a UI gate: the questions are still fetched and
+    // still answered on the wire, and the ENGINE still runs the universal
+    // pre-gate on every resolve. What went is the client-side asking.
+    //
+    // The authored sentence when the screen has already loaded, the generic
+    // floor when it has not — never nothing, because a placement reached with no
+    // disclaimer on screen is the one state this must not have.
+    if (!_disclaimerShown) {
+      _disclaimerShown = true;
+      final screen = ref.read(recoveryDispatchProvider).valueOrNull?.screen;
+      await _ai((screen ?? const RecoverySafetyScreen()).disclaimerOrFallback);
+      if (!mounted) return;
+    }
+
+    await _ai('What are we working on?');
+    if (!mounted) return;
+    // Every pathway is offered, as the web offers every card. Whether the corpus
+    // can actually answer for one is a question about REGIONS, and it is
+    // answered at the next step against that pathway's own list — hiding a goal
+    // on a count would also hide it whenever the catalogue is merely slow.
     _showChips([
-      for (final a in kBodyMapAreas)
-        _ChipAction(_areaIcon(a), a, () => _pickArea(a)),
+      for (final goal in RecoveryGoal.all)
+        _ChipAction(_goalIcon(goal), goal.label, () => _pickGoal(goal)),
     ]);
   }
 
-  Future<void> _pickArea(String name) async {
-    _me(name);
-    if (_recovery) {
-      await _showRoms(name);
-      return;
-    }
-    // Performance doesn't go by body area — it goes discipline → role → chain
-    // through the pad_protocols catalogue. Reachable only if an area chip is
-    // still on screen when the flow switched.
-    await _perfStartDiscipline();
+  Future<void> _pickGoal(RecoveryGoal goal) async {
+    _me(goal.label);
+    _resetRecovery();
+    _recoveryGoal = goal;
+    _answers['goal'] = goal.value;
+    // The card's blurb, said once, so the pathway's scope is stated before the
+    // area list narrows to it. Doubles as cover for the catalogue fetch.
+    if (goal.blurb.isNotEmpty) await _ai(goal.blurb);
+    if (!mounted) return;
+    await _askRegion();
   }
 
-  // ── Recovery: range-of-motion step (guided-assessment tests) ────────────────
+  // ── Step 2: the area, scoped to the chosen pathway ─────────────────────────
 
-  Future<void> _showRoms(String area) async {
-    await _ai(
-      'For the ${area.toLowerCase()}, pick a range-of-motion check — or add '
-      'your own.',
-      rich: [
-        const TextSpan(text: 'For the '),
-        TextSpan(
-            text: area.toLowerCase(),
-            style: const TextStyle(fontWeight: FontWeight.w700)),
-        const TextSpan(
-            text: ', pick a range-of-motion check — or add your own.'),
-      ],
-    );
+  /// THE STEP THAT WAITS. Everything the area list needs — which generation is
+  /// serving, and that generation's catalogue — is fetched here, or was started
+  /// when the goal question went up and is simply awaited.
+  ///
+  /// A failed dispatch stops the flow rather than falling back: with no
+  /// generation there is no endpoint to send a resolve to, and resolving against
+  /// whichever library used to be right returns a wrong answer that looks exactly
+  /// like a real one.
+  Future<void> _askRegion() async {
+    final goal = _recoveryGoal;
+    if (goal == null) return _askGoal();
+
+    final RecoveryDispatch dispatch;
+    try {
+      dispatch = await _awaitDispatch();
+    } catch (e) {
+      await _failStep('Couldn’t reach the recovery engine', _askRegion, e);
+      return;
+    }
+    if (!mounted) return;
+
+    if (dispatch.hasNothingToOffer) {
+      // A catalogue that LOADED and offers nothing is a deployment fact, not a
+      // network failure, so there is no "try again" chip: it would be a lie. The
+      // message distinguishes "nothing published" from "published and being
+      // refused wholesale", which are different faults with different owners.
+      await _ai(dispatch.emptyCatalogReason);
+      if (!mounted) return;
+      _showChips([
+        _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
+        _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+      ]);
+      return;
+    }
+
+    final regions = dispatch.catalog.regionsFor(goal.value);
+    if (regions.isEmpty) {
+      // The library has content and this pathway has none — a real, specific
+      // answer, and a different one from "the library is empty".
+      await _ai('Nothing is authored for ${goal.label.toLowerCase()} yet. '
+          'Pick another goal.');
+      if (!mounted) return;
+      _showChips([
+        _ChipAction(Icons.tune_rounded, 'Change goal', _askGoal),
+        _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
+      ]);
+      return;
+    }
+
+    await _ai(goal.regionPrompt);
+    if (!mounted) return;
     _showChips([
-      for (var i = 0; i < _kRomTests.length; i++)
-        _ChipAction(_romIcon(_kRomTests[i].name), _kRomTests[i].name,
-            () => _pickRom(area, _kRomTests[i].name),
+      for (final r in regions)
+        _ChipAction(_areaIcon(r.label), r.label, () => _pickRegion(r)),
+      _ChipAction(Icons.tune_rounded, 'Change goal', _askGoal),
+    ]);
+  }
+
+  /// The dispatch, awaited behind a typing bubble ONLY if it has not landed yet.
+  ///
+  /// Cached after the first run, so every later step — "another area", "change
+  /// goal", a second topic — reads it with no request and no bubble.
+  Future<RecoveryDispatch> _awaitDispatch() async {
+    final cached = ref.read(recoveryDispatchProvider).valueOrNull;
+    if (cached != null) return cached;
+
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+    try {
+      return await ref.read(recoveryDispatchProvider.future);
+    } finally {
+      if (mounted) setState(() => _typing = false);
+    }
+  }
+
+  Future<void> _pickRegion(RecoveryRegion region) async {
+    _me(region.label);
+    _recoveryRegion = region;
+    _assessmentArea = region.label;
+    _recoveryAspect = null;
+    _recoveryReferral = null;
+    _recoveryReferralSide = null;
+    _recoveryMovementTest = null;
+    _recoveryTestSkipped = false;
+    _answers['area'] = region.label;
+    await _askAspect();
+  }
+
+  /// Front/back or inner/outer — asked ONLY where the region permits a CHOICE.
+  /// One authored value is not a question: a corpus authored entirely
+  /// "posterior" for the low back has nothing to ask, which is exactly what
+  /// v3.1 removed from the lower, upper and mid back.
+  Future<void> _askAspect() async {
+    final region = _recoveryRegion!;
+    final aspects = region.aspects.where((a) => a != 'na').toList();
+    if (!region.aspectOffered || aspects.length < 2) {
+      await _askSide();
+      return;
+    }
+    await _ai('Which part of the ${region.label.toLowerCase()}?');
+    if (!mounted) return;
+    _showChips([
+      for (final a in aspects)
+        _ChipAction(Icons.my_location_rounded, _aspectLabel(a), () {
+          _me(_aspectLabel(a));
+          _recoveryAspect = a;
+          _askSide();
+        }),
+    ]);
+  }
+
+  /// Which side.
+  ///
+  /// It used to be read out of the chip label ("Left Knee"), which the authored
+  /// region ids carry no equivalent of — `knee` is one region and the side is a
+  /// fact about the person in front of you. Getting it wrong mirrors the chain.
+  /// Not asked on the lymphatic pathway, which drains through a hub.
+  Future<void> _askSide() async {
+    final goal = _recoveryGoal!;
+    if (!goal.asksSide) {
+      await _afterSide();
+      return;
+    }
+    await _ai('Which side?');
+    if (!mounted) return;
+    _showChips([
+      for (final s in _kRecoverySides)
+        _ChipAction(_sideIcon(s.$1), s.$2, () {
+          _me(s.$2);
+          _recoverySide = s.$1;
+          _afterSide();
+        }),
+    ]);
+  }
+
+  Future<void> _afterSide() async {
+    if (_recoveryGoal!.asksMovementTest) {
+      await _showRoms();
+      return;
+    }
+    await _askNerveReferral();
+  }
+
+  // ── Step 3 (discomfort only): the region's own movement tests ──────────────
+
+  Future<void> _showRoms() async {
+    final region = _recoveryRegion!;
+    final tests = region.movementTests;
+    if (tests.isEmpty) {
+      // Not rendered empty and not pointlessly skippable: on v2 most points are
+      // direct-select and there is genuinely nothing to run.
+      await _ai('No movement test is authored for '
+          '${region.label.toLowerCase()}, so we go straight on.');
+      if (!mounted) return;
+      await _askReferral();
+      return;
+    }
+
+    await _ai('Which movement did you try? Run one of these and note where '
+        'else you feel it — each one reveals something different.');
+    if (!mounted) return;
+    _showChips([
+      for (var i = 0; i < tests.length; i++)
+        _ChipAction(_romIcon(tests[i].test), tests[i].test,
+            () => _pickRom(tests[i].test),
             hot: i == 0),
-      _ChipAction(Icons.edit_outlined, 'Manual Entry',
-          () => _startManualRom(area)),
+      // Ronel's Option B, kept: a test that is too painful or too limited is
+      // skipped and the point selected directly. "I ran this one" and "I could
+      // not run any" are different answers, so skipping clears the chosen test.
+      _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
+          _skipRom),
     ]);
   }
 
-  void _startManualRom(String area) {
-    _me('Manual Entry');
-    _manualRomArea = area;
-    _awaitingManualRom = true;
-    _ai('Sure — type the movement you’d like to check in the box below and '
-        'send.');
+  Future<void> _skipRom() async {
+    _me('Too painful — skip the test');
+    _recoveryTestSkipped = true;
+    _recoveryMovementTest = null;
+    _answers['movementTest'] = 'skipped';
+    await _askReferral();
   }
 
-  Future<void> _pickRom(String area, String testName) async {
+  Future<void> _pickRom(String testName) async {
     _me(testName);
-    // Continue into the guided-assessment questions (chat). The ROM test +
-    // answers are collected in _answers for the (later) report call.
-    _assessmentArea = area;
-    _stepIndex = 0;
-    _answers
-      ..clear()
-      ..['romTest'] = testName
-      ..['area'] = area;
-    await _ai('Got it — $testName. A few quick questions and I’ll have what I '
-        'need for the recovery plan.');
-    _askStep();
+    _recoveryMovementTest = testName;
+    _recoveryTestSkipped = false;
+    _answers['movementTest'] = testName;
+
+    // The test's authored reading, where the catalogue describes it. Never
+    // templated: a test the config does not describe gets no sentence rather
+    // than a manufactured one — that wording is clinical and is not written here.
+    final reveals = _revealsFor(testName);
+    if (reveals.isNotEmpty) {
+      await _ai('That tells us about the $reveals.');
+      if (!mounted) return;
+    }
+    await _askReferral();
   }
 
-  // ── Recovery: guided-assessment questions (chat) ────────────────────────────
+  String _revealsFor(String testName) {
+    for (final t in _recoveryRegion?.movementTests ?? const <RecoveryMovementTest>[]) {
+      if (t.test.trim().toLowerCase() == testName.trim().toLowerCase()) {
+        return t.reveals.trim();
+      }
+    }
+    return '';
+  }
 
-  Future<void> _askStep() async {
-    if (_stepIndex >= _steps.length) {
-      await _finishAssessment();
+  // ── Step 4 (discomfort only, optional): does it travel? ────────────────────
+
+  /// The referral is the answer that changes the placement most: a low-back
+  /// complaint travelling to the calf runs the calf's set alongside the primary
+  /// one this session, instead of sequencing it for a later visit.
+  ///
+  /// CHIPS ONLY, from the region's AUTHORED menu. A destination not on it is one
+  /// the engine has no chain for, so a free-text box could only ever produce a
+  /// no-match dressed up as a question the user was invited to answer.
+  Future<void> _askReferral() async {
+    final region = _recoveryRegion!;
+    if (!_recoveryGoal!.asksReferral || region.referralMenu.isEmpty) {
+      await _askNerveReferral();
       return;
     }
-    final s = _steps[_stepIndex];
-    await _ai(s.prompt);
+    await _ai('Does it travel anywhere else?');
+    if (!mounted) return;
     _showChips([
-      for (final o in s.options)
-        _ChipAction(s.icon, o, () => _answerStep(o)),
+      _ChipAction(Icons.check_circle_outline, 'No — just there', () {
+        _me('No — just there');
+        _recoveryReferral = null;
+        _recoveryReferralSide = null;
+        _askNerveReferral();
+      }, hot: true),
+      for (final target in region.referralMenu)
+        _ChipAction(_areaIcon(target), _titleCase(target), () {
+          _me(_titleCase(target));
+          _recoveryReferral = target;
+          _askReferralSide();
+        }),
     ]);
   }
 
-  void _answerStep(String value) {
-    if (_stepIndex >= _steps.length) return;
-    _answers[_steps[_stepIndex].key] = value;
-    _me(value);
-    _stepIndex++;
-    _askStep();
+  /// WHICH SIDE IT TRAVELS TO — its own question, and clinically it has to be.
+  ///
+  /// A referral on the OTHER side is a cross-body chain, a different case type
+  /// the library has essentially none of (1 authored point against 69 same-side).
+  /// The engine derives the case type from this against the complaint side, and
+  /// the user is the only one who knows which they have. Defaulted to the
+  /// complaint side, so the common case is one tap and a crossing is deliberate.
+  Future<void> _askReferralSide() async {
+    final target = _titleCase(_recoveryReferral ?? '');
+    await _ai('Which side does it travel to?');
+    if (!mounted) return;
+    _showChips([
+      for (final s in _kReferralSides)
+        _ChipAction(_sideIcon(s.$1), s.$2, () {
+          _me(s.$2);
+          _recoveryReferralSide = s.$1;
+          // Said in words, because "left" beside "left" is not obviously a
+          // same-side chain and "left" beside "right" is not obviously a
+          // crossing. The engine names the pattern on the result; this is the
+          // same statement at the moment of choosing, so it is not a surprise.
+          _ai(s.$1 == 'both'
+              ? 'Both sides — the ${target.toLowerCase()} pads are drawn left and right.'
+              : (_recoverySide != null && _recoverySide != s.$1)
+                  ? 'That’s a cross-body pattern. The main pads stay on the '
+                      '$_recoverySide; the ${target.toLowerCase()} pads go on the ${s.$1}.'
+                  : 'Same side — the ${target.toLowerCase()} pads go on the '
+                      '${s.$1} with the main pads.');
+          _askNerveReferral();
+        }),
+    ]);
   }
 
+  // ── Step 5: the radicular detail ───────────────────────────────────────────
+
+  /// The Part 11 radicular gate, which the universal red-flag screen cannot
+  /// reach — it never asks about bladder or bowel.
+  ///
+  /// It is also the ONLY control that sets `condition_family: nerve_referral`,
+  /// which the selector reads, so it is an input to the placement and not only a
+  /// gate question. On the web it is a collapsed practitioner panel; a chat has
+  /// no "collapsed", so it is one question with an easy No.
+  ///
+  /// A nerve-referral pattern ALONE blocks nothing — it is a selection signal.
+  /// Only the combination with weakness or a bladder/bowel change is the
+  /// refer-out.
+  Future<void> _askNerveReferral() async {
+    await _ai('Last one — is there a true nerve-referral pattern (shooting or '
+        'electric down the limb)?');
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.check_circle_outline, 'No', () {
+        _me('No');
+        _nerveReferral = false;
+        _finishAssessment();
+      }, hot: true),
+      _ChipAction(Icons.bolt_outlined, 'Yes', () {
+        _me('Yes');
+        _nerveReferral = true;
+        _askRadicularDetail();
+      }),
+    ]);
+  }
+
+  Future<void> _askRadicularDetail() async {
+    await _ai('With any motor weakness, or a bladder or bowel change?');
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.check_circle_outline, 'Neither', () {
+        _me('Neither');
+        _motorWeakness = false;
+        _bladderBowelChange = false;
+        _finishAssessment();
+      }, hot: true),
+      _ChipAction(Icons.warning_amber_rounded, 'Motor weakness', () {
+        _me('Motor weakness');
+        _motorWeakness = true;
+        _radicularBlock();
+      }),
+      _ChipAction(Icons.warning_amber_rounded, 'Bladder or bowel change', () {
+        _me('Bladder or bowel change');
+        _bladderBowelChange = true;
+        _radicularBlock();
+      }),
+    ]);
+  }
+
+  /// The client-side half of the radicular gate. The engine refuses this
+  /// combination too; stopping here means not asking it to.
+  Future<void> _radicularBlock() async {
+    await _ai('A nerve-referral pattern with weakness or a bladder or bowel '
+        'change needs professional assessment before any pad placement. No '
+        'placement is available for this session.');
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+      _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
+    ]);
+  }
+
+  // ── The resolve ────────────────────────────────────────────────────────────
+
+  /// The pad set, and the same `.placecard` performance lands on.
+  ///
+  /// The answer comes back as authored pad geometry — a Sun and a Moon pad per
+  /// set, each with its landmark anchor and target muscles — which is the
+  /// identical shape the performance pad set has. So it renders through the same
+  /// [PlacementCard] and the same [PadMapScreen], with the same 3D stage and the
+  /// same marker mapper, rather than through a recovery-only summary bubble that
+  /// could only list the pads as text.
   Future<void> _finishAssessment() async {
     // Record the picked area as the session's area of focus so the Session tab
     // and the AI report see it. Start Session is NOT gated on this — running
     // the recovery flow first is optional.
     _recordAreaOfFocus();
 
-    // Build the AssessmentPayload and call the RAG pad-placement endpoint.
-    final payload = _buildAssessmentPayload();
+    final region = _recoveryRegion;
+    final goal = _recoveryGoal;
+    if (region == null || goal == null) return _askGoal();
+
+    // Cached by now — the area list could not have been drawn without it — but
+    // read through the same await so there is one way to get the generation and
+    // no path that resolves without one.
+    final RecoveryDispatch dispatch;
+    try {
+      dispatch = await _awaitDispatch();
+    } catch (e) {
+      await _failStep(
+          'Couldn’t reach the recovery engine', _finishAssessment, e);
+      return;
+    }
+    if (!mounted) return;
+
     setState(() {
       _chipsVisible = false;
       _typing = true;
     });
     _scrollToEnd();
+
+    final RecoveryPlacement placement;
     try {
-      final result = await ref
-          .read(padPlacementRemoteSourceProvider)
-          .placementSession(payload);
-      if (!mounted) return;
-      setState(() {
-        _typing = false;
-        _lastPlacement = result;
-        _messages.add(_Msg(false, _placementSummary(result)));
-      });
-      _scrollToEnd();
-      // Offer to start the session (protocol is picked on the Devices tab), and
-      // to view the Sun/Moon pads on the 3D anatomy model.
-      final hasMarkers = (result['markers'] as List?)?.isNotEmpty ?? false;
-      _showChips([
-        _ChipAction(Icons.play_arrow_rounded, 'Start session',
-            () => context.go(RoutePaths.devices),
-            hot: true),
-        if (hasMarkers)
-          _ChipAction(
-              Icons.view_in_ar_rounded, '3D pad placement', _open3DPlacement),
-      ]);
+      placement = await ref.read(recoveryEngineRemoteSourceProvider).resolve(
+            generation: dispatch.generation,
+            goal: goal.value,
+            region: region.region,
+            regionLabel: region.label,
+            side: _recoverySide,
+            movementTest: _recoveryMovementTest,
+            movementTestSkipped: _recoveryTestSkipped,
+            aspect: _recoveryAspect,
+            referralTarget: _recoveryReferral,
+            referralSide: _recoveryReferralSide,
+            // Every authored flag, answered NO, from the screen's own keys —
+            // not `{}`, which is the different statement "not asked".
+            redFlags: dispatch.screen.allFlagsNo,
+            nerveReferral: _nerveReferral,
+            motorWeakness: _motorWeakness,
+            bladderBowelChange: _bladderBowelChange,
+            sessionId: ref.read(performanceSessionIdProvider),
+          );
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _typing = false;
-        _messages.add(_Msg(false, 'Couldn’t generate the pad placement: $e'));
-      });
-      _scrollToEnd();
+      await _failStep(
+          'Couldn’t generate the pad placement', _finishAssessment, e);
+      return;
     }
+    if (!mounted) return;
+    setState(() => _typing = false);
+
+    // A refer-out, or nothing authored for this combination. Both come back 200
+    // with no sets, and neither may open the 3D view.
+    if (!placement.hasPads) {
+      await _ai(placement.emptyReason);
+      if (!mounted) return;
+      _showChips([
+        _ChipAction(Icons.waves_rounded, 'Try another area', _askRegion),
+        _ChipAction(Icons.tune_rounded, 'Change goal', _askGoal),
+      ]);
+      return;
+    }
+
+    await _showRecoveryPlacement(placement);
   }
 
-  /// Opens the 3D Sun/Moon pad-placement viewer for the last generated
-  /// placement (port of the web `AnatomyScene`).
-  void _open3DPlacement() {
-    final placement = _lastPlacement;
-    if (placement == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PadPlacement3DScreen(
-          placement: placement,
-          title: _assessmentArea == null
-              ? '3D Pad Placement'
-              : '3D Pad Placement — $_assessmentArea',
-        ),
-      ),
-    );
+  Future<void> _showRecoveryPlacement(RecoveryPlacement placement) async {
+    // The compliance-authored client sentence, rendered VERBATIM. The backend
+    // owns this wording on purpose and it is never rephrased here.
+    final claim = placement.wellnessClaim.trim();
+    await _ai(claim.isEmpty
+        ? 'Placements ready for ${placement.payload.displayName}.'
+        : claim);
+    if (!mounted) return;
+
+    setState(() => _messages.add(_Msg.card(placement.payload)));
+    _scrollToEnd();
+
+    // The thermal mode is a RECOMMENDATION and the device is not driven from
+    // it, so it is said in words next to the card rather than pre-set anywhere.
+    final thermal = [
+      if (placement.thermalMode.trim().isNotEmpty)
+        '${placement.thermalLabel} recommended',
+      if (placement.thermalRationale.trim().isNotEmpty)
+        placement.thermalRationale.trim(),
+    ].join(' — ');
+    if (thermal.isNotEmpty) await _ai(thermal);
+    if (!mounted) return;
+
+    if (placement.cautions.isNotEmpty) {
+      await _ai('⚠ ${placement.cautions.join(' · ')}');
+      if (!mounted) return;
+    }
+
+    // The spec delays these by ~600 ms so the card lands first.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+    _showChips([
+      _ChipAction(Icons.play_arrow_rounded, 'Start session',
+          () => context.go(RoutePaths.devices),
+          hot: true),
+      _ChipAction(Icons.waves_rounded, 'Another area', _askRegion),
+      _ChipAction(Icons.tune_rounded, 'Change goal', _askGoal),
+    ]);
   }
 
   /// Registers the picked recovery area into the shared guided-assessment state
@@ -983,206 +1408,47 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return;
     }
 
+    // WHAT THE FLOW ACTUALLY ASKED, and nothing it did not.
+    //
+    // The discomfort level, the behaviour and the duration used to come from
+    // three chat questions this pathway no longer asks. Their old fallbacks —
+    // `0`, "comes and goes", "less than 6 weeks" — are still what the record
+    // carries, but they are now DEFAULTS rather than answers, so they are not
+    // dressed up as findings in the notes. Someone reading the area of focus
+    // should be able to tell an unanswered field from a reported one.
     final notes = [
-      if ((_answers['romTest'] ?? '').isNotEmpty) 'ROM: ${_answers['romTest']}',
-      if ((_answers['sensation'] ?? '').isNotEmpty)
-        'Feels: ${_answers['sensation']}',
+      if (_recoveryGoal != null) 'Goal: ${_recoveryGoal!.label}',
+      if ((_answers['movementTest'] ?? '').isNotEmpty)
+        'Movement: ${_answers['movementTest']}',
+      if ((_recoveryReferral ?? '').isNotEmpty)
+        'Travels to: ${_titleCase(_recoveryReferral!)}',
     ].join(' · ');
 
     ref.read(guidedAssessmentProvider.notifier).addArea(
           DiscomfortAreaInput(
             bodyPart: area,
-            side: _sideEnum(area),
-            discomfortBefore: int.tryParse(_answers['level'] ?? '') ?? 0,
-            behavior: enumFromValue(DiscomfortBehavior.values,
-                    _answers['behavior'], (e) => e.value) ??
-                DiscomfortBehavior.comesAndGoes,
-            temporalDuration: enumFromValue(TemporalDuration.values,
-                    _answers['duration'], (e) => e.value) ??
-                TemporalDuration.lessThan6Weeks,
+            side: _sideEnum(),
+            discomfortBefore: 0,
+            behavior: DiscomfortBehavior.comesAndGoes,
+            temporalDuration: TemporalDuration.lessThan6Weeks,
             notes: notes.isEmpty ? null : notes,
           ),
         );
   }
 
-  static DiscomfortSide _sideEnum(String area) {
-    final n = area.toLowerCase();
-    if (n.contains('left')) return DiscomfortSide.left;
-    if (n.contains('right')) return DiscomfortSide.right;
-    return DiscomfortSide.both;
-  }
-
-  /// Maps the recovery chat answers to the `AssessmentPayload` (`{ state,
-  /// learningCases, persist }`) the endpoint expects.
-  ///
-  /// The Node rules engine (`@hydrawav3/placement-core`) only returns a
-  /// recommendation once `getNextQuestion(state)` is satisfied, and it matches
-  /// on **canonical IDs** — a body-map label like "Lower Back" or a goal of
-  /// "recovery" is not recognized and yields `recommendation: null`. So we map
-  /// the picked area → engine `region` id + `side` id and use `goal:
-  /// 'performance'`, which the engine infers as `sessionIntent: 'recovery'` and
-  /// routes through the direct ROM/recovery handler (covers every region).
-  Map<String, dynamic> _buildAssessmentPayload() {
-    final area = _assessmentArea ?? '';
-    final client = ref.read(selectedClientProvider);
-    final isGuest =
-        ref.read(sessionClientModeProvider) == ClientMode.guest ||
-            client == null;
-    final rom = _answers['romTest'] ?? '';
-    final sensation = _answers['sensation'] ?? '';
-
-    final regionId = _regionId(area);
-    final sideId = _sideId(area);
-
-    final state = <String, dynamic>{
-      'subscriptionTier': '',
-      'clientMode': isGuest ? 'guest' : 'client',
-      'clientName': isGuest ? 'Guest' : client.clientName,
-      'clientNotes': '',
-      // Recovery flow → 'performance' goal + 'recovery' session intent, which
-      // routes through the engine's direct ROM/recovery placement handler.
-      // Sending sessionIntent explicitly leaves getNextQuestion with nothing
-      // outstanding (the engine would otherwise only infer it internally).
-      'goal': 'performance',
-      'sessionIntent': 'recovery',
-      // Canonical engine region id (falls back to the raw label so an
-      // unmapped area still round-trips as an "unsupported" recommendation).
-      'region': regionId.isNotEmpty ? regionId : area,
-      'side': sideId,
-      // Engine only needs this truthy to mark the movement screen complete.
-      'movementInstructionDone': rom.isNotEmpty ? rom : 'done',
-      'movementResponse': _movementResponseId(sensation),
-      // Region-specific fields the engine requires to resolve these areas.
-      if (regionId == 'knee') 'kneeLocation': 'anterior',
-      if (regionId == 'ankle_foot')
-        'ankleFootZone': area.toLowerCase().contains('foot') ? 'foot' : 'ankle',
-      'dailyActivities': [
-        if ((_answers['activity'] ?? '').isNotEmpty) _answers['activity'],
-      ],
-      'sleepPosture': '',
-      'worseFactors': [
-        if ((_answers['worse'] ?? '').isNotEmpty) _answers['worse'],
-      ],
-      'betterFactors': [
-        if ((_answers['better'] ?? '').isNotEmpty) _answers['better'],
-      ],
-      'positionTolerance': '',
-      'hipTightness': '',
-      'missingRemark': '',
-      'assessmentAreaDetails': {
-        area: {
-          'level': int.tryParse(_answers['level'] ?? '') ?? 0,
-          'behavior': _answers['behavior'] ?? '',
-          'duration': _answers['duration'] ?? '',
-          'notes': '',
-        },
-      },
-      'assessmentFindings': [
-        {
-          'id': 'finding-1',
-          'motionId': '',
-          'motionTitle': rom,
-          'affectedPart': area,
-          'sensations': [if (sensation.isNotEmpty) sensation],
-        },
-      ],
-    };
-
-    return {'state': state, 'learningCases': const [], 'persist': false};
-  }
-
-  /// Maps a body-map area label to the engine's canonical `region` id. Returns
-  /// '' for areas the engine has no placement rules for (head/chest/abdomen).
-  static String _regionId(String area) {
-    final n = area.toLowerCase();
-    if (n.contains('neck')) return 'neck';
-    if (n.contains('shoulder')) return 'shoulder';
-    if (n.contains('upper back') || n.contains('mid back')) return 'upper_back';
-    if (n.contains('lower back') || n.contains('low back')) return 'low_back';
-    if (n.contains('hip')) return 'hip';
-    if (n.contains('knee')) return 'knee';
-    if (n.contains('elbow')) return 'elbow';
-    // Check the specific arm segments before the generic "arm" fallback.
-    if (n.contains('wrist') ||
-        n.contains('forearm') ||
-        n.contains('lower arm') ||
-        n.contains('hand')) {
-      return 'forearm_wrist';
+  /// The side the practitioner ACTUALLY chose, not one parsed back out of a
+  /// label. The authored region ids carry no side ("knee", never "Left Knee"),
+  /// so there is nothing in the label to read.
+  DiscomfortSide _sideEnum() {
+    switch (_recoverySide) {
+      case 'left':
+        return DiscomfortSide.left;
+      case 'right':
+        return DiscomfortSide.right;
+      default:
+        return DiscomfortSide.both;
     }
-    if (n.contains('ankle') || n.contains('foot')) return 'ankle_foot';
-    if (n.contains('arm')) return 'shoulder'; // upper arm → shoulder/arm region
-    return '';
   }
-
-  /// Engine `side` id. Bilateral regions (e.g. neck) still require a valid side,
-  /// so midline/unknown areas default to 'right'.
-  static String _sideId(String area) {
-    final n = area.toLowerCase();
-    if (n.contains('left')) return 'left';
-    return 'right';
-  }
-
-  /// Maps a felt-sensation label to the engine's `movementResponse` id (used for
-  /// caution text). Optional for the recovery path, but keeps parity.
-  static String _movementResponseId(String sensation) {
-    final s = sensation.toLowerCase();
-    if (s.contains('tight') || s.contains('stiff')) return 'stretch_tight';
-    if (s.contains('achy') || s.contains('heavy') || s.contains('fatigued')) {
-      return 'contract_guard';
-    }
-    if (s.contains('sharp') || s.contains('burning')) return 'pinch_catch';
-    if (s.contains('tingling') || s.contains('numb')) return 'weak_unstable';
-    return 'stretch_tight';
-  }
-
-  /// A readable summary of the pad-placement response. The Node engine returns
-  /// `{ engine, nextQuestion, recommendation: { title, summary, sets: [{ sun,
-  /// moon }], caution, nextStep }, markers }`.
-  String _placementSummary(Map<String, dynamic> r) {
-    final rec = r['recommendation'];
-    if (rec is! Map) {
-      // No rules for this area (or state still incomplete) — engine returned null.
-      return 'I couldn’t generate a pad placement for this area yet. Try a '
-          'different area, or set it up manually on the Devices tab.';
-    }
-
-    final title = rec['title']?.toString() ?? '';
-    final summary = rec['summary']?.toString() ?? '';
-    final sets = rec['sets'] is List ? rec['sets'] as List : const [];
-    final caution = rec['caution']?.toString() ?? '';
-    final nextStep = rec['nextStep']?.toString() ?? '';
-
-    final b = StringBuffer('Here’s the Sun & Moon pad placement.\n');
-    if (title.isNotEmpty) b.writeln('\n$title');
-    if (summary.isNotEmpty) b.writeln(summary);
-
-    if (sets.isNotEmpty) {
-      b.writeln('\nPlacements:');
-      for (final s in sets) {
-        if (s is! Map) continue;
-        final st = s['title']?.toString() ?? 'Set';
-        final sun = s['sun'] is Map ? (s['sun']['label']?.toString() ?? '') : '';
-        final moon =
-            s['moon'] is Map ? (s['moon']['label']?.toString() ?? '') : '';
-        b.writeln('• $st');
-        if (sun.isNotEmpty) b.writeln('   ☀ Sun — $sun');
-        if (moon.isNotEmpty) b.writeln('   ☾ Moon — $moon');
-        final setting = s['setting']?.toString() ?? '';
-        if (setting.isNotEmpty && setting != 'Normal') {
-          b.writeln('   Setting: $setting');
-        }
-      }
-    }
-
-    if (caution.trim().isNotEmpty) b.writeln('\n⚠ ${caution.trim()}');
-    if (nextStep.isNotEmpty) b.writeln('\n$nextStep');
-
-    final out = b.toString().trim();
-    return out.isEmpty
-        ? 'Pad placement is ready. Tap Start session to continue.'
-        : out;
-  }
-
 
   /// An icon for a ROM movement test.
   static IconData _romIcon(String name) {
@@ -1211,12 +1477,10 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     final text = _input.text.trim();
     if (text.isEmpty) return;
     _input.clear();
-    // If we're waiting on a manual ROM entry, this becomes the movement test.
-    if (_awaitingManualRom) {
-      _awaitingManualRom = false;
-      _pickRom(_manualRomArea ?? _assessmentArea ?? 'the area', text);
-      return;
-    }
+    // The manual movement-test entry is gone. The engine selects on the test a
+    // point is AUTHORED against, so a typed movement that is not on the region's
+    // menu matches nothing — a no-match dressed up as a question the user was
+    // invited to answer. A typed message goes to the chat surface like any other.
     _me(text);
     // Two chatbots, one input box. A typed message must reach the surface the
     // conversation is actually on: the recovery corpus can't answer "hamstring
@@ -1457,7 +1721,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (reply.isRefusal) {
       if (reply.reply.trim().isEmpty) return _refusal(null);
       _showChips([
-        _ChipAction(Icons.waves_rounded, 'Try another area', _showAreas),
+        _ChipAction(Icons.waves_rounded, 'Try another area', _askRegion),
         _ChipAction(Icons.home_rounded, 'Start over', _startOver),
       ]);
       return;
@@ -1490,7 +1754,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         _ChipAction(Icons.play_arrow_rounded, 'Start session',
             () => context.go(RoutePaths.devices),
             hot: true),
-        _ChipAction(Icons.waves_rounded, 'Another area', _showAreas),
+        _ChipAction(Icons.waves_rounded, 'Another area', _askRegion),
       ]);
       return;
     }
@@ -1500,7 +1764,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           'area and how it feels, or pick an area below.');
     }
     _showChips([
-      _ChipAction(Icons.waves_rounded, 'Pick an area', _showAreas),
+      _ChipAction(Icons.waves_rounded, 'Pick an area', _askGoal),
       _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
     ]);
   }
@@ -1539,6 +1803,55 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
             }
         ],
     };
+  }
+
+  /// `low-back` / `medial` → `Low back` / `Medial`. The engine's ids are the
+  /// contract and the labels are for reading, so they are derived here and the
+  /// id is never reconstructed back out of a label.
+  static String _titleCase(String key) {
+    final s = key.replaceAll(RegExp(r'[-_]+'), ' ').trim();
+    if (s.isEmpty) return '';
+    return '${s[0].toUpperCase()}${s.substring(1)}';
+  }
+
+  /// Aspect labels in the words a client would use, not the enum.
+  static String _aspectLabel(String aspect) {
+    const labels = {
+      'anterior': 'Front',
+      'posterior': 'Back',
+      'medial': 'Inner',
+      'lateral': 'Outer',
+      'palmar': 'Palm',
+      'plantar': 'Sole',
+      'dorsal': 'Top / back of hand',
+      'superior': 'Upper',
+      'inferior': 'Lower',
+    };
+    return labels[aspect.toLowerCase()] ?? _titleCase(aspect);
+  }
+
+  static IconData _goalIcon(RecoveryGoal goal) {
+    switch (goal.value) {
+      case 'range_of_motion':
+        return Icons.open_in_full_rounded;
+      case 'performance_recovery':
+        return Icons.fitness_center_rounded;
+      case 'lymphatic_activation':
+        return Icons.water_drop_outlined;
+      default:
+        return Icons.healing_outlined;
+    }
+  }
+
+  static IconData _sideIcon(String side) {
+    switch (side.toLowerCase()) {
+      case 'left':
+        return Icons.turn_left_rounded;
+      case 'right':
+        return Icons.turn_right_rounded;
+      default:
+        return Icons.swap_horiz_rounded;
+    }
   }
 
   /// An icon for a body area (keyword-mapped; falls back to a body figure).
