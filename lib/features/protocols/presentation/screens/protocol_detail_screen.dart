@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1552,8 +1553,11 @@ Map<String, dynamic> _protocolToRs35Payload(
     p,
     advancedSettings,
   );
-  final totalDuration =
-      _computeFirmwareTotalDurationSeconds(p, advancedSettings);
+  final totalDuration = _computeFirmwareTotalDurationSeconds(
+    p,
+    advancedSettings,
+    applyStartDelay: applyStartDelay,
+  );
 
   return {
     'mac': mac,
@@ -1586,40 +1590,45 @@ Map<String, dynamic> _protocolToRs35Payload(
 
 int _computeFirmwareTotalDurationSeconds(
   Protocol p,
-  AdvancedSettings advancedSettings,
-) {
+  AdvancedSettings advancedSettings, {
+  bool applyStartDelay = false,
+}) {
   final cycles = p.cycles;
   if (cycles.length < 3) return p.totalDurationSeconds;
-
-  // Match web calculateFirmwareTotalDuration behavior.
-  final c2 = cycles[0];
-  final c3 = cycles[1];
-  final c4 = cycles[2];
-  int baseTimeline =
-      (c2.repetitions * ((c2.durationSeconds + c2.pauseSeconds).toInt())) +
-          c2.cyclePause.toInt() +
-          (c3.repetitions * ((c3.durationSeconds + c3.pauseSeconds).toInt())) +
-          c3.cyclePause.toInt() +
-          (c4.repetitions * ((c4.durationSeconds + c4.pauseSeconds).toInt()));
-
-  if (p.sessions > 1) {
-    baseTimeline = (baseTimeline * p.sessions) +
-        (p.sessionPause.toInt() * (p.sessions - 1));
-  }
 
   final edgeCycleDuration = _effectiveEdgeCycleDurationSeconds(
     p,
     advancedSettings,
   );
 
+  int total = applyStartDelay ? advancedSettings.startDelay : 0;
+
   if (advancedSettings.cycle1Initiation) {
-    baseTimeline += edgeCycleDuration + 30;
-  }
-  if (advancedSettings.cycle5Completion) {
-    baseTimeline += edgeCycleDuration + 30;
+    total += edgeCycleDuration + 30;
   }
 
-  return baseTimeline;
+  for (var session = 0; session < p.sessions; session++) {
+    for (var i = 0; i < 3; i++) {
+      final c = cycles[i];
+      final reps = max(1, c.repetitions);
+      total += reps * c.durationSeconds.toInt();
+      total += (reps - 1) * c.pauseSeconds.toInt();
+
+      if (i < 2) {
+        total += c.cyclePause.toInt();
+      }
+    }
+
+    if (session < p.sessions - 1) {
+      total += p.sessionPause.toInt();
+    }
+  }
+
+  if (advancedSettings.cycle5Completion) {
+    total += 30 + edgeCycleDuration;
+  }
+
+  return total;
 }
 
 int _effectiveEdgeCycleDurationSeconds(

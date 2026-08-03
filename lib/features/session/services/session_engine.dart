@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -2508,48 +2509,48 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
   int _computeFirmwareTotalDurationSeconds(
     Protocol p,
-    AdvancedSettings advancedSettings,
-  ) {
+    AdvancedSettings advancedSettings, {
+    bool applyStartDelay = false,
+  }) {
     final cycles = p.cycles;
     // No cycles to compute from (e.g. a Protocol Plus parent entry) → fall back
     // to the server-provided total. Real sub-protocols always carry cycles here.
     if (cycles.isEmpty) return p.totalDurationSeconds;
 
-    // Mirror web calculateFirmwareTotalDuration: sum EVERY cycle's active time,
-    // adding the trailing inter-cycle pause for all cycles except the last. The
-    // old code summed only the first three cycles and, for <3-cycle protocols,
-    // returned the server's nominal totalDuration — which could leak a whole-
-    // sequence (Protocol Plus) total into a single sub-protocol's firmware
-    // command, making the firmware's self-stop clock run far past the app's
-    // "completed" so the device kept running.
-    int baseTimeline = 0;
-    for (var i = 0; i < cycles.length; i++) {
-      final c = cycles[i];
-      baseTimeline +=
-          c.repetitions * ((c.durationSeconds + c.pauseSeconds).toInt());
-      if (i < cycles.length - 1) {
-        baseTimeline += c.cyclePause.toInt();
-      }
-    }
-
-    if (p.sessions > 1) {
-      baseTimeline = (baseTimeline * p.sessions) +
-          (p.sessionPause.toInt() * (p.sessions - 1));
-    }
-
+    // Match the firmware payload semantics used by the web implementation.
     final edgeCycleDuration = _effectiveEdgeCycleDurationSeconds(
       p,
       advancedSettings,
     );
 
+    int total = applyStartDelay ? advancedSettings.startDelay : 0;
+
     if (advancedSettings.cycle1Initiation) {
-      baseTimeline += edgeCycleDuration + 30;
-    }
-    if (advancedSettings.cycle5Completion) {
-      baseTimeline += edgeCycleDuration + 30;
+      total += edgeCycleDuration + 30;
     }
 
-    return baseTimeline;
+    for (var session = 0; session < p.sessions; session++) {
+      for (var i = 0; i < 3; i++) {
+        final c = cycles[i];
+        final reps = max(1, c.repetitions);
+        total += reps * c.durationSeconds.toInt();
+        total += (reps - 1) * c.pauseSeconds.toInt();
+
+        if (i < 2) {
+          total += c.cyclePause.toInt();
+        }
+      }
+
+      if (session < p.sessions - 1) {
+        total += p.sessionPause.toInt();
+      }
+    }
+
+    if (advancedSettings.cycle5Completion) {
+      total += 30 + edgeCycleDuration;
+    }
+
+    return total;
   }
 
   bool _shouldApplyStartDelay({
@@ -2568,11 +2569,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     AdvancedSettings advancedSettings, {
     required bool applyStartDelay,
   }) {
-    final baseDuration = _computeFirmwareTotalDurationSeconds(
+    return _computeFirmwareTotalDurationSeconds(
       p,
       advancedSettings,
+      applyStartDelay: applyStartDelay,
     );
-    return baseDuration + (applyStartDelay ? advancedSettings.startDelay : 0);
   }
 
   int _effectiveEdgeCycleDurationSeconds(
