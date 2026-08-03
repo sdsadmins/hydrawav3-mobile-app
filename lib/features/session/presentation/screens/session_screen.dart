@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,8 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/storage/preferences.dart';
+import '../../../../core/theme/widgets/hw_info_dialog.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -25,13 +26,11 @@ import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
+import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
 import '../../../session/domain/active_session_model.dart' as active_session;
-import '../../../session/data/session_repository.dart';
 import '../../../session/presentation/providers/active_sessions_provider.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
-import '../../../session/presentation/providers/pending_outcomes_provider.dart';
-import '../widgets/post_session_outcomes_sheet.dart';
 import '../../../session/services/background_session_runtime.dart';
 import '../../../session/services/wifi_remote_control.dart';
 
@@ -66,7 +65,7 @@ class SessionScreen extends ConsumerStatefulWidget {
   /// 'ble' or 'wifi'
   final String transport;
 
-  /// Epoch ms when WiFi MQTT config last succeeded — aligns app timer with device.
+  /// Epoch ms when WiFi MQTT config last succeeded â€” aligns app timer with device.
   final int? sessionClockAnchorMs;
 
   final AdvancedSettings advancedSettings;
@@ -93,7 +92,7 @@ class SessionScreen extends ConsumerStatefulWidget {
   final bool protocolPlusPending;
 
   /// Live REMOTE VIEW of a foreign WiFi session (started on the web or another
-  /// phone). When true, no local SessionEngine is bootstrapped — timers/pads/
+  /// phone). When true, no local SessionEngine is bootstrapped â€” timers/pads/
   /// status come from the org-wide live feed ([liveSessionsProvider]) and
   /// Pause/Resume/Stop go through [wifiRemoteControlProvider]. [backendSessionId]
   /// is the live-feed session id to display.
@@ -127,8 +126,23 @@ class SessionScreen extends ConsumerStatefulWidget {
   ConsumerState<SessionScreen> createState() => _SessionScreenState();
 }
 
+/// Live-session chrome uses the UI handoff's palette (`RefPalette`), the same
+/// tokens the Hub, More, pad map and AI report already use — this screen was the
+/// last large surface still on `ThemeConstants`, which made it read as a
+/// different product. The engine, BLE, Protocol Plus and server-sync code above
+/// the widget builders is untouched; only colours changed.
+///
+/// One mapping worth knowing: `ThemeConstants.accent` became `copperInk` rather
+/// than `copper`. `copper` (#C69E83) is the handoff's fill tone and is too light
+/// for the text and icons this screen uses it for; `copperInk` (#8A5F42) stays
+/// legible everywhere and still reads as copper on a stroke.
 class _SessionScreenState extends ConsumerState<SessionScreen>
     with WidgetsBindingObserver {
+  /// The handoff palette for the current theme. A getter rather than a local in
+  /// every builder: this State has ~20 widget methods and threading a palette
+  /// argument through all of them would be noise.
+  RefPalette get pal => RefPalette.of(context);
+
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
   ProviderSubscription<SessionEngineState>? _engineSub;
@@ -136,19 +150,43 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       _bleConnectionSub;
   bool _startingSession = false;
   bool _terminalSessionCleanupInFlight = false;
-  bool _outcomesPromptShown = false;
+  bool _navigatedToAfter = false;
   String? _activeSessionId;
-  String? _historySnapshotSessionId;
   late final String _engineKey;
 
   Timer? _padPollTimer;
+
+  /// Per-device grace timers for the "device is not in range" popup. Armed on a
+  /// connectedâ†’disconnected edge, cancelled if the unit comes back.
+  final Map<String, Timer> _outOfRangeTimers = {};
+
+  /// Remaining time frozen at the moment a device was paused, keyed by device
+  /// id. Cleared on resume/stop. See the pause branch in
+  /// [_buildDeviceSessionCard].
+  final Map<String, Duration> _pausedRemainingByDevice = {};
+
+  /// One out-of-range dialog at a time, and the device it is about (so it can be
+  /// dismissed when that device reconnects).
+  String? _outOfRangeDialogDeviceId;
+
+  /// The out-of-range dialog route's own context, used to close it precisely.
+  BuildContext? _outOfRangeDialogContext;
+
+  /// How long a bound device must stay gone before we tell the user it's out of
+  /// range. The connector auto-reconnects up to `maxReconnectAttempts` (5) with
+  /// a `reconnectDelay * attempt` backoff (~9s of delay in total) and
+  /// AutoConnectManager restarts a scan on the same edge, so waiting 12s means
+  /// the popup only appears once that built-in recovery has genuinely failed.
+  /// It also silently covers the connector's OWN disconnectâ†’reconnect during
+  /// write recovery (350ms + connect â‰¤6s), which must never raise a popup.
+  static const Duration _kOutOfRangeGrace = Duration(seconds: 12);
 
   final Map<String, String> _deviceLabelById = {};
 
   /// Captured in initState so it can be disposed without touching `ref` later.
   ProtocolPlusController? _protocolPlusController;
 
-  /// Session "Atmosphere" music — captured in initState so play/pause can be
+  /// Session "Atmosphere" music â€” captured in initState so play/pause can be
   /// driven from lifecycle/status callbacks and stopped on dispose.
   SessionMusicController? _musicController;
 
@@ -157,7 +195,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   bool _isForeground = true;
 
   /// Guards the one-time socket connect (bindings can arrive synchronously via
-  /// the widget or late via [protocolPlusBindingsProvider] — connect only once).
+  /// the widget or late via [protocolPlusBindingsProvider] â€” connect only once).
   bool _plusSocketConnected = false;
 
   /// The bindings this screen actually wired its socket with. For the instant-UI
@@ -176,18 +214,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Subscription to the normal-run backend sessionId delivery provider.
   ProviderSubscription<String?>? _normalServerIdSub;
 
-  /// One-shot guard so the normal-run backend stop POST fires at most once.
+  /// One-shot guard for the "backend session vanished from the feed → stop the
+  /// local engine too" reconcile. Ending the backend session itself is the
+  /// ENGINE's job now ([SessionEngine._endBackendSessionOnce]), so it happens
+  /// even when this screen isn't mounted.
   bool _normalServerStopped = false;
+
+  /// One-shot guard so the session-setup reset (clears the guided-assessment
+  /// area of focus so Start is disabled again) fires at most once per terminal.
+  bool _setupResetAfterStop = false;
 
   /// One-shot guard for the pad-poll diagnostic log.
   bool _padDiagLogged = false;
 
-  /// Whether this run's backend session has appeared in the live feed — lets us
+  /// Whether this run's backend session has appeared in the live feed â€” lets us
   /// tell "not started yet" from "stopped remotely" (web/another device).
   bool _backendSessionSeen = false;
 
   /// Last backend status we reconciled, so remote pause/resume is applied only
-  /// on an actual transition (edge-triggered) — never level-triggered off the
+  /// on an actual transition (edge-triggered) â€” never level-triggered off the
   /// 1s poll, which would fight a local pause during the backend round-trip.
   active_session.SessionStatus? _lastRemoteStatus;
 
@@ -196,7 +241,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// status disagree, and the device can briefly drop from a frame), so the
   /// reconciled `remote` oscillates between the old and new value. Without this
   /// guard each flap is treated as a fresh remote command and reverses the
-  /// user's own button — pause, resume, pause… for a few seconds until the
+  /// user's own button â€” pause, resume, pauseâ€¦ for a few seconds until the
   /// backend settles. While this window is open we ignore any backend status
   /// that contradicts the local engine; genuine remote actions still apply once
   /// the backend agrees with us or the window elapses.
@@ -214,7 +259,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Human-readable label for a device. Prefers a LOCALLY-known name (paired
   /// BLE / org WiFi), then the backend live-feed's registered [fallbackName]
-  /// (the only source for a FOREIGN BLE session — we aren't bonded to its
+  /// (the only source for a FOREIGN BLE session â€” we aren't bonded to its
   /// devices, so they're not in the local paired map), and only shows the raw
   /// id as a last resort.
   String _deviceLabel(String id, {String? fallbackName}) {
@@ -236,7 +281,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
 
     // REMOTE VIEW: this screen mirrors a foreign WiFi session from the org-wide
-    // live feed — there is no local engine to bootstrap, listen to, or sync.
+    // live feed â€” there is no local engine to bootstrap, listen to, or sync.
     // Just make sure the feed is running and load device labels; build() reads
     // everything from [liveSessionsProvider] and routes controls to the remote
     // control service. Keep the screen awake while viewing a live run.
@@ -303,10 +348,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         for (final deviceId in widget.deviceIds) {
           final previousStatus = previousStates[deviceId];
           final currentStatus = nextStates[deviceId];
+
+          // Back in range â†’ drop the pending warning and close one already up.
+          if (currentStatus == BleConnectionStatus.connected &&
+              previousStatus != BleConnectionStatus.connected) {
+            _cancelOutOfRangeWarning(deviceId);
+            continue;
+          }
+
           if (!_isDisconnectTransition(previousStatus, currentStatus)) {
             continue;
           }
           unawaited(_handleBleDisconnect(deviceId));
+          _armOutOfRangeWarning(deviceId);
         }
       },
     );
@@ -357,7 +411,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
         // If the engine for this session is already live (e.g. re-opening a
         // running WiFi / Protocol-Plus session from the active-sessions card),
-        // never try to reload it — for a Plus run the loaded sub-protocol id
+        // never try to reload it â€” for a Plus run the loaded sub-protocol id
         // never equals the stack protocolId, so engineMatchesTarget is always
         // false and the reload path below would otherwise tear down the live
         // controls. Fall through to the re-sync so the controls re-attach.
@@ -389,10 +443,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           // Resolve the selected protocol per device (no fallback: every device must have one).
           if (widget.protocolByDeviceId.isEmpty) {
             // Re-attach path (e.g. re-opening from the active-sessions card)
-            // carries no per-device protocol map. Don't crash the setup — abort
+            // carries no per-device protocol map. Don't crash the setup â€” abort
             // the reload and leave the existing engine/session running.
             appLogger.w(
-                'Skipping engine reload — no protocolByDeviceId (re-attach).');
+                'Skipping engine reload â€” no protocolByDeviceId (re-attach).');
             return;
           }
 
@@ -475,7 +529,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     // Reconcile the local engine with remote stop/pause/resume: when this run's
     // backend session is paused/resumed/stopped from the web or another device,
-    // the org-wide feed reflects it (via the /sessions socket) — apply it here
+    // the org-wide feed reflects it (via the /sessions socket) â€” apply it here
     // so the timer screen mirrors everywhere (web parity).
     _liveSessionsSub = ref.listenManual<List<active_session.ActiveSession>>(
       liveSessionsProvider,
@@ -502,7 +556,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   void _initProtocolPlus() {
     if (!mounted) return;
 
-    // Case 1: bindings already known — synchronous launch / history re-open /
+    // Case 1: bindings already known â€” synchronous launch / history re-open /
     // the single-device legacy fields. Connect straight away.
     final immediate = _resolveImmediateBindings();
     if (immediate.isNotEmpty) {
@@ -510,7 +564,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       return;
     }
 
-    // Case 2: instant-UI launch — registration is still in flight. Watch the
+    // Case 2: instant-UI launch â€” registration is still in flight. Watch the
     // delivery provider and connect the moment the server bindings arrive.
     if (widget.protocolPlusPending) {
       final sessionId = widget.sessionId ?? _engineKey;
@@ -609,7 +663,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         widget.protocolPlusPending ||
         _resolvedPlusBindings.isNotEmpty;
     // `controller` is only set once the socket is wired (bindings in hand), so
-    // before that there is nothing on the server to pause/resume/stop yet — the
+    // before that there is nothing on the server to pause/resume/stop yet â€” the
     // terminal-before-connect case is handled in [_connectProtocolPlus].
     if (controller == null || !hasPlus || prevS == nextS) {
       return;
@@ -629,7 +683,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Track the backend sessionId for a normal (non-Plus) run. It's published to
   /// [normalServerSessionIdProvider] after the async `/sessions/start` POST, so
-  /// it may already be present or arrive slightly later — handle both.
+  /// it may already be present or arrive slightly later â€” handle both.
   void _initNormalServerSync() {
     final key = widget.sessionId ?? _engineKey;
     final current = ref.read(normalServerSessionIdProvider(key));
@@ -665,7 +719,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Mirror a remote stop/pause/resume onto the local engine for a NORMAL run.
   /// Pause/resume reconcile the UI only (the remote client already commanded the
-  /// device — Wi-Fi via MQTT); a remote stop ends the run locally too.
+  /// device â€” Wi-Fi via MQTT); a remote stop ends the run locally too.
   void _reconcileNormalRunFromBackend(
     List<active_session.ActiveSession> sessions,
   ) {
@@ -681,18 +735,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     }
 
-    final engineCtrl = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
-    final localStatus = ref.read(sessionEngineFamilyProvider(_engineKey)).status;
+    final engineCtrl =
+        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final localStatus =
+        ref.read(sessionEngineFamilyProvider(_engineKey)).status;
     final localLive = localStatus == SessionStatus.running ||
         localStatus == SessionStatus.paused;
 
     if (backendSession == null) {
-      // Backend session is gone — stopped/finished elsewhere. End locally too,
+      // Backend session is gone â€” stopped/finished elsewhere. End locally too,
       // but only if we'd actually seen it (so we don't stop a run whose backend
       // session simply hasn't appeared in the feed yet).
       if (_backendSessionSeen && !_normalServerStopped && localLive) {
-        _normalServerStopped = true; // remote already stopped the server side
-        appLogger.i('Session: backend $backendId removed — applying remote stop');
+        _normalServerStopped = true;
+        // The server side is already stopped, so the engine must not POST a stop
+        // of its own when this local stop takes it terminal.
+        engineCtrl.markBackendSessionEnded();
+        appLogger
+            .i('Session: backend $backendId removed â€” applying remote stop');
         unawaited(engineCtrl.stop());
       }
       return;
@@ -710,7 +770,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         'local=$localStatus lastRemote=$_lastRemoteStatus';
     if (sig != _lastReconcileSig) {
       _lastReconcileSig = sig;
-      appLogger.i('Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
+      appLogger.i(
+          'Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
     }
 
     // Edge-triggered: only act when the backend status actually changes, so a
@@ -721,7 +782,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // Local action wins during its settle window: while a just-issued local
     // pause/resume is still propagating, the feed flaps between the old and new
     // status (per-device vs session-level disagree). Ignore any backend value
-    // that contradicts the local engine — and crucially do NOT advance
+    // that contradicts the local engine â€” and crucially do NOT advance
     // _lastRemoteStatus, so the matching value keeps short-circuiting above and
     // the contradicting value never edge-triggers an engine action. Genuine
     // remote changes still apply once the window elapses.
@@ -729,14 +790,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final localActive = localStatus == SessionStatus.running ||
         localStatus == SessionStatus.paused;
     if (localAction != null && localActive) {
-      if (DateTime.now().difference(localAction) < _localLifecycleSettleWindow) {
+      if (DateTime.now().difference(localAction) <
+          _localLifecycleSettleWindow) {
         if (remote != _toActiveStatus(localStatus)) {
           appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote '
               'while local=$localStatus settles');
           return;
         }
       } else {
-        // Window elapsed — drop the guard so later remote changes are honoured.
+        // Window elapsed â€” drop the guard so later remote changes are honoured.
         _localLifecycleActionAt = null;
       }
     }
@@ -755,19 +817,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       unawaited(engineCtrl.resume());
     } else {
       appLogger.i('Reconcile[$backendId]: remote changed to $remote but '
-          'local=$localStatus — no engine action');
+          'local=$localStatus â€” no engine action');
     }
-  }
-
-  /// Stop the backend session for a NORMAL run exactly once (on terminal). This
-  /// is what clears the run from every client's live feed and prevents a stale
-  /// RUNNING session lingering on the web.
-  void _stopNormalServerSession() {
-    if (_normalServerStopped) return;
-    final backendId = _normalBackendSessionId;
-    if (backendId == null || backendId.isEmpty) return;
-    _normalServerStopped = true;
-    unawaited(ref.read(sessionSyncServiceProvider).stopServerSession(backendId));
   }
 
   Future<void> _loadDeviceNames() async {
@@ -814,7 +865,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     if (appState != AppLifecycleState.resumed) return;
     // The periodic UI ticker is frozen while the app is backgrounded / the
-    // screen is off, and the monotonic clock skips deep-sleep time — so the
+    // screen is off, and the monotonic clock skips deep-sleep time â€” so the
     // displayed timer can be stale or behind the device. Ask the engine to
     // reconcile from the wall clock and restart its ticker, then re-assert the
     // keep-screen-on flag (some OEMs drop it across a background transition).
@@ -826,7 +877,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 
   /// Drive the session music gate from the current session status + foreground
-  /// state. Best-effort — the controller swallows any audio error.
+  /// state. Best-effort â€” the controller swallows any audio error.
   void _syncMusicToSession(SessionStatus status) {
     _musicController?.applyConditions(
       sessionRunning: status == SessionStatus.running,
@@ -840,7 +891,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: ThemeConstants.surface,
+      backgroundColor: pal.card,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -865,7 +916,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       Row(
                         children: [
                           Icon(Icons.graphic_eq_rounded,
-                              size: 20, color: ThemeConstants.accent),
+                              size: 20, color: pal.copperInk),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -873,7 +924,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w800,
-                                color: ThemeConstants.textPrimary,
+                                color: pal.ink,
                               ),
                             ),
                           ),
@@ -887,9 +938,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                               music.isMuted
                                   ? Icons.volume_off_rounded
                                   : Icons.volume_up_rounded,
-                              color: music.hasTrack
-                                  ? ThemeConstants.textSecondary
-                                  : ThemeConstants.textTertiary,
+                              color: music.hasTrack ? pal.ink2 : pal.ink3,
                             ),
                           ),
                         ],
@@ -899,11 +948,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         'Looping music plays while the session is running.',
                         style: TextStyle(
                           fontSize: 12,
-                          color: ThemeConstants.textSecondary,
+                          color: pal.ink2,
                         ),
                       ),
                       const SizedBox(height: 14),
-                      // "None" — clear the current selection.
+                      // "None" â€” clear the current selection.
                       _atmosphereTile(
                         icon: Icons.not_interested_rounded,
                         name: 'None',
@@ -923,8 +972,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                             padding: const EdgeInsets.symmetric(vertical: 24),
                             child: Text(
                               'Couldn\'t load music.',
-                              style:
-                                  TextStyle(color: ThemeConstants.textSecondary),
+                              style: TextStyle(color: pal.ink2),
                             ),
                           ),
                           data: (tracks) {
@@ -935,7 +983,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                 child: Text(
                                   'No music tracks available.',
                                   style: TextStyle(
-                                    color: ThemeConstants.textSecondary,
+                                    color: pal.ink2,
                                   ),
                                 ),
                               );
@@ -948,9 +996,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                   const SizedBox(height: 8),
                               itemBuilder: (_, i) {
                                 final track = tracks[i];
-                                final isActive = music.activeTrackId == track.id;
-                                final isAudible =
-                                    isActive && music.isPlaying && !music.isMuted;
+                                final isActive =
+                                    music.activeTrackId == track.id;
+                                final isAudible = isActive &&
+                                    music.isPlaying &&
+                                    !music.isMuted;
                                 return _atmosphereTile(
                                   icon: isActive
                                       ? Icons.graphic_eq_rounded
@@ -959,8 +1009,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                   selected: isActive,
                                   trailing: isAudible
                                       ? Icon(Icons.equalizer_rounded,
-                                          size: 18,
-                                          color: ThemeConstants.accent)
+                                          size: 18, color: pal.copperInk)
                                       : null,
                                   onTap: () => controller.selectTrack(track),
                                 );
@@ -994,21 +1043,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: selected
-              ? ThemeConstants.accent.withValues(alpha: 0.12)
-              : ThemeConstants.surface,
+          color: selected ? pal.copperInk.withValues(alpha: 0.12) : pal.card,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? ThemeConstants.accent : ThemeConstants.border,
+            color: selected ? pal.copperInk : pal.line,
           ),
         ),
         child: Row(
           children: [
-            Icon(icon,
-                size: 18,
-                color: selected
-                    ? ThemeConstants.accent
-                    : ThemeConstants.textTertiary),
+            Icon(icon, size: 18, color: selected ? pal.copperInk : pal.ink3),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -1018,7 +1061,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: ThemeConstants.textPrimary,
+                  color: pal.ink,
                 ),
               ),
             ),
@@ -1043,7 +1086,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         await WakelockPlus.enable();
       } else if (fromDispose) {
         // dispose() runs after the widget is unmounted, so `ref` is no longer
-        // usable — disable unconditionally (best-effort) to avoid leaking the
+        // usable â€” disable unconditionally (best-effort) to avoid leaking the
         // wakelock. A still-live session's screen re-enables it on its own.
         await WakelockPlus.disable();
       } else {
@@ -1062,12 +1105,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Music is a session-screen feature — never let it outlive the screen.
+    // Music is a session-screen feature â€” never let it outlive the screen.
     unawaited(_musicController?.stopAndReset() ?? Future<void>.value());
     unawaited(_setWakelock(false, fromDispose: true));
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
     _bleConnectionSub?.close();
+    for (final t in _outOfRangeTimers.values) {
+      t.cancel();
+    }
+    _outOfRangeTimers.clear();
     _plusBindingsSub?.close();
     _normalServerIdSub?.close();
     _liveSessionsSub?.close();
@@ -1076,7 +1123,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // the server's START_PROTOCOL switches and applying them via the
     // app-scoped SessionEngine even after the user navigates away from the
     // session screen. The socket is instead torn down when the run actually
-    // ends (stop/complete — see _maybeSyncProtocolPlusServer) or when the next
+    // ends (stop/complete â€” see _maybeSyncProtocolPlusServer) or when the next
     // session's connectAll() replaces it. The controller is an app-scoped
     // provider, so it (and its socket) survive this widget being unmounted.
     // Session engine cleanup happens automatically
@@ -1096,12 +1143,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       if (!mounted) return;
       try {
         // Source pad state + timing from the org-wide backend feed (the single
-        // source of truth) rather than a separate fetch — it already polls
+        // source of truth) rather than a separate fetch â€” it already polls
         // /sessions/active every second and parses per-device sun/moon. Match
-        // each local device to its backend device (WiFi exact mac, BLE ±1) and
+        // each local device to its backend device (WiFi exact mac, BLE Â±1) and
         // feed the backend frame into the engine keyed by the LOCAL id so the
         // per-device card picks it up (and goes grey when the backend reports
-        // the pad disabled — web parity).
+        // the pad disabled â€” web parity).
         final sessions = ref.read(liveSessionsProvider);
         final engine = ref.read(
           sessionEngineFamilyProvider(_engineKey).notifier,
@@ -1145,8 +1192,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 
   /// Find the backend live-device for a local device id across all live
-  /// sessions. Matches WiFi by exact (normalized) MAC and BLE by ±1 last byte
-  /// (units advertise on a MAC ±1 from the registered/firmware id).
+  /// sessions. Matches WiFi by exact (normalized) MAC and BLE by Â±1 last byte
+  /// (units advertise on a MAC Â±1 from the registered/firmware id).
   active_session.LiveDeviceState? _findBackendLiveDevice(
     List<active_session.ActiveSession> sessions,
     String localId,
@@ -1163,7 +1210,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// The backend session containing [localId] that the feed flagged as a
   /// Protocol Plus run (has a parsed sub-protocol sequence). Used to render the
   /// sequence tracker from the feed when the local engine has no Plus state
-  /// (web parity — any client shows a Plus run as Plus, not just the launcher).
+  /// (web parity â€” any client shows a Plus run as Plus, not just the launcher).
   active_session.ActiveSession? _findBackendPlusSession(
     List<active_session.ActiveSession> sessions,
     String localId,
@@ -1232,46 +1279,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
     appLogger.i(
         'Created new session: $_activeSessionId for devices: ${widget.deviceIds}');
-  }
-
-  Future<void> _captureSessionHistorySnapshot(SessionEngineState engine) async {
-    final sessionId = _activeSessionId;
-    if (sessionId == null || _historySnapshotSessionId == sessionId) {
-      return;
-    }
-
-    // Claim the snapshot synchronously (before any await) so concurrent
-    // engine-state listener callbacks can't each fire a duplicate save/POST
-    // while the first one is still in flight.
-    _historySnapshotSessionId = sessionId;
-
-    final auth = ref.read(authStateProvider);
-    final userId = auth.user?.id;
-    final now = DateTime.now();
-    final sessionEngine =
-        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
-    // clientType / clientId / intake come from the engine context set by the
-    // launcher (setClientContext) — guest when none was provided.
-    final record = sessionEngine.getSessionRecord(
-      sessionId: sessionId,
-      createdBy: userId,
-      updatedBy: userId,
-      createdAt: now,
-      updatedAt: now,
-      discomfortBefore: 6,
-      discomfortAfter: 2,
-      notes: 'Session started from mobile app',
-    );
-
-    if (record == null) {
-      // Couldn't build a record yet — release the claim so a later, valid
-      // engine state can retry.
-      _historySnapshotSessionId = null;
-      return;
-    }
-
-    await ref.read(sessionRepositoryProvider).saveSession(record);
-    appLogger.i('Captured session history snapshot for $sessionId');
   }
 
   bool _areDeviceListsEqual(List<String> list1, List<String> list2) {
@@ -1401,7 +1408,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
 
-    // Only update if this session's devices match the engine's current devices
+    // Only update if this session's devices match the engine's current devices.
+    // The device statuses are intentionally synced even when the session header
+    // is already terminal, because a single-device stop must immediately free
+    // that device for the next session selection UI.
     if (_areDeviceListsEqual(widget.deviceIds, engine.deviceIds)) {
       await activeSessionsNotifier.updateSessionStatus(
         _activeSessionId!,
@@ -1451,6 +1461,77 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         .handleBleDisconnect(deviceId);
   }
 
+  /// Start the countdown to telling the user this unit is out of range. The
+  /// session itself is deliberately left alone â€” the firmware keeps running the
+  /// loaded protocol after the link drops, so a walk out of range must not end
+  /// a valid treatment (see `SessionEngine.handleBleDisconnect`).
+  void _armOutOfRangeWarning(String deviceId) {
+    _outOfRangeTimers[deviceId]?.cancel();
+    _outOfRangeTimers[deviceId] = Timer(_kOutOfRangeGrace, () {
+      _outOfRangeTimers.remove(deviceId);
+      unawaited(_showOutOfRangeWarning(deviceId));
+    });
+  }
+
+  /// The unit is back (or the screen is going away): drop the pending warning
+  /// and close the dialog if it was about this device.
+  void _cancelOutOfRangeWarning(String deviceId) {
+    _outOfRangeTimers.remove(deviceId)?.cancel();
+    if (_outOfRangeDialogDeviceId != deviceId) return;
+    // Reconnected while the popup was up â€” take it away rather than making the
+    // user dismiss a message that is no longer true. Popping through the
+    // DIALOG's own context (not the screen's) means that once the user has
+    // already dismissed it, `mounted` is false and we can't pop anything else.
+    final dialogContext = _outOfRangeDialogContext;
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+  }
+
+  Future<void> _showOutOfRangeWarning(String deviceId) async {
+    if (!mounted || widget.transport != 'ble') return;
+    // One at a time. With several units gone the first message already tells
+    // the user what to do.
+    if (_outOfRangeDialogDeviceId != null) return;
+
+    // Only while the run is live â€” this screen can outlive the session.
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
+    if (engine.status != SessionStatus.running &&
+        engine.status != SessionStatus.paused) {
+      return;
+    }
+
+    final ble = ref.read(bleRepositoryProvider);
+    // Came back during the grace window (the connection-state edge may not have
+    // fired if it bounced quickly).
+    if (ble.isConnected(deviceId)) return;
+    // Deliberate drop: an in-app stop/disconnect, session-end reconnect
+    // suppression, or the connector's own mid-write recovery. None of these
+    // mean the device is out of range.
+    if (ble.isReconnectSuppressed(deviceId)) return;
+    // Wi-Fi provisioning always drops BLE â€” that's the flow working, not a fault.
+    if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
+
+    _outOfRangeDialogDeviceId = deviceId;
+    try {
+      await showHwInfoDialog(
+        context,
+        icon: Icons.bluetooth_disabled_rounded,
+        iconColor: pal.mid,
+        title: 'Your Hydrawave device is not in range',
+        message:
+            '${_deviceLabel(deviceId)} lost its Bluetooth connection. Please '
+            'move closer to the device â€” or bring it nearer to your phone â€” and '
+            'it will reconnect automatically. Your session keeps running.',
+        actionLabel: 'OK',
+        onDialogContext: (ctx) => _outOfRangeDialogContext = ctx,
+      );
+    } finally {
+      _outOfRangeDialogDeviceId = null;
+      _outOfRangeDialogContext = null;
+    }
+  }
+
   Future<void> _syncEngineStateToActiveSessions(
       SessionEngineState engine) async {
     if (_activeSessionId == null) return;
@@ -1483,8 +1564,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       protocolName:
           engine.protocol?.templateName ?? widget.protocol?.templateName,
     );
-    await _captureSessionHistorySnapshot(engine);
+    // Session draft is captured once on start by [SessionEngine._captureSessionHistoryOnce]
+    // — do NOT POST `/intake` here; finalize happens on the after-screen.
     await _syncEngineStateToActiveSessions(engine);
+  }
+
+  /// Queue the post-session snapshot. Opening `#scr-ready-after` is NOT done
+  /// here — [SessionOutcomeGate] watches the queue app-wide and presents it, so
+  /// a run that ends on this screen, on the devices list, or in remote view all
+  /// land on the same screen. Doing it in both places would stack two of them.
+  void _queuePostSessionReview() {
+    if (_navigatedToAfter || widget.remoteView) return;
+    _navigatedToAfter = true;
+    ref
+        .read(sessionEngineFamilyProvider(_engineKey).notifier)
+        .enqueuePendingOutcome();
   }
 
   Future<void> _handleTerminalSessionState(SessionEngineState engine) async {
@@ -1492,18 +1586,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         engine.status != SessionStatus.completed) {
       return;
     }
-    // End the backend session for a normal run first, so the run clears from
-    // every client's live feed even if there's no local active-session record.
-    _stopNormalServerSession();
+    // Ending the backend session is NOT done here any more — [SessionEngine]
+    // does it on the terminal transition itself, so it also happens when this
+    // screen isn't mounted. Doing it here as well meant a run that finished
+    // off-screen never cleared from the live feed, pinning its devices "In use".
 
-    // Queue the post-session review snapshot (idempotent, client-only). We do
-    // NOT auto-open the sheet here — web parity: the questions appear on the
-    // explicit Stop All / Done end-action. If the session ended off-screen, the
-    // queued snapshot surfaces as a "Needs review" card on the Live feed.
+    // Queue the post-session snapshot (idempotent). [SessionOutcomeGate] turns
+    // that into the after-screen (`#scr-ready-after` handoff parity) from
+    // wherever the user happens to be — this screen no longer navigates itself.
     if (!widget.remoteView) {
-      ref
-          .read(sessionEngineFamilyProvider(_engineKey).notifier)
-          .enqueuePendingOutcome();
+      _queuePostSessionReview();
+      if (!_setupResetAfterStop) {
+        _setupResetAfterStop = true;
+        ref.read(guidedAssessmentProvider.notifier).reset();
+      }
     }
 
     if (_terminalSessionCleanupInFlight) return;
@@ -1529,25 +1625,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     }
   }
 
-  /// Present the post-session outcomes sheet for this session (if it has a
-  /// queued review), then finalize — a single `/intake` POST with the answers,
-  /// or a bare log on Skip/dismiss. Idempotent via [_outcomesPromptShown].
-  Future<void> _promptSessionOutcomes() async {
-    if (_outcomesPromptShown) return;
-    final notifier = ref.read(pendingOutcomesProvider.notifier);
-    final pending = notifier.needsReviewById(_engineKey);
-    if (pending == null) return; // nothing queued, or already answered
-    _outcomesPromptShown = true;
-    if (!mounted) return;
-    final outcomes = await showPostSessionOutcomesSheet(
-      context,
-      protocolQuestions: pending.orderedProtocolQuestions,
-      discomfortAreas: pending.discomfortAreasForSheet,
-    );
-    // outcomes == null → Skip/dismiss: still log the session (no answers).
-    await notifier.finalize(_engineKey, outcomes);
-  }
-
   bool _isDisconnectTransition(
     BleConnectionStatus? previous,
     BleConnectionStatus? current,
@@ -1567,7 +1644,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // and (in remote view) the entire display state.
     final liveSessions = ref.watch(liveSessionsProvider);
 
-    // REMOTE VIEW mirrors a foreign WiFi session from the feed — synthesize a
+    // REMOTE VIEW mirrors a foreign WiFi session from the feed â€” synthesize a
     // read-only engine state from it so the existing UI renders unchanged.
     final engine = widget.remoteView
         ? _remoteEngineState(liveSessions)
@@ -1578,14 +1655,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final currentSession = _findTrackedSession(activeSessions);
 
     final timer = engine.timer;
-    // The local engine is authoritative for an own run in ANY non-idle state —
+    // The local engine is authoritative for an own run in ANY non-idle state â€”
     // running, paused, AND a just-reached terminal (stopped/completed). Only
     // fall back to the tracked/backend session status when the engine hasn't
     // taken over yet (idle), e.g. right after re-entering a live (WiFi) session.
     //
     // Including the terminal case is what fixes the device-pressed-stop glitch:
     // a firmware `rs:stop` flips the engine to stopped immediately, but the
-    // org-wide feed still reports the device "running" for up to a minute — so
+    // org-wide feed still reports the device "running" for up to a minute â€” so
     // without this the Stop/Pause controls would snap back to enabled until the
     // feed caught up. Trusting the engine's terminal state keeps them disabled.
     final engineAuthoritative = engine.status != SessionStatus.idle;
@@ -1606,7 +1683,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 status == SessionStatus.stopped));
     final protocol = engine.protocol;
     // During timed pause gaps the engine sets currentCycleIndex to -1, but
-    // the pads still reflect the active protocol cycle — use lastVisualCycleIndex.
+    // the pads still reflect the active protocol cycle â€” use lastVisualCycleIndex.
     final int padCycleIdx;
     if (protocol != null && protocol.cycles.isNotEmpty) {
       if (timer.currentCycleIndex >= 0 &&
@@ -1622,7 +1699,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       padCycleIdx = -1;
     }
     // Web parity: pad colors come straight from the backend per-device sun/moon
-    // (the org-wide live feed). No local cycle fallback — when the backend
+    // (the org-wide live feed). No local cycle fallback â€” when the backend
     // reports the pad off/neutral the mapping returns grey, exactly like the web.
     // Colors are resolved PER DEVICE at the card call site below.
     final orderedDeviceIds = widget.deviceIds
@@ -1653,15 +1730,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     Widget buildDeviceCard(String id, {required bool scrollable}) {
       final deviceTimer = engine.deviceTimers[id]!;
       final deviceStatus = engine.deviceStatuses[id] ?? SessionStatus.idle;
-      final perDeviceProtocolName =
-          engine.protocolByDevice[id]?.templateName ??
-              protocol?.templateName ??
-              '';
+      final perDeviceProtocolName = engine.protocolByDevice[id]?.templateName ??
+          protocol?.templateName ??
+          '';
       final backendDev = _findBackendLiveDevice(liveSessions, id);
 
       // Prefer the local engine's Plus state (it also drives the live break
       // countdown). Fall back to the BACKEND FEED's Protocol Plus info when the
-      // engine has none — so a Plus run this client didn't launch (remote view /
+      // engine has none â€” so a Plus run this client didn't launch (remote view /
       // re-opened / feed-only) still renders the sequence tracker (web parity).
       var deviceSequence =
           engine.protocolPlusSequenceByDevice[id] ?? const <String>[];
@@ -1689,7 +1765,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
       return _buildDeviceSessionCard(
         id: id,
-        // Foreign BLE devices aren't in the local paired map — fall back to the
+        // Foreign BLE devices aren't in the local paired map â€” fall back to the
         // backend feed's registered name instead of the raw bluetooth id.
         label: _deviceLabel(id, fallbackName: backendDev?.deviceName),
         protocolName: perDeviceProtocolName,
@@ -1719,12 +1795,27 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     }
 
     return Scaffold(
-      backgroundColor: ThemeConstants.background,
+      backgroundColor: pal.bg,
       appBar: AppBar(
-        title: Text(
-          widget.remoteView
-              ? 'Live: ${engine.deviceIds.length} device(s)'
-              : 'Session(${widget.deviceIds.length} Devices)',
+        // The spec's live header (app.js:1260): "Live: N device(s)" with a
+        // reassurance line, rather than "Session(N Devices)".
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Live: ${(widget.remoteView ? engine.deviceIds.length : widget.deviceIds.length)} device(s)',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: pal.ink,
+              ),
+            ),
+            Text(
+              'sessions keep running if you leave',
+              style: TextStyle(fontSize: 11, color: pal.ink3),
+            ),
+          ],
         ),
         leading: IconButton(
           icon: Icon(Icons.arrow_back_rounded),
@@ -1761,7 +1852,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Mute toggle — visible top-level control while a track is
+                  // Mute toggle â€” visible top-level control while a track is
                   // active (mirrors the web's Mute button).
                   if (music.hasTrack)
                     IconButton(
@@ -1771,12 +1862,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         music.isMuted
                             ? Icons.volume_off_rounded
                             : Icons.volume_up_rounded,
-                        color: music.isMuted
-                            ? ThemeConstants.textSecondary
-                            : ThemeConstants.accent,
+                        color: music.isMuted ? pal.ink2 : pal.copperInk,
                       ),
                     ),
-                  // Session "Atmosphere" music — accent when a track is active.
+                  // Session "Atmosphere" music â€” accent when a track is active.
                   IconButton(
                     tooltip: 'Session music',
                     onPressed: _showAtmosphereSheet,
@@ -1784,7 +1873,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       music.hasTrack
                           ? Icons.music_note_rounded
                           : Icons.music_note_outlined,
-                      color: music.hasTrack ? ThemeConstants.accent : null,
+                      color: music.hasTrack ? pal.copperInk : null,
                     ),
                   ),
                 ],
@@ -1848,9 +1937,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         height: 8,
                         decoration: BoxDecoration(
                           color: active
-                              ? ThemeConstants.accent
-                              : ThemeConstants.textTertiary
-                                  .withValues(alpha: 0.35),
+                              ? pal.copperInk
+                              : pal.ink3.withValues(alpha: 0.35),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       );
@@ -1865,7 +1953,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ],
 
             // (Session-wide Pause/Resume/Stop All now live in the top control
-            // card above the device cards — see _buildTopControlCard.)
+            // card above the device cards â€” see _buildTopControlCard.)
 
             // Device status
             if (widget.deviceIds.isNotEmpty)
@@ -1873,9 +1961,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                    color: ThemeConstants.surface,
+                    color: pal.card,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: ThemeConstants.border)),
+                    border: Border.all(color: pal.line)),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -1883,15 +1971,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         width: 8,
                         height: 8,
                         decoration: BoxDecoration(
-                            color: ThemeConstants.success,
-                            shape: BoxShape.circle)),
+                            color: pal.good, shape: BoxShape.circle)),
                     const SizedBox(width: 8),
                     Text(
                       widget.transport == 'wifi'
                           ? '${widget.deviceIds.length} WiFi device(s) selected'
                           : '${widget.deviceIds.length} device(s) connected',
                       style: TextStyle(
-                        color: ThemeConstants.textSecondary,
+                        color: pal.ink2,
                         fontSize: 13,
                       ),
                     ),
@@ -1905,10 +1992,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// Protocol Plus tracker — a horizontal route map: the sequence title on top,
-  /// then stops (stations) laid out left→right and joined by a track whose
-  /// traveled portion is filled. The active stop pulses; passed stops show ✓.
+  /// Protocol Plus tracker â€” a horizontal route map: the sequence title on top,
+  /// then stops (stations) laid out leftâ†’right and joined by a track whose
+  /// traveled portion is filled. The active stop pulses; passed stops show âœ“.
   /// Advances on each START_PROTOCOL.
+  /// SUPERSEDED by `_lcStackHeader` + `_lcSteps`, which present the same
+  /// sequence the way the UI handoff does (stack name and cycle line above the
+  /// ring, stage chips below it). Kept because it renders `breakRemaining` as a
+  /// live countdown, which the chip strip does not yet do — if that turns out
+  /// not to be missed, delete this and `_routeStop`/`_routeTrack`/
+  /// `_buildBreakBanner` with it.
+  // ignore: unused_element
   Widget _buildProtocolPlusSequence(
     List<String> names, {
     required String name,
@@ -1922,7 +2016,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (currentIndex < 0) currentIndex = 0;
     if (currentIndex > names.length - 1) currentIndex = names.length - 1;
     // While on break the current protocol has finished and the next is "up
-    // next" — there's always a next when on break (the engine never flags a
+    // next" â€” there's always a next when on break (the engine never flags a
     // break on the final protocol).
     final hasNext = currentIndex < names.length - 1;
     final breaking = onBreak && hasNext;
@@ -1931,9 +2025,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
-        color: ThemeConstants.surface,
+        color: pal.card,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.border),
+        border: Border.all(color: pal.line),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1941,7 +2035,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           // Title row: Protocol Plus name + step counter.
           Row(
             children: [
-              Icon(Icons.route_rounded, size: 18, color: ThemeConstants.accent),
+              Icon(Icons.route_rounded, size: 18, color: pal.copperInk),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1951,14 +2045,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
-                    color: ThemeConstants.textPrimary,
+                    color: pal.ink,
                   ),
                 ),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: ThemeConstants.accent.withValues(alpha: 0.12),
+                  color: pal.copperInk.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -1966,7 +2060,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
-                    color: ThemeConstants.accent,
+                    color: pal.copperInk,
                   ),
                 ),
               ),
@@ -2006,7 +2100,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     // The connector being "traversed" right now is the break gap
                     // between the finished protocol and the next one.
                     active: breaking && i == currentIndex,
-                    countdown: breaking && i == currentIndex ? breakRemaining : null,
+                    countdown:
+                        breaking && i == currentIndex ? breakRemaining : null,
                   ),
               ],
             ],
@@ -2028,18 +2123,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final Color dotBg;
     final Color dotFg;
     if (isActive) {
-      dotBg = ThemeConstants.accent;
+      dotBg = pal.copperInk;
       dotFg = Colors.white;
     } else if (isNext) {
-      // "Up next" during a break — a hollow accent ring that pulses.
-      dotBg = ThemeConstants.accent.withValues(alpha: 0.14);
-      dotFg = ThemeConstants.accent;
+      // "Up next" during a break â€” a hollow accent ring that pulses.
+      dotBg = pal.copperInk.withValues(alpha: 0.14);
+      dotFg = pal.copperInk;
     } else if (isPast) {
-      dotBg = ThemeConstants.accent.withValues(alpha: 0.20);
-      dotFg = ThemeConstants.accent;
+      dotBg = pal.copperInk.withValues(alpha: 0.20);
+      dotFg = pal.copperInk;
     } else {
-      dotBg = ThemeConstants.surfaceVariant;
-      dotFg = ThemeConstants.textTertiary;
+      dotBg = pal.card2;
+      dotFg = pal.ink3;
     }
 
     return Column(
@@ -2054,16 +2149,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             shape: BoxShape.circle,
             border: Border.all(
               color: isActive || isNext
-                  ? ThemeConstants.accent
+                  ? pal.copperInk
                   : isPast
-                      ? ThemeConstants.accent.withValues(alpha: 0.35)
-                      : ThemeConstants.border,
+                      ? pal.copperInk.withValues(alpha: 0.35)
+                      : pal.line,
               width: 2,
             ),
             boxShadow: isActive || isNext
                 ? [
                     BoxShadow(
-                      color: ThemeConstants.accent
+                      color: pal.copperInk
                           .withValues(alpha: isActive ? 0.40 : 0.22),
                       blurRadius: 10,
                       spreadRadius: 1,
@@ -2096,10 +2191,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             height: 1.15,
             fontWeight: isActive || isNext ? FontWeight.w700 : FontWeight.w500,
             color: isActive || isNext
-                ? ThemeConstants.textPrimary
+                ? pal.ink
                 : isPast
-                    ? ThemeConstants.textTertiary
-                    : ThemeConstants.textSecondary,
+                    ? pal.ink3
+                    : pal.ink2,
           ),
         ),
         if (durationSeconds > 0) ...[
@@ -2107,15 +2202,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.timer_outlined,
-                  size: 9, color: ThemeConstants.textTertiary),
+              Icon(Icons.timer_outlined, size: 9, color: pal.ink3),
               const SizedBox(width: 2),
               Text(
                 _fmtStopDuration(durationSeconds),
                 style: TextStyle(
                   fontSize: 9,
                   fontWeight: FontWeight.w600,
-                  color: ThemeConstants.textTertiary,
+                  color: pal.ink3,
                 ),
               ),
             ],
@@ -2129,7 +2223,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               fontSize: 8,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.6,
-              color: ThemeConstants.accent,
+              color: pal.copperInk,
             ),
           )
         else if (isNext)
@@ -2139,7 +2233,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               fontSize: 8,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.6,
-              color: ThemeConstants.accent.withValues(alpha: 0.85),
+              color: pal.copperInk.withValues(alpha: 0.85),
             ),
           ),
       ],
@@ -2171,17 +2265,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       height: active ? 4 : 3,
       decoration: BoxDecoration(
         color: done
-            ? ThemeConstants.accent.withValues(alpha: 0.55)
+            ? pal.copperInk.withValues(alpha: 0.55)
             : active
-                ? ThemeConstants.accent
-                : ThemeConstants.border,
+                ? pal.copperInk
+                : pal.line,
         borderRadius: BorderRadius.circular(3),
       ),
     );
 
-    // Live break on this segment → show the counting-down remaining time.
+    // Live break on this segment â†’ show the counting-down remaining time.
     if (active) {
-      final secs = (countdown ?? 0) > 0 ? _formatBreak(countdown!) : '…';
+      final secs = (countdown ?? 0) > 0 ? _formatBreak(countdown!) : 'â€¦';
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2190,7 +2284,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
-              color: ThemeConstants.accent,
+              color: pal.copperInk,
             ),
           ),
           const SizedBox(height: 2),
@@ -2199,7 +2293,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       );
     }
 
-    // No break time → keep the bare line vertically centered on the ~26-30px dot.
+    // No break time â†’ keep the bare line vertically centered on the ~26-30px dot.
     if (delaySeconds <= 0) {
       return Padding(
         padding: const EdgeInsets.only(top: 13),
@@ -2216,7 +2310,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           style: TextStyle(
             fontSize: 9,
             fontWeight: FontWeight.w700,
-            color: ThemeConstants.textTertiary,
+            color: pal.ink3,
           ),
         ),
         const SizedBox(height: 2),
@@ -2237,10 +2331,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: ThemeConstants.accent.withValues(alpha: 0.10),
+        color: pal.copperInk.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: ThemeConstants.accent.withValues(alpha: 0.35),
+          color: pal.copperInk.withValues(alpha: 0.35),
         ),
       ),
       child: Row(
@@ -2248,7 +2342,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           Icon(
             counting ? Icons.pause_circle_filled_rounded : Icons.sync_rounded,
             size: 18,
-            color: ThemeConstants.accent,
+            color: pal.copperInk,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -2262,20 +2356,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     fontSize: 9,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.8,
-                    color: ThemeConstants.accent,
+                    color: pal.copperInk,
                   ),
                 ),
                 const SizedBox(height: 1),
                 Text(
-                  counting
-                      ? 'Next: $nextName'
-                      : 'Starting $nextName…',
+                  counting ? 'Next: $nextName' : 'Starting $nextNameâ€¦',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: ThemeConstants.textPrimary,
+                    color: pal.ink,
                   ),
                 ),
               ],
@@ -2289,7 +2381,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 fontSize: 18,
                 fontWeight: FontWeight.w900,
                 fontFeatures: const [FontFeature.tabularFigures()],
-                color: ThemeConstants.accent,
+                color: pal.copperInk,
               ),
             ),
           ],
@@ -2302,7 +2394,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// matching the per-protocol station duration labels.
   String _formatBreak(int seconds) => _fmtStopDuration(seconds);
 
-  /// Red fault card — blocking firmware error (overcurrent / device fault).
+  /// Red fault card â€” blocking firmware error (overcurrent / device fault).
   /// Mirrors the web live-session fault card (label + fault value + reason).
   Widget _buildFaultCard(DeviceTelemetry t) {
     return Container(
@@ -2355,7 +2447,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// Orange warning banner — non-blocking (firmware keeps running). Mirrors the
+  /// Orange warning banner â€” non-blocking (firmware keeps running). Mirrors the
   /// web warning copy for pad-disconnect / NTC-overheat.
   Widget _buildWarningBanner(DeviceTelemetry t) {
     final isPadDisconnect = t.isPadDisconnect;
@@ -2392,20 +2484,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Friendly labels for the firmware's short telemetry keys.
   ///
-  /// ⚠️ BEST-EFFORT — these short keys are firmware-defined and are NOT
+  /// âš ï¸ BEST-EFFORT â€” these short keys are firmware-defined and are NOT
   /// documented in the app/web codebase. Confirm each meaning (and unit) with
   /// the firmware team and correct the mapping below; unknown keys fall back to
   /// the raw key so nothing is hidden.
   static const Map<String, ({String label, String? unit})> _telemetryLabels = {
     // Confirmed against a real frame; units still BEST-EFFORT (verify w/ firmware).
-    'tp': (label: 'Temp', unit: '°C'),
+    'tp': (label: 'Temp', unit: 'Â°C'),
     'c': (label: 'Current', unit: 'A'),
     'av': (label: 'Voltage', unit: 'V'),
-    // `td` / `tl` meanings are NOT yet identified (both read 0 mid-session) —
+    // `td` / `tl` meanings are NOT yet identified (both read 0 mid-session) â€”
     // intentionally left unmapped so they render as raw keys, not mislabeled.
   };
 
-  /// Generic live sensor readouts (temperature/voltage/current/…). Field names
+  /// Generic live sensor readouts (temperature/voltage/current/â€¦). Field names
   /// are firmware-defined; known short keys are mapped to readable labels via
   /// [_telemetryLabels], unknown keys render as-is.
   Widget _buildSensorReadouts(Map<String, num> readouts) {
@@ -2421,13 +2513,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: ThemeConstants.accent.withValues(alpha: 0.08),
+            color: pal.copperInk.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
             '$label: $valueText',
             style: TextStyle(
-              color: ThemeConstants.textSecondary,
+              color: pal.ink2,
               fontSize: 11,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -2441,6 +2533,446 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// return it as-is (so it sizes to its content in the vertical list).
   Widget _maybeScroll({required bool scrollable, required Widget child}) {
     return scrollable ? SingleChildScrollView(child: child) : child;
+  }
+
+  /// Builds the ring's arcs for a Protocol Plus run: one per sub-protocol, with
+  /// a break arc between consecutive stages.
+  ///
+  /// Returns empty for a plain protocol (and when the engine hasn't reported
+  /// per-stage durations yet), which makes the ring fall back to its single
+  /// continuous arc. Durations are the ENGINE's, so the ring can't disagree with
+  /// what the device is actually doing.
+  List<_RingSegment> _plusRingSegments({
+    required List<String> plusSequence,
+    required List<int> plusDurations,
+    required int breakSeconds,
+  }) {
+    if (plusSequence.length < 2) return const [];
+    // Without real per-stage durations the arcs would be a guess â€” better one
+    // honest arc than a sequence drawn to the wrong proportions.
+    if (plusDurations.length != plusSequence.length) return const [];
+
+    final out = <_RingSegment>[];
+    for (var i = 0; i < plusSequence.length; i++) {
+      out.add(_RingSegment(plusDurations[i].toDouble()));
+      if (i < plusSequence.length - 1 && breakSeconds > 0) {
+        out.add(_RingSegment(breakSeconds.toDouble(), isBreak: true));
+      }
+    }
+    return out;
+  }
+
+  /// Maps the engine's sub-protocol index onto the segment list, which has a
+  /// break interleaved after every stage but the last.
+  int _plusRingActiveIndex({
+    required int sequenceLength,
+    required int plusIndex,
+    required bool onBreak,
+  }) {
+    if (sequenceLength < 2) return -1;
+    final stage = plusIndex.clamp(0, sequenceLength - 1);
+    // Stage k sits at segment 2k; the break that follows it at 2k + 1.
+    return onBreak ? stage * 2 + 1 : stage * 2;
+  }
+
+  /// Whether this device's link is currently considered lost.
+  ///
+  /// Uses the screen's EXISTING out-of-range tracking rather than a new source:
+  /// `_armOutOfRangeWarning` starts a grace timer on a BLE drop, so a device
+  /// with a live timer is one we've lost and not yet given up on. Deriving link
+  /// state independently would risk the pill disagreeing with the dialog the
+  /// screen already shows.
+  bool _isLinkLost(String deviceId, SessionStatus status) {
+    final live =
+        status == SessionStatus.running || status == SessionStatus.paused;
+    if (!live) return false;
+    return _outOfRangeTimers.containsKey(deviceId) ||
+        _outOfRangeDialogDeviceId == deviceId;
+  }
+
+  /// The spec's `liveCard` header: `{device}` with the protocol as a quiet
+  /// suffix, and a `Linked` / `⚠ Bluetooth lost` pill on the right.
+  Widget _lcHeader({
+    required String deviceId,
+    required String deviceLabel,
+    required String protocolName,
+    required SessionStatus status,
+  }) {
+    // Keyed by ID, not the display label — `_outOfRangeTimers` is keyed by the
+    // device id, and a label lookup would silently never match.
+    final lost = _isLinkLost(deviceId, status);
+    // Remote/WiFi sessions have no BLE link to lose, so the pill would be
+    // meaningless there — show it only where it means something.
+    final showPill = !widget.remoteView && widget.transport != 'wifi';
+    return Row(
+      children: [
+        Expanded(
+          child: Text.rich(
+            TextSpan(children: [
+              TextSpan(
+                text: deviceLabel,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: pal.ink,
+                ),
+              ),
+              if (protocolName.trim().isNotEmpty)
+                TextSpan(
+                  text: ' · $protocolName',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: pal.ink3,
+                  ),
+                ),
+            ]),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (showPill) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: lost ? pal.lowSoft : pal.goodSoft,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              lost ? '⚠ Bluetooth lost' : 'Linked',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: lost ? pal.low : pal.good,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// `.blewarn` — the spec's warning strip (app.js:1327).
+  Widget _lcBleWarn() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+      decoration: BoxDecoration(
+        color: pal.lowSoft,
+        borderRadius: BorderRadius.circular(HwRadius.sm),
+      ),
+      child: Text(
+        '⚠ Bluetooth link lost — the unit may keep running its current cycle '
+        'on its own until it finishes or is powered off.',
+        style: TextStyle(fontSize: 11, height: 1.45, color: pal.low),
+      ),
+    );
+  }
+
+  /// The spec's `.btn` in its three session flavours: solid copper (primary),
+  /// soft outline (secondary) and solid danger.
+  Widget _sessionButton({
+    required String label,
+    required VoidCallback? onTap,
+    bool filled = true,
+    bool danger = false,
+  }) {
+    final enabled = onTap != null;
+    final bg = danger ? pal.low : (filled ? pal.copperInk : pal.card);
+    final fg = danger || filled ? Colors.white : pal.copperInk;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(HwRadius.sm),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(HwRadius.sm),
+            border: filled || danger
+                ? null
+                : Border.all(color: pal.copper, width: 1.5),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: fg,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── UI handoff `liveCard` parts (app.js:1342-1352) ────────────────────────
+
+  static String _mmss(Duration d) {
+    final s = d.inSeconds < 0 ? 0 : d.inSeconds;
+    return '${(s ~/ 60).toString().padLeft(2, '0')}:'
+        '${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  /// `.lc-stackname` + `.lc-cyclesub` — the stack's name and where you are in
+  /// it. These sit ABOVE the ring in the spec (app.js:1329), which is where the
+  /// sequence context belongs; only the current stage name goes below.
+  Widget _lcStackHeader({
+    required String plusName,
+    required List<String> plusSequence,
+    required int plusIndex,
+    required bool plusOnBreak,
+    required bool paused,
+  }) {
+    if (plusSequence.length < 2) return const SizedBox.shrink();
+    final next =
+        plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)];
+    final sub = paused
+        ? 'paused'
+        : plusOnBreak
+            ? 'Break · next: $next'
+            : 'Stage ${plusIndex + 1} of ${plusSequence.length}';
+
+    return Column(
+      children: [
+        if (plusName.trim().isNotEmpty)
+          Text(
+            plusName,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+              height: 1.1,
+              color: pal.copperInk,
+            ),
+          ),
+        const SizedBox(height: 2),
+        Text(
+          sub,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: pal.ink3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// `.lc-active` — 22px/800 copper, the running stage's name only.
+  Widget _lcActiveName({
+    required List<String> plusSequence,
+    required int plusIndex,
+    required bool plusOnBreak,
+    required String protocolName,
+    required Color gc,
+  }) {
+    final isPlus = plusSequence.length > 1;
+    final name = !isPlus
+        ? protocolName
+        : plusOnBreak
+            ? 'Break'
+            : plusSequence[plusIndex.clamp(0, plusSequence.length - 1)];
+    if (name.trim().isEmpty) return const SizedBox.shrink();
+
+    return Text(
+      name,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.w800,
+        height: 1.1,
+        color: plusOnBreak ? _kBreakColor : gc,
+      ),
+    );
+  }
+
+  /// `.lc-steps` — every stage and break as a chip with its duration, the
+  /// current one highlighted and completed ones dimmed.
+  Widget _lcSteps({
+    required List<String> plusSequence,
+    required List<int> plusDurations,
+    required int breakSeconds,
+    required int plusIndex,
+    required bool plusOnBreak,
+    required Color gc,
+  }) {
+    final segments = _plusRingSegments(
+      plusSequence: plusSequence,
+      plusDurations: plusDurations,
+      breakSeconds: breakSeconds,
+    );
+    // Without real durations the ring falls back to one arc; the strip does the
+    // same rather than inventing per-stage times.
+    if (segments.isEmpty) return const SizedBox.shrink();
+    final activeIdx = _plusRingActiveIndex(
+      sequenceLength: plusSequence.length,
+      plusIndex: plusIndex,
+      onBreak: plusOnBreak,
+    );
+
+    // `.lc-step` is a COLUMN — name above duration — not a row. Active steps go
+    // white-on-copper-gradient with no border; breaks carry their own tinted
+    // scheme; completed steps just drop to 50% opacity.
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      alignment: WrapAlignment.center,
+      children: [
+        for (var i = 0; i < segments.length; i++)
+          () {
+            final seg = segments[i];
+            final done = i < activeIdx;
+            final active = i == activeIdx;
+            final label = seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
+            final dur = Duration(seconds: seg.seconds.round());
+
+            final Color fg;
+            final Color bg;
+            final Color? borderColor;
+            if (seg.isBreak) {
+              fg = active ? Colors.white : _kBreakColor;
+              bg = active ? _kBreakColor : _kBreakColor.withValues(alpha: 0.12);
+              borderColor =
+                  active ? null : _kBreakColor.withValues(alpha: 0.32);
+            } else if (active) {
+              fg = Colors.white;
+              bg = gc;
+              borderColor = null;
+            } else {
+              fg = pal.ink3;
+              bg = pal.card2;
+              borderColor = pal.line;
+            }
+
+            return Opacity(
+              opacity: done ? 0.5 : 1,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(HwRadius.sm),
+                  border: borderColor == null
+                      ? null
+                      : Border.all(color: borderColor),
+                  boxShadow: active ? pal.shadow : null,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.15,
+                        fontWeight: FontWeight.w700,
+                        color: fg,
+                      ),
+                    ),
+                    Text(
+                      seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: fg.withValues(alpha: 0.8),
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }(),
+      ],
+    );
+  }
+
+  /// `.lc-legend` — the swatch is a 14×5 rounded bar, not a square.
+  Widget _lcLegend(Color gc) {
+    Widget item(Color c, String label) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 14,
+              height: 5,
+              decoration: BoxDecoration(
+                color: c,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: pal.ink3,
+              ),
+            ),
+          ],
+        );
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        item(gc, 'Protocol'),
+        const SizedBox(width: 14),
+        item(_kBreakColor, 'Break'),
+      ],
+    );
+  }
+
+  /// `.lc-bar` — 5px tall on a `bg2` track, filled in the goal colour.
+  Widget _lcBar(double progress, Color gc) {
+    return Container(
+      height: 5,
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: pal.bg2,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: progress.clamp(0.0, 1.0),
+          heightFactor: 1,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: gc,
+              borderRadius: BorderRadius.circular(99),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// `.lc-elapsed` — 12.5px/700 in ink2, with the times themselves in full ink.
+  Widget _lcElapsed({required Duration elapsed, required Duration total}) {
+    final base = TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w700,
+      color: pal.ink2,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    final bold = base.copyWith(color: pal.ink);
+    return Text.rich(
+      TextSpan(style: base, children: [
+        TextSpan(text: _mmss(elapsed), style: bold),
+        const TextSpan(text: ' elapsed of '),
+        TextSpan(text: _mmss(total), style: bold),
+        const TextSpan(text: ' total'),
+      ]),
+      textAlign: TextAlign.center,
+    );
   }
 
   Widget _buildDeviceSessionCard({
@@ -2471,43 +3003,108 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     bool scrollable = true,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cardColor = isDark ? ThemeConstants.surface : Colors.white;
+    final cardColor = isDark ? pal.card : Colors.white;
 
-    // Live telemetry (device→app) takes precedence over the cycle-derived pad
-    // colors when present — the firmware's actual thermode state is authoritative.
+    // Live telemetry (deviceâ†’app) takes precedence over the cycle-derived pad
+    // colors when present â€” the firmware's actual thermode state is authoritative.
     final effectiveMoonColor = (telemetry?.moon != null)
         ? _webMoonPadColor(telemetry!.moon)
         : moonColor;
-    final effectiveSunColor = (telemetry?.sun != null)
-        ? _webSunPadColor(telemetry!.sun)
-        : sunColor;
+    final effectiveSunColor =
+        (telemetry?.sun != null) ? _webSunPadColor(telemetry!.sun) : sunColor;
     final isFault = telemetry?.isFault ?? false;
     final isWarning = telemetry?.isWarning ?? false;
 
     // Backend timer is the single source of truth (matches the web): the web
     // renders the feed's per-device remainingSeconds/totalSeconds verbatim and
     // has no special Protocol Plus path. The backend now runs ONE continuous
-    // whole-sequence clock for Plus too — deviceStartTime is set once at session
-    // start and is no longer reset on a sub-protocol switch — so its
+    // whole-sequence clock for Plus too â€” deviceStartTime is set once at session
+    // start and is no longer reset on a sub-protocol switch â€” so its
     // `remainingSeconds` is already a smooth, monotonic countdown over the entire
     // sequence (the old "timer restarts on each switch" bug is fixed server-side).
     // So trust the backend for Plus devices as well; fall back to the local
     // engine timer only until the first backend value arrives. The break banner /
     // sequence tracker continue to use the local engine state.
-    final useBackendTimer = backendRemainingSeconds != null &&
+    //
+    // EXCEPT once this device is terminal locally. The feed is polled once a
+    // second and the server takes a moment to close the run, so a device the
+    // user just stopped on the hardware would otherwise keep counting down for
+    // another beat or two after the app already knows it stopped.
+    final deviceTerminal =
+        status == SessionStatus.stopped || status == SessionStatus.completed;
+    final useBackendTimer = !deviceTerminal &&
+        backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
-    final displayRemaining = useBackendTimer
+    var displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds)
         : timer.remaining;
+
+    // PAUSED holds the clock. The feed only freezes once the backend has
+    // applied the pause, so between the button press and the server's
+    // acknowledgement (and permanently, if that POST fails) the countdown kept
+    // running while the device was already stopped. Latch the last value shown
+    // before the pause and display that until the run resumes.
+    if (status == SessionStatus.paused) {
+      final held = _pausedRemainingByDevice[id];
+      if (held == null) {
+        _pausedRemainingByDevice[id] = displayRemaining;
+      } else if (held < displayRemaining) {
+        // The feed caught up and reports MORE time left than we froze at
+        // (it rewinds to the elapsed-at-pause value) — trust the backend.
+        _pausedRemainingByDevice[id] = displayRemaining;
+      } else {
+        displayRemaining = held;
+      }
+    } else {
+      _pausedRemainingByDevice.remove(id);
+    }
     final double displayProgress;
     if (useBackendTimer &&
         backendTotalSeconds != null &&
         backendTotalSeconds > 0) {
-      displayProgress =
-          (1 - backendRemainingSeconds / backendTotalSeconds).clamp(0.0, 1.0);
+      // Derived from the (possibly pause-held) remaining, so the ring and bar
+      // stop exactly where the digits do.
+      displayProgress = (1 - displayRemaining.inSeconds / backendTotalSeconds)
+          .clamp(0.0, 1.0);
     } else {
       displayProgress = timer.progress;
     }
+    // `--gc` — the spec drives the ring, bar, active-stage name and chips from
+    // the protocol's GOAL colour, not a fixed accent (`goalColor(s.goal)`,
+    // app.js:1314). So a Recovery run rings slate-blue, Calm teal, Vitality
+    // green, Performance copper. Everything here was hardcoded copper before,
+    // which is why every protocol looked identical.
+    //
+    // The goal is read off the protocol name: `GoalColor.of` matches on the goal
+    // words ("Recovery", "Comfort", "Calm", "Vitality") that protocol names
+    // already carry, and falls back to Performance copper.
+    //
+    // Via [_protocolAccentColor], which keeps the accent out of the break's blue
+    // — a Plus stack re-resolves this per sub-protocol, so a Calm/Recovery stage
+    // used to repaint the whole ring in the break colour mid-run.
+    final gc = _protocolAccentColor(
+      protocolName.isNotEmpty ? protocolName : plusName,
+      pal,
+    );
+
+    // Whole-run total, for the spec's "MM:SS elapsed of MM:SS total" line. The
+    // backend total wins when we're following its clock; otherwise read the
+    // local timer's own total.
+    //
+    // This used to back-compute the total as
+    // `remaining / (1 - progress)`. `progress` is clamped to [0, 1], so the
+    // moment a local-timer run reached its end the divisor became 0 — giving
+    // Infinity (or NaN once `remaining` had also hit 0) and throwing
+    // "Unsupported operation: Infinity or NaN toInt" out of `round()`, mid-build
+    // of the device card. [TimerState] already carries `totalDuration`, which is
+    // exactly what that expression was trying to reconstruct.
+    final displayTotal = (useBackendTimer &&
+            backendTotalSeconds != null &&
+            backendTotalSeconds > 0)
+        ? Duration(seconds: backendTotalSeconds)
+        : (timer.totalDuration > Duration.zero
+            ? timer.totalDuration
+            : timer.remaining);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -2521,7 +3118,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               ? Colors.red
               : isWarning
                   ? Colors.orange
-                  : ThemeConstants.borderLight,
+                  : pal.line2,
           width: isFault ? 2 : 1,
         ),
       ),
@@ -2534,17 +3131,23 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: ThemeConstants.textPrimary,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+            // The spec's `liveCard` header (app.js:1324): device on the left
+            // with the protocol as a quiet suffix, link state as a pill on the
+            // right — replacing the bare centred label this card used to show.
+            _lcHeader(
+              deviceId: id,
+              deviceLabel: label,
+              protocolName: protocolName,
+              status: status,
             ),
-            // FAULT card (red) / WARNING banner (orange) — device→app telemetry,
+            // `.blewarn` — the spec's explicit warning that the unit may keep
+            // running its own cycle after the link drops (app.js:1327). This is
+            // a real hardware behaviour, not a cosmetic banner.
+            if (_isLinkLost(id, status)) ...[
+              const SizedBox(height: 8),
+              _lcBleWarn(),
+            ],
+            // FAULT card (red) / WARNING banner (orange) â€” deviceâ†’app telemetry,
             // mirroring the web live-session card. Fault supersedes warning.
             if (isFault) ...[
               const SizedBox(height: 10),
@@ -2553,110 +3156,139 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               const SizedBox(height: 10),
               _buildWarningBanner(telemetry!),
             ],
-            // Per-device Protocol Plus progress card (only for Plus devices).
+            // `.lc-stackname` + `.lc-cyclesub` above the ring. This replaces the
+            // old `_buildProtocolPlusSequence` progress card: the spec shows the
+            // sequence as the chip strip BELOW the ring, so keeping both would
+            // state the same thing twice in two different visual languages.
             if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              _buildProtocolPlusSequence(
-                plusSequence,
-                name: plusName,
-                index: plusIndex,
-                durations: plusDurations,
-                delaySeconds: plusDelaySeconds,
-                onBreak: plusOnBreak,
-                breakRemaining: plusBreakRemaining,
+              const SizedBox(height: 12),
+              _lcStackHeader(
+                plusName: plusName,
+                plusSequence: plusSequence,
+                plusIndex: plusIndex,
+                plusOnBreak: plusOnBreak,
+                paused: status == SessionStatus.paused,
               ),
             ],
-            if (protocolName.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                protocolName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: ThemeConstants.textSecondary,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 11,
-                ),
-              ),
-            ],
+            // The protocol name is no longer repeated here — `_lcHeader` shows
+            // it beside the device, and `.lc-active` shows the running stage.
             const SizedBox(height: 10),
-            Container(
-              decoration: status == SessionStatus.running
-                  ? BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: ThemeConstants.accent.withValues(alpha: 0.10),
-                          blurRadius: 26,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    )
-                  : null,
-              child: SizedBox(
-                width: 200,
-                height: 200,
-                child: CustomPaint(
-                  painter: _TimerRing(
-                      progress: displayProgress,
-                      active: status == SessionStatus.running),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
+            // No halo behind the ring either — this was a 26px blurred circle
+            // shadow while running (the spec's `.lc-halo`). Removed together
+            // with the arc glow so the ring reads as a clean, flat arc.
+            SizedBox(
+              // `.lc-ringwrap` is 190×190.
+              width: 190,
+              height: 190,
+              child: CustomPaint(
+                painter: _TimerRing(
+                  progress: displayProgress,
+                  active: status == SessionStatus.running,
+                  trackColor: pal.ringTrack,
+                  accentColor: gc,
+                  // Drives the active arc's growth.
+                  elapsedSeconds:
+                      (displayTotal - displayRemaining).inSeconds.toDouble(),
+                  // A break knows its own progress exactly, from the engine's
+                  // countdown — more reliable than inferring it from the
+                  // whole-run clock, which a Plus run resets per sub-protocol.
+                  activeFill: (plusOnBreak &&
+                          plusDelaySeconds > 0 &&
+                          plusBreakRemaining >= 0)
+                      ? (1 - plusBreakRemaining / plusDelaySeconds)
+                          .clamp(0.0, 1.0)
+                      : null,
+                  segments: _plusRingSegments(
+                    plusSequence: plusSequence,
+                    plusDurations: plusDurations,
+                    breakSeconds: plusDelaySeconds,
+                  ),
+                  activeIndex: _plusRingActiveIndex(
+                    sequenceLength: plusSequence.length,
+                    plusIndex: plusIndex,
+                    onBreak: plusOnBreak,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // `.lc-time` — 50px/900, tabular, tight tracking. Paused
+                      // drops it to opacity .45 (app.js:1336).
+                      Opacity(
+                        opacity: status == SessionStatus.paused
+                            ? _TimerRing._pausedFade
+                            : 1,
+                        child: Text(
                           displayRemaining.formatted,
                           style: TextStyle(
-                            fontSize: 38,
-                            fontWeight: FontWeight.w700,
-                            color: ThemeConstants.textPrimary,
+                            fontSize: 50,
+                            fontWeight: FontWeight.w900,
+                            height: 0.92,
+                            color: pal.ink,
                             letterSpacing: -1.5,
+                            fontFeatures: const [FontFeature.tabularFigures()],
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.dark_mode_rounded,
-                                size: 20, color: effectiveMoonColor),
-                            const SizedBox(width: 12),
-                            Icon(Icons.wb_sunny_rounded,
-                                size: 22, color: effectiveSunColor),
-                          ],
-                        ),
-                      ],
-                    ),
+                      ),
+                      // `.lc-mod` — both pads 22px, 9px apart.
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.dark_mode_rounded,
+                              size: 22, color: effectiveMoonColor),
+                          const SizedBox(width: 9),
+                          Icon(Icons.wb_sunny_rounded,
+                              size: 22, color: effectiveSunColor),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
+            // ── The UI handoff's `liveCard` block (app.js:1342-1352) ──────────
+            // Active stage name, stage strip, progress bar, elapsed/total.
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _statusColor(status).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(20),
+            _lcActiveName(
+              plusSequence: plusSequence,
+              plusIndex: plusIndex,
+              plusOnBreak: plusOnBreak,
+              protocolName: protocolName,
+              gc: gc,
+            ),
+            if (plusSequence.length > 1) ...[
+              const SizedBox(height: 8),
+              _lcSteps(
+                plusSequence: plusSequence,
+                plusDurations: plusDurations,
+                breakSeconds: plusDelaySeconds,
+                plusIndex: plusIndex,
+                plusOnBreak: plusOnBreak,
+                gc: gc,
               ),
-              child: Text(
-                _statusLabel(status),
-                style: TextStyle(
-                  color: _statusColor(status),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
+              const SizedBox(height: 8),
+              _lcLegend(gc),
+            ],
+            const SizedBox(height: 10),
+            _lcBar(displayProgress, gc),
+            const SizedBox(height: 8),
+            _lcElapsed(
+              elapsed: displayTotal - displayRemaining,
+              total: displayTotal,
             ),
             if (totalCycles > 0 && padCycleIdx >= 0) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 'Cycle ${padCycleIdx + 1}/$totalCycles',
                 style: TextStyle(
-                  color: ThemeConstants.textTertiary,
+                  color: pal.ink3,
                   fontSize: 12,
                 ),
               ),
             ],
-            // Live sensor readouts (temperature/voltage/current/…) when the
+            // Live sensor readouts (temperature/voltage/current/â€¦) when the
             // firmware/backend includes them in the telemetry frame.
             if (telemetry != null && telemetry.sensorReadouts.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -2680,7 +3312,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     bool plusOnBreak = false,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final softSurface = isDark ? ThemeConstants.surfaceVariant : Colors.white;
+    final softSurface = isDark ? pal.card2 : Colors.white;
 
     // REMOTE VIEW: drive the device over the cloud broker + backend instead of
     // the local engine. Resolve the live session for this run; if it's gone from
@@ -2698,7 +3330,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     }
     // A foreign BLE device can't be reached over the WiFi broker (no server-side
     // macAddress, no local bond), so per-device control routes through the
-    // backend BY REGISTERED NAME — taken from the live feed, NOT the raw
+    // backend BY REGISTERED NAME â€” taken from the live feed, NOT the raw
     // bluetooth id. WiFi remote keeps using the broker.
     final isBleRemote = remote && widget.transport != 'wifi';
     active_session.LiveDeviceState? feedDev;
@@ -2749,7 +3381,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     }
 
     // While an OWN BLE device's link is down during a live run, its commands
-    // can't reach it — keep the buttons visible but DISABLED (greyed); reconnect
+    // can't reach it â€” keep the buttons visible but DISABLED (greyed); reconnect
     // happens silently. This gate is irrelevant for a REMOTE/foreign view (we
     // drive the backend, not a local BLE link) and for WiFi (commands go over
     // MQTT), so it applies only to an own BLE run.
@@ -2767,7 +3399,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (isProtocolPlusDevice &&
         (status == SessionStatus.running || status == SessionStatus.paused)) {
       // During a break the firmware is idle and the BLE link is expected to be
-      // down — that's NOT a reason to block Stop. Stopping then just cancels the
+      // down â€” that's NOT a reason to block Stop. Stopping then just cancels the
       // server-scheduled remaining protocols (no live link needed), so keep the
       // button enabled even while disconnected mid-break.
       final blockStop = disconnected && !plusOnBreak;
@@ -2777,8 +3409,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         child: ElevatedButton(
           onPressed: blockStop ? null : stopFn,
           style: ElevatedButton.styleFrom(
-            backgroundColor: ThemeConstants.error,
-            foregroundColor: ThemeConstants.textPrimary,
+            backgroundColor: pal.low,
+            foregroundColor: pal.ink,
           ),
           child: const Text('Stop'),
         ),
@@ -2795,8 +3427,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 onPressed: disconnected ? null : pauseFn,
                 style: OutlinedButton.styleFrom(
                   backgroundColor: softSurface,
-                  foregroundColor: ThemeConstants.textPrimary,
-                  side: BorderSide(color: ThemeConstants.borderLight),
+                  foregroundColor: pal.ink,
+                  side: BorderSide(color: pal.line2),
                 ),
                 child: Text('Pause'),
               ),
@@ -2809,8 +3441,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               child: ElevatedButton(
                 onPressed: disconnected ? null : stopFn,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.error,
-                  foregroundColor: ThemeConstants.textPrimary,
+                  backgroundColor: pal.low,
+                  foregroundColor: pal.ink,
                 ),
                 child: Text('Stop'),
               ),
@@ -2828,8 +3460,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               child: ElevatedButton(
                 onPressed: disconnected ? null : resumeFn,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.accent,
-                  foregroundColor: ThemeConstants.textPrimary,
+                  backgroundColor: pal.copperInk,
+                  foregroundColor: pal.ink,
                 ),
                 child: Text('Resume'),
               ),
@@ -2842,8 +3474,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               child: ElevatedButton(
                 onPressed: disconnected ? null : stopFn,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.error,
-                  foregroundColor: ThemeConstants.textPrimary,
+                  backgroundColor: pal.low,
+                  foregroundColor: pal.ink,
                 ),
                 child: Text('Stop'),
               ),
@@ -2877,7 +3509,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     int deviceCount,
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cardColor = isDark ? ThemeConstants.surface : Colors.white;
+    final cardColor = isDark ? pal.card : Colors.white;
     final paused = status == SessionStatus.paused;
     final isWifi = widget.transport == 'wifi';
     // Pause/Resume only makes sense while the run is still live; once it has
@@ -2933,10 +3565,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     Future<void> onStopAll() async {
       if (!widget.remoteView) {
         ctrl.stop();
-        // Web parity: the post-session questions appear on the explicit Stop
-        // All (client sessions only — the enqueue no-ops for guests).
-        ctrl.enqueuePendingOutcome();
-        await _promptSessionOutcomes();
         return;
       }
       if (isBleRemote) {
@@ -2952,7 +3580,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       decoration: BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.borderLight),
+        border: Border.all(color: pal.line2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2962,7 +3590,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               Icon(
                 isWifi ? Icons.wifi_rounded : Icons.bluetooth_rounded,
                 size: 18,
-                color: ThemeConstants.accent,
+                color: pal.copperInk,
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -2974,7 +3602,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color: ThemeConstants.textPrimary,
+                    color: pal.ink,
                   ),
                 ),
               ),
@@ -2997,37 +3625,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ],
           ),
           const SizedBox(height: 12),
+          // The spec's `.btnrow`: a soft Pause All beside a solid danger Stop
+          // All (app.js:1265). Previously both were solid ElevatedButtons with
+          // ink-on-copper labels, which read as two equally destructive actions.
           Row(
             children: [
               Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: canPause ? onPauseResume : null,
-                    icon: Icon(
-                      paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                    ),
-                    label: Text(paused ? 'Resume All' : 'Pause All'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: ThemeConstants.accent,
-                      foregroundColor: ThemeConstants.textPrimary,
-                    ),
-                  ),
+                child: _sessionButton(
+                  label: paused ? '▶ Resume All' : '⏸ Pause All',
+                  onTap: canPause ? onPauseResume : null,
+                  filled: false,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: onStopAll,
-                    icon: const Icon(Icons.stop_rounded),
-                    label: const Text('Stop All'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: ThemeConstants.error,
-                      foregroundColor: ThemeConstants.textPrimary,
-                    ),
-                  ),
+                child: _sessionButton(
+                  label: '■ Stop All',
+                  onTap: onStopAll,
+                  danger: true,
                 ),
               ),
             ],
@@ -3070,8 +3685,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     width: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Text(
-                    widget.transport == 'wifi' ? 'Starting…' : 'Start Session'),
+                : Text(widget.transport == 'wifi'
+                    ? 'Startingâ€¦'
+                    : 'Start Session'),
           ),
         ),
       SessionStatus.running => const SizedBox.shrink(),
@@ -3081,31 +3697,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           width: double.infinity,
           child: ElevatedButton(
               onPressed: () async {
-                // Ask the post-session questions before leaving, if not already
-                // handled by the auto-prompt (idempotent).
+                // The after-screen is presented by [SessionOutcomeGate] the
+                // moment the run goes terminal, so this is only ever the way
+                // back from a live card the user returned to — same behaviour
+                // for an own run and a remote view.
                 if (!widget.remoteView) {
-                  ref
-                      .read(sessionEngineFamilyProvider(_engineKey).notifier)
-                      .enqueuePendingOutcome();
-                  await _promptSessionOutcomes();
+                  _queuePostSessionReview();
                 }
                 await _removeTrackedSessionIfAny();
                 ctrl.reset();
                 if (!mounted) return;
                 context.pop();
               },
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: ThemeConstants.success),
+              style: ElevatedButton.styleFrom(backgroundColor: pal.good),
               child: Text('Done'))),
     };
   }
 
   Color _statusColor(SessionStatus s) => switch (s) {
-        SessionStatus.idle => ThemeConstants.textTertiary,
-        SessionStatus.running => ThemeConstants.success,
-        SessionStatus.paused => ThemeConstants.warning,
-        SessionStatus.stopped => ThemeConstants.error,
-        SessionStatus.completed => ThemeConstants.success,
+        SessionStatus.idle => pal.ink3,
+        SessionStatus.running => pal.good,
+        SessionStatus.paused => pal.mid,
+        SessionStatus.stopped => pal.low,
+        SessionStatus.completed => pal.good,
       };
 
   String _statusLabel(SessionStatus s) => switch (s) {
@@ -3119,9 +3733,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   static bool _strEqIc(String a, String b) =>
       a.toLowerCase().trim() == b.toLowerCase().trim();
 
-  /// Same rules as web `DeviceTimer` Moon icon (left pad). Accepts both the
+  /// Same rules as web `DeviceTimer` Moon icon (left pad = p1). Accepts both the
   /// backend vocabulary ('hot'/'cold'/'leftHotRed'/'leftColdBlue') and the BLE
-  /// frame's LED color ('red'/'blue', from p2.l) so live telemetry colors match.
+  /// frame's LED color ('red'/'blue', from p1.l) so live telemetry colors match.
   Color _webMoonPadColor(String? moon) {
     if (moon == null || moon.isEmpty) return Colors.grey;
     final m = moon.trim();
@@ -3136,12 +3750,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     return Colors.grey;
   }
 
-  /// Same rules as web `DeviceTimer` Sun icon (right pad). Accepts 'red'/'blue'
-  /// (from p1.l) in addition to the backend 'hot'/'cold' vocabulary.
+  /// Same rules as web `DeviceTimer` Sun icon (right pad = p2). Accepts
+  /// 'red'/'blue' (from p2.l) in addition to the backend 'hot'/'cold' vocabulary.
   Color _webSunPadColor(String? sun) {
     if (sun == null || sun.isEmpty) return Colors.grey;
     final s = sun.trim();
-    if (_strEqIc(s, 'rightHotRed') || _strEqIc(s, 'hot') || _strEqIc(s, 'red')) {
+    if (_strEqIc(s, 'rightHotRed') ||
+        _strEqIc(s, 'hot') ||
+        _strEqIc(s, 'red')) {
       return Colors.red;
     }
     if (_strEqIc(s, 'rightColdBlue') ||
@@ -3153,29 +3769,212 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   }
 }
 
+/// One arc of the session ring â€” a protocol stage or the break between two.
+class _RingSegment {
+  final double seconds;
+  final bool isBreak;
+  const _RingSegment(this.seconds, {this.isBreak = false});
+}
+
+/// Break colour, matching the UI handoff's `BREAK_COL` (app.js:1274). The break
+/// stays blue; it's the PROTOCOL colour that has to keep clear of it — see
+/// [_protocolAccentColor].
+const Color _kBreakColor = Color(0xFF4E7A8A);
+
+/// How close (in degrees of hue) a protocol accent may come to [_kBreakColor]
+/// before it stops reading as "protocol" and starts reading as "break".
+const double _kBreakHueGuard = 25;
+
+/// The `--gc` accent for a running protocol — its goal colour, EXCEPT when that
+/// colour would be mistaken for the break.
+///
+/// `goalColor()` returns `#4E7A8A` for **Calm** — byte-for-byte the handoff's
+/// own `BREAK_COL` (app.js:3722 vs app.js:1274) — and `#2F4A5A` for **Recovery**,
+/// which is the same blue a shade darker. So the moment a stack switched to a
+/// Calm or Recovery sub-protocol, the ring arcs, progress bar, stage chips and
+/// legend all turned the break colour and the whole ring read as one long break.
+/// The first stage looked right only because it happened to be a copper goal.
+///
+/// Blue belongs to the break. A protocol whose goal colour lands in that hue
+/// window falls back to the default Performance copper, so protocol arcs stay
+/// copperish and the break stays the only blue on the ring. The other goals
+/// (Comfort brown, Vitality green) are nowhere near it and keep their colour.
+Color _protocolAccentColor(String goalSource, RefPalette p) {
+  final goalColor = GoalColor.of(goalSource, p).text;
+  final breakHue = HSLColor.fromColor(_kBreakColor).hue;
+  var delta = (HSLColor.fromColor(goalColor).hue - breakHue).abs();
+  if (delta > 180) delta = 360 - delta; // hue is a circle
+  if (delta > _kBreakHueGuard) return goalColor;
+  return GoalColor.of('', p).text; // Performance / default copper
+}
+
+/// The session progress ring.
+///
+/// Plain protocols get a single arc, as before. A Protocol Plus run gets the UI
+/// handoff's SEGMENTED ring (`liveRingSVG`, app.js:1290): one arc per
+/// sub-protocol AND one per break, sized by their real durations, so the shape
+/// of the whole sequence is visible at a glance.
+///
+/// Segment durations come from the engine's own `plusDurations` /
+/// `plusDelaySeconds` â€” never from a locally recomputed timeline like the spec's
+/// `stackTimeline()`. The spec invents durations because it has no engine; we
+/// have one, and a ring that disagreed with the device would be worse than no
+/// ring.
+///
+/// Completed stages render filled, the current stage at full strength, and
+/// upcoming stages as track only. The active arc is deliberately NOT partially
+/// filled: per-stage elapsed time isn't exposed here, and the continuous
+/// countdown plus the bar beneath the ring already carry that. Faking it would
+/// mean drawing a position the device never reported.
 class _TimerRing extends CustomPainter {
   final double progress;
   final bool active;
-  _TimerRing({required this.progress, required this.active});
+
+  /// Empty for a plain protocol â†’ a single continuous arc.
+  final List<_RingSegment> segments;
+
+  /// Index into [segments] of the stage running now; -1 when unknown.
+  final int activeIndex;
+
+  /// Passed in rather than read from a palette: a `CustomPainter` has no
+  /// `BuildContext`, so it can't resolve the theme itself.
+  final Color trackColor;
+  final Color accentColor;
+
+  /// Seconds elapsed in the whole run, used to fill the ACTIVE arc — the spec's
+  /// `sp = (el - seg.startFrac * total) / seg.dur` (app.js:1307).
+  final double elapsedSeconds;
+
+  /// 0–1 fill for the active arc when the caller knows it exactly — a break,
+  /// from the engine's own countdown. Overrides [elapsedSeconds] when set.
+  final double? activeFill;
+
+  _TimerRing({
+    required this.progress,
+    required this.active,
+    required this.trackColor,
+    required this.accentColor,
+    this.segments = const [],
+    this.activeIndex = -1,
+    this.elapsedSeconds = 0,
+    this.activeFill,
+  });
+
+  /// `liveRingSVG` geometry, verbatim: a 190px box with a 13px stroke, and the
+  /// radius the spec derives as `(size - stroke - 8) / 2`. The stroke width is
+  /// the single most visible number here — this was 4px, which read as a hairline
+  /// next to the spec's heavy ring.
+  static const double _stroke = 13;
+
+  /// How far the ring dims while paused — the same rest the spec gives the
+  /// paused timer digits (`opacity:.45`, app.js:1336).
+  static const double _pausedFade = 0.45;
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 10;
-    final bg = Paint()
-      ..color = ThemeConstants.border
+    final radius = (size.shortestSide - _stroke - 8) / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+
+    // `.livecard.paused` (styles.css:483/502) drops the ring to a resting
+    // state. The `active` flag was accepted and then never used, so a paused
+    // ring was indistinguishable from a running one — and `shouldRepaint`
+    // ignored the colours too, so even a colour change wouldn't have painted.
+    Paint stroke(Color c, {StrokeCap cap = StrokeCap.round}) => Paint()
+      ..color = active ? c : c.withValues(alpha: c.a * _pausedFade)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4;
-    canvas.drawCircle(center, radius, bg);
-    final fg = Paint()
-      ..color = ThemeConstants.accent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -pi / 2,
-        2 * pi * progress, false, fg);
+      ..strokeWidth = _stroke
+      ..strokeCap = cap;
+
+    // No glow on the arc. The spec's `.lc-arc` has a
+    // `drop-shadow(0 0 4px gc)`, but at a 13px stroke on a phone screen it read
+    // as a smear around the ring rather than the subtle bloom it is in the
+    // browser — removed at the user's request.
+    if (segments.length < 2) {
+      canvas.drawCircle(center, radius, stroke(trackColor));
+      final sweep = 2 * pi * progress.clamp(0.0, 1.0);
+      canvas.drawArc(rect, -pi / 2, sweep, false, stroke(accentColor));
+      return;
+    }
+
+    final total = segments.fold<double>(0, (a, s) => a + s.seconds);
+    if (total <= 0) return;
+
+    // Segment arcs are cut SQUARE, not rounded, so protocol → break → protocol
+    // reads as one unbroken ring divided by straight edges. A round cap bulges
+    // half the stroke past the arc's own sweep at each end (≈0.012 of a turn at
+    // this stroke and radius), which is what the old gap was compensating for.
+    // Arcs butt hard against each other — no gap. The colour change at each
+    // straight edge is the divider, so the ring stays a solid unbroken circle.
+    const segmentCap = StrokeCap.butt;
+
+    // PASS 1 — every segment's empty track. The spec draws all tracks first,
+    // then the fills over them, so a partially-filled arc still shows the rest
+    // of its own stage waiting behind it.
+    var startFraction = 0.0;
+    final starts = <double>[];
+    final sweeps = <double>[];
+    for (var i = 0; i < segments.length; i++) {
+      final seg = segments[i];
+      final span = seg.seconds / total;
+      final sweep = span.clamp(0.002, 1.0) * 2 * pi;
+      final from = -pi / 2 + startFraction * 2 * pi;
+      starts.add(from);
+      sweeps.add(sweep);
+      canvas.drawArc(
+        rect,
+        from,
+        sweep,
+        false,
+        stroke(
+          seg.isBreak ? _kBreakColor.withValues(alpha: 0.28) : trackColor,
+          cap: segmentCap,
+        ),
+      );
+      startFraction += span;
+    }
+
+    // PASS 2 — the fills. Completed stages are fully filled but dimmed; the
+    // ACTIVE stage fills proportionally to how far into it we are, which is what
+    // makes the ring grow through the run instead of snapping stage to stage.
+    // Breaks fill exactly the same way, in the break colour.
+    var elapsedBefore = 0.0;
+    for (var i = 0; i < segments.length; i++) {
+      final seg = segments[i];
+      final fill = seg.isBreak ? _kBreakColor : accentColor;
+
+      if (activeIndex >= 0 && i < activeIndex) {
+        canvas.drawArc(rect, starts[i], sweeps[i], false,
+            stroke(fill.withValues(alpha: 0.55), cap: segmentCap));
+      } else if (i == activeIndex) {
+        // `sp` — the spec's per-segment progress. Prefer the caller's exact
+        // value (breaks report their own countdown); otherwise derive it from
+        // elapsed time against this segment's own start and duration.
+        final sp = (activeFill ??
+                (seg.seconds > 0
+                    ? (elapsedSeconds - elapsedBefore) / seg.seconds
+                    : 0.0))
+            .clamp(0.0, 1.0);
+        if (sp > 0) {
+          canvas.drawArc(rect, starts[i], sweeps[i] * sp, false,
+              stroke(fill, cap: segmentCap));
+        }
+      }
+      elapsedBefore += seg.seconds;
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _TimerRing old) => progress != old.progress;
+  bool shouldRepaint(covariant _TimerRing old) =>
+      progress != old.progress ||
+      elapsedSeconds != old.elapsedSeconds ||
+      activeFill != old.activeFill ||
+      activeIndex != old.activeIndex ||
+      segments.length != old.segments.length ||
+      // Pause/resume changes only these. Leaving them out meant the ring kept
+      // its running appearance until some OTHER value happened to change —
+      // and while paused nothing else changes, so it never repainted at all.
+      active != old.active ||
+      accentColor != old.accentColor ||
+      trackColor != old.trackColor;
 }

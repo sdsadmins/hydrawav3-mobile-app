@@ -1,58 +1,78 @@
 import 'package:flutter/material.dart';
 
-/// Hydra brand palette + report section metadata, shared by the on-screen
-/// report (`ai_report_screen.dart`) and the downloadable PDF (`ai_report_pdf.dart`)
-/// so both look the same (web parity with `analysis-display.tsx`).
+/// Report section metadata + the report's colour surface, shared by the
+/// on-screen report (`ai_report_screen.dart`) and the downloadable PDF
+/// (`ai_report_pdf.dart`) so both look the same.
+///
+/// COLOURS ARE A STATIC LIGHT-MODE SNAPSHOT OF `RefPalette.light`
+/// (`lib/core/theme/hw_tokens.dart`). Every symbol below keeps its original
+/// name but now resolves to the UI handoff's own palette, so the report and the
+/// PDF sit in the same brand as the Hub, More and the pad map — which were
+/// ported from that same spec.
+///
+/// Why constants rather than `RefPalette.of(context)`: these are referenced
+/// across ~2200 lines of `widgets/sections/*` and all of `ai_report_pdf.dart`,
+/// almost entirely inside `const TextStyle`/`const BoxDecoration`. Making them
+/// context-dependent would de-const hundreds of widgets, and the PDF has no
+/// `BuildContext` at all — `buildAiReportPdf` is called from the data layer.
+///
+/// CONSEQUENCE, stated plainly: this layer does not follow dark mode. The
+/// screen renders these bodies inside a `cream` "document sheet" so the light
+/// surface reads as a printed page rather than a theming bug. A per-brightness
+/// `HydraReport.of(context)` is a later pass.
 class HydraReport {
   HydraReport._();
 
-  // Brand colors (from web globals.css).
-  static const darkTeal = Color(0xFF132A35);
-  static const teal = Color(0xFF233D47);
-  static const tanDark = Color(0xFFC59D84);
-  static const tanLight = Color(0xFFDDBEA8);
-  static const cream = Color(0xFFF9F5F1);
-  static const white = Color(0xFFFFFFFF);
-  static const ink = Color(0xFF1A1A1A);
-  static const muted = Color(0xFF6B7280); // gray-500
+  // Core surfaces — RefPalette.light.
+  static const darkTeal = Color(0xFF1F2B33); // heroGrad mid
+  static const teal = Color(0xFF243541); // heroGrad top
+  static const tanDark = Color(0xFFA87B5C); // copperDeep
+  static const tanLight = Color(0xFFDDCABF); // tan
+  static const cream = Color(0xFFF2E9E2); // tanSoft
+  static const white = Color(0xFFFFFFFF); // card
+  static const ink = Color(0xFF1A1A1A); // ink
+  static const muted = Color(0xFF948B82); // ink3
 
-  // Callout tones.
-  static const red50 = Color(0xFFFEF2F2);
-  static const red100 = Color(0xFFFEE2E2);
-  static const red500 = Color(0xFFEF4444);
-  static const red600 = Color(0xFFDC2626);
-  static const red800 = Color(0xFF991B1B);
-  static const red900 = Color(0xFF7F1D1D);
-  static const green50 = Color(0xFFF0FDF4);
-  static const green100 = Color(0xFFDCFCE7);
-  static const green500 = Color(0xFF22C55E);
-  static const green600 = Color(0xFF16A34A);
-  static const green800 = Color(0xFF166534);
-  static const green900 = Color(0xFF14532D);
-  static const blue50 = Color(0xFFEFF6FF);
-  static const blue100 = Color(0xFFDBEAFE);
-  static const blue500 = Color(0xFF3B82F6);
-  static const blue800 = Color(0xFF1E40AF);
-  static const blue900 = Color(0xFF1E3A8A);
-  static const yellow50 = Color(0xFFFEFCE8);
-  static const yellow100 = Color(0xFFFEF9C3);
-  static const yellow600 = Color(0xFFCA8A04);
-  static const yellow700 = Color(0xFFA16207);
-  static const yellow900 = Color(0xFF713F12);
-  static const orange50 = Color(0xFFFFF7ED);
-  static const orange100 = Color(0xFFFFEDD5);
-  static const orange600 = Color(0xFFEA580C);
-  static const orange900 = Color(0xFF7C2D12);
-  static const purple50 = Color(0xFFFAF5FF);
-  static const purple100 = Color(0xFFF3E8FF);
-  static const purple500 = Color(0xFFA855F7);
-  static const purple700 = Color(0xFF7E22CE);
-  static const purple800 = Color(0xFF6B21A8);
-  // Grays (web gray-50/100/400/700).
-  static const gray50 = Color(0xFFF9FAFB);
-  static const gray100 = Color(0xFFF3F4F6);
-  static const gray400 = Color(0xFF9CA3AF);
-  static const gray700 = Color(0xFF374151);
+  // Callout tones. The web's 50/100/500/…/900 ladders collapse onto the
+  // handoff's two-step semantic pairs — it only ever ships a soft fill and a
+  // solid accent per tone, so the extra steps had nothing to map to. Names are
+  // kept so no call site changes.
+  static const red50 = Color(0xFFF6E3DF); // lowSoft
+  static const red100 = Color(0xFFF6E3DF);
+  static const red500 = Color(0xFFC2604E); // low
+  static const red600 = Color(0xFFC2604E);
+  static const red800 = Color(0xFFC2604E);
+  static const red900 = Color(0xFF8E4335); // low, darkened for body text
+  static const green50 = Color(0xFFE3F0E9); // goodSoft
+  static const green100 = Color(0xFFE3F0E9);
+  static const green500 = Color(0xFF3F8F6B); // good
+  static const green600 = Color(0xFF3F8F6B);
+  static const green800 = Color(0xFF3F8F6B);
+  static const green900 = Color(0xFF2C6449);
+  static const blue50 = Color(0xFFE3EDF1); // infoSoft
+  static const blue100 = Color(0xFFE3EDF1);
+  static const blue500 = Color(0xFF4E7A8A); // info
+  static const blue800 = Color(0xFF4E7A8A);
+  static const blue900 = Color(0xFF375761);
+  static const yellow50 = Color(0xFFF7ECDC); // midSoft
+  static const yellow100 = Color(0xFFF7ECDC);
+  static const yellow600 = Color(0xFFD99A4E); // mid
+  static const yellow700 = Color(0xFFB07B36);
+  static const yellow900 = Color(0xFF7A5626);
+  static const orange50 = Color(0xFFF7ECDC); // midSoft — no separate orange
+  static const orange100 = Color(0xFFF7ECDC);
+  static const orange600 = Color(0xFFD99A4E);
+  static const orange900 = Color(0xFF7A5626);
+  static const purple50 = Color(0xFFE3EDF1); // set1 has no soft pair; use infoSoft
+  static const purple100 = Color(0xFFE3EDF1);
+  static const purple500 = Color(0xFF71838F); // set1
+  static const purple700 = Color(0xFF5A6971);
+  static const purple800 = Color(0xFF5A6971);
+  // Neutrals.
+  static const gray50 = Color(0xFFFBF8F5); // card2
+  static const gray100 = Color(0xFFEFE9E3); // bg2
+  static const gray400 = Color(0xFF948B82); // ink3
+  static const gray700 = Color(0xFF5C5650); // ink2
 
   /// Sections in render order: key, title, icon, and whether it's
   /// practitioner-only (hidden on the "Your Report" tab).

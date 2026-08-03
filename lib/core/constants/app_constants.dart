@@ -7,6 +7,13 @@ class AppConstants {
   static const Duration aiAnalysisTimeout = Duration(minutes: 5);
   static const Duration aiChatTimeout = Duration(minutes: 2);
 
+  /// `performance-chat/message` and `recovery-chat/message`. Each turn embeds
+  /// the message and runs a model round trip server-side — measured at ~95 s
+  /// per turn against the dev backend, so the 30 s [receiveTimeout] default
+  /// aborted EVERY send and the assistant answered "Couldn't reach the
+  /// assistant" no matter what was typed.
+  static const Duration padChatTimeout = Duration(minutes: 3);
+
   // Token
   static const Duration tokenRefreshBuffer = Duration(minutes: 5);
   static const Duration accessTokenExpiry = Duration(days: 1);

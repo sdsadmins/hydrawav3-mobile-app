@@ -6,7 +6,6 @@ import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../ai_report/data/ai_report_repository.dart';
 import '../../../ai_report/presentation/widgets/ai_report_status_banner.dart';
-import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../clients/presentation/widgets/client_selection_section.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../intake/presentation/widgets/guided_assessment_panel.dart';
@@ -26,12 +25,10 @@ class AiScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Same gating as the old DeviceListScreen._buildClientGuestSection():
-    // client sessions always run the Guided Assessment (web parity), so the
-    // Guided vs Quick Start chooser is Guest-only.
-    final isGuest = ref.watch(sessionClientModeProvider) == ClientMode.guest;
-    final isGuided =
-        !isGuest || ref.watch(sessionTypeProvider) == SessionType.guided;
+    // The Guided Assessment is opt-in for Client mode too — picking a client no
+    // longer forces the body-part / assessment steps, so the Guided vs Quick
+    // Start chooser shows either way and only Guided opens the panel.
+    final isGuided = ref.watch(sessionTypeProvider) == SessionType.guided;
 
     return Scaffold(
       backgroundColor: ThemeConstants.background,
@@ -71,10 +68,8 @@ class AiScreen extends ConsumerWidget {
             const AiReportStatusBanner(),
             const SizedBox(height: 12),
             const ClientSelectionSection(),
-            if (isGuest) ...[
-              const SizedBox(height: 12),
-              const SessionTypeCards(),
-            ],
+            const SizedBox(height: 12),
+            const SessionTypeCards(),
             if (isGuided) ...[
               const SizedBox(height: 12),
               const GuidedAssessmentPanel(),

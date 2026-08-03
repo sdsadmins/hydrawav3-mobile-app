@@ -16,14 +16,14 @@ final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
   return SessionRepository(
     db: ref.read(databaseProvider),
     nodeDio: ref.read(nodeDioProvider),
-    isOnline: ref.read(isOnlineProvider),
+    ref: ref,
   );
 });
 
 class SessionRepository {
   final AppDatabase _db;
   final Dio _nodeDio;
-  final bool _isOnline;
+  final Ref _ref;
 
   /// Session ids already POSTed to the backend in this app run. The backend
   /// inserts a new intake on every POST (no upsert), so a session must be
@@ -39,10 +39,12 @@ class SessionRepository {
   SessionRepository({
     required AppDatabase db,
     required Dio nodeDio,
-    required bool isOnline,
+    required Ref ref,
   })  : _db = db,
         _nodeDio = nodeDio,
-        _isOnline = isOnline;
+        _ref = ref;
+
+  bool get _isOnline => _ref.read(isOnlineProvider);
 
   LocalSessionsCompanion _companion(SessionRecord record, {required bool synced}) {
     return LocalSessionsCompanion(

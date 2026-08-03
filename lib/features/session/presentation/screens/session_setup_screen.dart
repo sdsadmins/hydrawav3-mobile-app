@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/router/route_names.dart';
 import '../../../../core/storage/local_db.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../../../core/utils/extensions.dart';
@@ -10,8 +12,8 @@ import '../../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../clients/presentation/widgets/client_selection_section.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
-import '../../../intake/presentation/widgets/guided_assessment_wizard.dart';
 import '../../../ble/data/ble_repository.dart';
+import '../../../performance_protocols/presentation/providers/performance_session_provider.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../presets/data/preset_repository.dart';
@@ -136,7 +138,36 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
   void initState() {
     super.initState();
     _runDeviceIds.addAll(widget.deviceIds);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadDeviceNames());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadDeviceNames();
+      _applyPendingProtocol();
+    });
+  }
+
+  /// Pre-fills the protocol a placement flow handed off ("Go to Session" in the
+  /// Assistant / pad map — the UI spec's `startSessionFromFlow`). Consumed once
+  /// and cleared, so it never leaks into a later session, and it never overrides
+  /// a protocol the practitioner already picked for a device.
+  Future<void> _applyPendingProtocol() async {
+    final pendingId = ref.read(pendingSessionProtocolProvider);
+    if (pendingId == null || pendingId.isEmpty) return;
+    ref.read(pendingSessionProtocolProvider.notifier).state = null;
+
+    try {
+      final protocol = await ref.read(protocolDetailProvider(pendingId).future);
+      if (!mounted) return;
+      setState(() {
+        for (final deviceId in widget.deviceIds) {
+          if (_protocolIdByDeviceId.containsKey(deviceId)) continue;
+          _protocolIdByDeviceId[deviceId] = pendingId;
+          _selectedProtocolByDeviceId[deviceId] = protocol;
+          _settingsByDeviceId[deviceId] = _advancedDefaultsFromProtocol(protocol);
+          _showAdvancedByDeviceId[deviceId] = false;
+        }
+      });
+    } catch (_) {
+      // Gated or offline — the practitioner picks a protocol as usual.
+    }
   }
 
   Future<void> _loadDeviceNames() async {
@@ -558,17 +589,17 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                   children: [
                     // Client / Guest selector (web parity).
                     const ClientSelectionSection(),
-                    // Guided vs Quick Start chooser is Guest-only (web parity):
-                    // in Client mode the Guided Assessment loads directly.
-                    if (ref.watch(sessionClientModeProvider) ==
-                        ClientMode.guest)
-                      const _SessionTypeCards(),
-                    // Guided wizard: always in Client mode; in Guest mode only
-                    // when Guided is chosen.
-                    if (ref.watch(sessionClientModeProvider) ==
-                            ClientMode.client ||
-                        ref.watch(sessionTypeProvider) == SessionType.guided)
-                      const GuidedAssessmentWizard(),
+                    // Guided vs Quick Start is offered in Client mode too —
+                    // picking a client no longer forces the body-part /
+                    // assessment steps.
+                    const _SessionTypeCards(),
+                    // Guided mode shows a SUMMARY of the assessment plus a way
+                    // into it. The wizard itself is now its own full screen
+                    // (`/guided-assessment`) — a body stage and a per-area
+                    // protractor don't fit in a card inside a scrolling setup
+                    // form, and it used to duplicate the Generate button here.
+                    if (ref.watch(sessionTypeProvider) == SessionType.guided)
+                      const _GuidedAssessmentSummary(),
                     Text(
                       'Configure each device individually',
                       style: TextStyle(
@@ -860,24 +891,9 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 return;
                               }
 
-                              // Web parity (session.tsx handleStart): Client mode
-                              // requires at least one area of focus (discomfort
-                              // area). Guest mode is never gated.
-                              if (clientMode == ClientMode.client &&
-                                  ref
-                                      .read(guidedAssessmentProvider)
-                                      .discomfortAreas
-                                      .isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text(
-                                      'Select at least one area of focus before starting.',
-                                    ),
-                                    backgroundColor: ThemeConstants.error,
-                                  ),
-                                );
-                                return;
-                              }
+                              // No area-of-focus gate: the body-part step is
+                              // optional intake in Client mode too, so a client
+                              // session starts without one.
 
                               final currentSelectedDeviceIds = widget.deviceIds
                                   .where((id) => _runDeviceIds.contains(id))
@@ -1930,6 +1946,87 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// Guided mode's inline summary of the assessment, replacing the old 4-step
+/// wizard that used to render here.
+///
+/// The wizard is now `/guided-assessment` (the spec's `scr-wizard`). This keeps
+/// session setup aware of the assessment — how much is captured, whether a
+/// report can be generated — without owning the flow or duplicating its CTA.
+class _GuidedAssessmentSummary extends ConsumerWidget {
+  const _GuidedAssessmentSummary();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final data = ref.watch(guidedAssessmentProvider);
+    final areas = data.discomfortAreas.length;
+    final ready = data.canGenerateReport;
+
+    final bits = <String>[
+      if (areas > 0) '$areas area${areas == 1 ? '' : 's'}',
+      if (data.romFindings.isNotEmpty) 'ROM captured',
+      if (data.dailyActivities.isNotEmpty) 'activities set',
+      if (data.sleepPosture != null) 'sleep posture',
+      if (data.hardestPosition != null) 'position',
+    ];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: ThemeConstants.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: ready ? ThemeConstants.accent : ThemeConstants.border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Guided Assessment',
+                  style: TextStyle(
+                    color: ThemeConstants.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              if (ready)
+                Icon(Icons.check_circle_rounded,
+                    size: 18, color: ThemeConstants.accent),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            bits.isEmpty
+                ? 'Not started — five short steps: area of focus, range of '
+                    'motion, daily activities, sleep posture and hardest position.'
+                : bits.join(' · '),
+            style: TextStyle(
+              color: ThemeConstants.textSecondary,
+              fontSize: 12,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton(
+            onPressed: () => context.push(RoutePaths.guidedAssessment),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ThemeConstants.accent,
+              side: BorderSide(color: ThemeConstants.accent),
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
+            child: Text(bits.isEmpty ? 'Start assessment' : 'Open assessment'),
+          ),
+        ],
+      ),
     );
   }
 }

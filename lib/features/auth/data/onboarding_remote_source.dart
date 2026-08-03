@@ -12,10 +12,14 @@ final onboardingRemoteSourceProvider = Provider<OnboardingRemoteSource>((ref) {
 
 /// Talks to the practitioner-onboarding endpoints, replicating the web's exact
 /// 4-call sequence (see [OnboardingController.submit]):
-///   1) [createPractitioner]  → POST {node}/practitioners/onboarding (no auth)
-///   2) [createOrganization]  → POST {primary}/admin/organizations (raw token)
+///   1) [createPractitioner]  → POST {node}user/onboarding (no auth)
+///   2) [createOrganization]  → POST {node}user/organizations (raw token)
 ///   3) [uploadCertificate]   → POST {primary-api}/certificates/upload (raw token)
-///   4) [updateUserAccount]   → PUT  {primary}/admin/user/accounts/{id} (raw token)
+///   4) [updateUserAccount]   → PUT  {node}user/accounts/{id} (raw token)
+///
+/// Calls 1, 2 and 4 used to live on Django (`/admin/...`); the web moved them to
+/// the Node backend under `user/*`, and this mirrors that. The certificate
+/// upload is the only step still served by Django.
 ///
 /// Uses a DEDICATED, clean Dio (no auth interceptor): the user isn't logged in
 /// during onboarding; calls 2–4 are authorized with the token returned by call 1
@@ -34,15 +38,82 @@ class OnboardingRemoteSource {
   static String get _certBaseUrl =>
       ApiEndpoints.djangoBaseUrl.replaceFirst(RegExp(r'/api/v1/?$'), '/api/');
 
+  // ── Account types (public) ──────────────────────────────────────────────────
+  /// GET {node}user/account-types — JSON, no auth. Populates the Account Type
+  /// select on step 1. The list comes back either at the top level or wrapped in
+  /// `data` (web parity), and only `id` + `name` are read off each item.
+  Future<List<AccountTypeOption>> getAccountTypes() async {
+    try {
+      final res = await _dio.get(
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.onboardingAccountTypes}',
+        options: Options(headers: const {'Content-Type': 'application/json'}),
+      );
+      final body = res.data;
+      final list = body is List
+          ? body
+          : (body is Map && body['data'] is List)
+              ? body['data'] as List
+              : const [];
+      return [
+        for (final raw in list)
+          if (raw is Map)
+            AccountTypeOption(
+              id: _str(raw['id']) ?? '',
+              name: _str(raw['name']) ?? '',
+            ),
+      ].where((a) => a.id.isNotEmpty).toList();
+    } on DioException catch (e) {
+      throw _asServerException(e, 'Failed to load account types.');
+    }
+  }
+
+  // ── Sports catalogue = the performance disciplines (public) ─────────────────
+  /// GET {node}performance-protocols/disciplines — JSON, NO auth (the catalogue
+  /// routes are ungated), so this no longer waits on the create-step token.
+  ///
+  /// Returns `[{ discipline, display_name }]` — one entry per sport that has at
+  /// least one active protocol. `display_name` is what the practitioner picks
+  /// and what is sent back as `sport` on org create, since the backend stores
+  /// the sport by NAME now, not by a catalogue id.
+  Future<List<SportOption>> getSports() async {
+    try {
+      final res = await _dio.get(
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.perfDisciplines}',
+        options: Options(headers: const {'Content-Type': 'application/json'}),
+      );
+      final body = res.data;
+      final list = body is List
+          ? body
+          : (body is Map && body['data'] is List)
+              ? body['data'] as List
+              : const [];
+      final sports = <SportOption>[];
+      final seen = <String>{};
+      for (final raw in list) {
+        if (raw is! Map) continue;
+        final key = _str(raw['discipline']);
+        final name = _str(raw['display_name']) ?? key;
+        // A row with neither field isn't a discipline — skip it rather than
+        // rendering a blank chip.
+        if (name == null) continue;
+        if (!seen.add(name.toLowerCase())) continue;
+        sports.add(SportOption(discipline: key ?? name, name: name));
+      }
+      return sports;
+    } on DioException catch (e) {
+      throw _asServerException(e, 'Failed to load sports.');
+    }
+  }
+
   // ── Call 1: create the practitioner account (returns userId + token) ─────────
-  /// POST {node}/practitioners/onboarding — JSON, no auth. Returns the created
-  /// `userId` and the auth `token` used to authorize calls 2–4.
+  /// POST {node}user/onboarding — JSON, no auth. Returns the created `userId`
+  /// and the auth `token` used to authorize calls 2–4.
   Future<({String userId, String token})> createPractitioner(
     Map<String, dynamic> data,
   ) async {
     try {
       final res = await _dio.post(
-        '${ApiEndpoints.nodeBaseUrl}practitioners/onboarding',
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.onboardingCreate}',
         data: data,
         options: Options(headers: const {'Content-Type': 'application/json'}),
       );
@@ -62,14 +133,14 @@ class OnboardingRemoteSource {
   }
 
   // ── Call 2: create the organization (returns orgId) ──────────────────────────
-  /// POST {primary}/admin/organizations — JSON, raw token. Returns the org id.
+  /// POST {node}user/organizations — JSON, raw token. Returns the org id.
   Future<String> createOrganization(
     Map<String, dynamic> data,
     String token,
   ) async {
     try {
       final res = await _dio.post(
-        '${ApiEndpoints.djangoBaseUrl}${ApiEndpoints.organizations}',
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.onboardingOrganizations}',
         data: data,
         options: Options(headers: {
           'Content-Type': 'application/json',
@@ -126,7 +197,7 @@ class OnboardingRemoteSource {
   }
 
   // ── Call 4: link the organization to the practitioner account ────────────────
-  /// PUT {primary}/admin/user/accounts/{userId} — JSON, raw token.
+  /// PUT {node}user/accounts/{userId} — JSON, raw token.
   Future<void> updateUserAccount(
     String userId,
     Map<String, dynamic> data,
@@ -134,7 +205,7 @@ class OnboardingRemoteSource {
   ) async {
     try {
       await _dio.put(
-        '${ApiEndpoints.djangoBaseUrl}${ApiEndpoints.userAccountById(userId)}',
+        '${ApiEndpoints.nodeBaseUrl}${ApiEndpoints.onboardingAccountById(userId)}',
         data: data,
         options: Options(headers: {
           'Content-Type': 'application/json',
@@ -154,8 +225,17 @@ class OnboardingRemoteSource {
       '${e.response?.data}',
     );
     final data = e.response?.data;
-    final msg = (data is Map ? data['message']?.toString() : null) ?? fallback;
-    return ServerException(msg, statusCode: e.response?.statusCode);
+    final raw = data is Map ? data['message'] : null;
+    // Nest's ValidationPipe returns `message` as a LIST of field errors —
+    // `toString()` on that renders a raw Dart list ("[a, b]") in the UI, so
+    // join it into a sentence instead.
+    final msg = raw is List
+        ? raw.map((m) => m.toString()).where((m) => m.isNotEmpty).join('. ')
+        : raw?.toString();
+    return ServerException(
+      (msg == null || msg.isEmpty) ? fallback : msg,
+      statusCode: e.response?.statusCode,
+    );
   }
 
   static String? _str(dynamic v) {

@@ -10,7 +10,7 @@ final historyRepositoryProvider = Provider<HistoryRepository>((ref) {
   return HistoryRepository(
     remoteSource: ref.read(historyRemoteSourceProvider),
     db: ref.read(databaseProvider),
-    isOnline: ref.read(isOnlineProvider),
+    ref: ref,
   );
 });
 
@@ -29,18 +29,42 @@ final allSessionsProvider =
       .toList();
 });
 
+/// One client's sessions, newest first (`GET /intake/client/:clientId`).
+///
+/// Unlike [allSessionsProvider] this is **not** filtered to the signed-in
+/// practitioner — a client's history is theirs regardless of who ran each
+/// session, which is what a portfolio needs to show.
+final clientHistoryProvider =
+    FutureProvider.autoDispose.family<List<SessionHistoryItem>, String>(
+        (ref, clientId) async {
+  if (clientId.isEmpty) return const [];
+  final list =
+      await ref.read(historyRepositoryProvider).getClientHistory(clientId);
+  list.sort((a, b) {
+    final ad = a.createdAt;
+    final bd = b.createdAt;
+    if (ad == null && bd == null) return 0;
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    return bd.compareTo(ad);
+  });
+  return list;
+});
+
 class HistoryRepository {
   final HistoryRemoteSource _remoteSource;
   final AppDatabase _db;
-  final bool _isOnline;
+  final Ref _ref;
 
   HistoryRepository({
     required HistoryRemoteSource remoteSource,
     required AppDatabase db,
-    required bool isOnline,
+    required Ref ref,
   })  : _remoteSource = remoteSource,
         _db = db,
-        _isOnline = isOnline;
+        _ref = ref;
+
+  bool get _isOnline => _ref.read(isOnlineProvider);
 
   /// Watch local sessions (always available, offline-safe).
   Stream<List<LocalSession>> watchLocalSessions() => _db.watchLocalSessions();

@@ -44,25 +44,77 @@ class SessionHistoryItem {
   }
 }
 
+int? _parseHistoryDuration(Map<String, dynamic> json) {
+  final raw = json['duration'] ??
+      json['durationSeconds'] ??
+      json['duration_seconds'] ??
+      json['totalDurationSeconds'] ??
+      json['totalDuration'];
+
+  if (raw is num) return raw.toInt();
+  if (raw is String) {
+    final parsed = int.tryParse(raw);
+    if (parsed != null) return parsed;
+    return double.tryParse(raw)?.toInt();
+  }
+  return null;
+}
+
 class HistoryProtocol {
   final String? bodyPart;
   final String? protocol;
   final int? duration;
   final String? deviceName;
 
+  /// The post-session outcome check, as answered on the outcomes sheet and
+  /// POSTed inside `protocols[].questionAnswers`. This — not the discomfort
+  /// scores — is what the outcomes sheet actually collects, so it's the only
+  /// source the history row can read an outcome from.
+  final List<HistoryQuestionAnswer> questionAnswers;
+
   const HistoryProtocol({
     this.bodyPart,
     this.protocol,
     this.duration,
     this.deviceName,
+    this.questionAnswers = const [],
   });
 
   factory HistoryProtocol.fromJson(Map<String, dynamic> json) {
     return HistoryProtocol(
       bodyPart: json['bodyPart'] as String?,
       protocol: json['protocol'] as String?,
-      duration: json['duration'] as int?,
+      duration: _parseHistoryDuration(json),
       deviceName: json['deviceName'] as String?,
+      questionAnswers: (json['questionAnswers'] as List<dynamic>?)
+              ?.whereType<Map>()
+              .map((e) =>
+                  HistoryQuestionAnswer.fromJson(Map<String, dynamic>.from(e)))
+              .toList() ??
+          const [],
+    );
+  }
+}
+
+/// One answered outcome-check question logged against a protocol.
+class HistoryQuestionAnswer {
+  final String question;
+  final String answer;
+
+  /// 1–5 for a preset answer (higher = better outcome), 0 for free text.
+  final int rank;
+
+  const HistoryQuestionAnswer({
+    required this.question,
+    required this.answer,
+    this.rank = 0,
+  });
+
+  factory HistoryQuestionAnswer.fromJson(Map<String, dynamic> json) {
+    return HistoryQuestionAnswer(
+      question: (json['question'] ?? '').toString(),
+      answer: (json['answer'] ?? '').toString(),
+      rank: (json['rank'] as num?)?.toInt() ?? 0,
     );
   }
 }

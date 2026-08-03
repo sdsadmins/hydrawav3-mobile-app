@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../theme/hw_tokens.dart';
+import '../theme/widgets/hw_icon.dart';
 import '../../features/auth/presentation/providers/auth_provider.dart';
 import '../../features/auth/presentation/providers/client_auth_provider.dart';
+import '../../features/assistant/presentation/screens/assistant_screen.dart';
+import '../../features/performance_protocols/presentation/screens/performance_protocols_screen.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
@@ -11,6 +16,7 @@ import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/devices/presentation/screens/device_detail_screen.dart';
 import '../../features/devices/presentation/screens/device_list_screen.dart';
 import '../../features/devices/presentation/screens/device_register_screen.dart';
+import '../../features/home/presentation/screens/hub_screen.dart';
 import '../../features/history/presentation/screens/history_list_screen.dart';
 import '../../features/history/presentation/screens/session_detail_screen.dart';
 import '../../features/history/domain/session_history_model.dart';
@@ -23,39 +29,63 @@ import '../../features/advanced_settings/domain/advanced_settings_model.dart';
 import '../../features/session/domain/active_session_model.dart';
 import '../../features/session/presentation/providers/live_sessions_provider.dart';
 import '../../features/session/presentation/screens/session_screen.dart';
+import '../../features/session/presentation/screens/session_after_screen.dart';
 import '../../features/session/presentation/screens/session_setup_screen.dart';
-import '../../features/settings/presentation/screens/change_password_screen.dart';
-import '../../features/settings/presentation/screens/profile_edit_screen.dart';
+import '../../features/ai_hub/presentation/screens/ai_hub_screen.dart';
+import '../../features/notifications/presentation/screens/notifications_screen.dart';
+import '../../features/settings/presentation/screens/legal_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/screens/subscription_screen.dart';
 import '../../features/presets/presentation/screens/preset_management_screen.dart';
 import '../../features/ai_chat/presentation/screens/chat_screen.dart';
+import '../../features/ai_report/presentation/providers/ai_report_providers.dart';
+import '../../features/intake/presentation/screens/guided_assessment_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_report_screen.dart';
 import '../../features/ai_report/presentation/screens/ai_reports_list_screen.dart';
 import '../../features/ai_report/presentation/screens/kinetic_chain_3d_screen.dart';
 import '../../features/clients/presentation/screens/clients_list_screen.dart';
+import '../../features/clients/presentation/screens/users_screen.dart';
 import '../../features/clients/presentation/screens/client_detail_screen.dart';
 import '../../features/clients/presentation/screens/client_lease_screen.dart';
 import '../../features/client_session/presentation/screens/client_session_screen.dart';
-import '../../features/ai_hub/presentation/screens/ai_screen.dart';
-import '../constants/theme_constants.dart';
 import 'route_names.dart';
 import '../../features/auth/presentation/screens/select_organization_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Bridges auth changes into something GoRouter can refresh on.
+///
+/// The router must NOT be rebuilt when auth state changes. `HydrawavApp`
+/// watches [routerProvider] and hands the result to `MaterialApp.router`, so a
+/// new GoRouter means a new `routerConfig` — and the replacement Router claims
+/// the same `_rootNavigatorKey` / `_shellNavigatorKey` while the outgoing one
+/// is still mounted. That duplicate-GlobalKey collision blanks the screen until
+/// the next navigation, which is exactly what switching organization used to
+/// do. Refreshing a stable router re-runs `redirect` without rebuilding it.
+class _AuthRefreshNotifier extends ChangeNotifier {
+  _AuthRefreshNotifier(Ref ref) {
+    ref.listen(authStateProvider, (_, __) => notifyListeners());
+    ref.listen(clientAuthProvider, (_, __) => notifyListeners());
+  }
+}
+
 final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
-  // Client (at-home) sessions authenticate separately from practitioners; the
-  // router must treat an authenticated client as logged-in too, and skip the
-  // practitioner-only org-selection gate.
-  final isClientAuth = ref.watch(clientAuthProvider).isAuthenticated;
+  final authRefresh = _AuthRefreshNotifier(ref);
+  ref.onDispose(authRefresh.dispose);
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: RoutePaths.login,
+    refreshListenable: authRefresh,
     redirect: (context, state) {
+      // Read (never watch) inside redirect — the refreshListenable above is
+      // what re-runs this, and watching here would rebuild the router.
+      final authState = ref.read(authStateProvider);
+      // Client (at-home) sessions authenticate separately from practitioners;
+      // the router must treat an authenticated client as logged-in too, and
+      // skip the practitioner-only org-selection gate.
+      final isClientAuth = ref.read(clientAuthProvider).isAuthenticated;
       final isAuth = authState.isAuthenticated;
 
       final isAuthRoute = state.matchedLocation == RoutePaths.login ||
@@ -102,8 +132,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       return null;
     },
-    routes: 
-    [
+    routes: [
       GoRoute(
           path: RoutePaths.login,
           name: RouteNames.login,
@@ -119,7 +148,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/select-organization',
         name: RouteNames.selectOrganization,
-        builder: (c, s) => const SelectOrganizationPage(),
+        builder: (c, s) => SelectOrganizationPage(
+          startInCreateMode: s.uri.queryParameters['create'] == '1',
+        ),
       ),
       GoRoute(
           path: RoutePaths.forgotPassword,
@@ -130,6 +161,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (c, s, child) => _AppShell(child: child),
         routes: [
           GoRoute(
+              path: RoutePaths.home,
+              name: RouteNames.home,
+              builder: (c, s) => const HubScreen()),
+          // The protocol catalogue keeps its route; the spec reaches it from
+          // More → Protocol Library rather than from a nav tab.
+          GoRoute(
               path: RoutePaths.protocols,
               name: RouteNames.protocols,
               builder: (c, s) => const ProtocolListScreen()),
@@ -138,9 +175,27 @@ final routerProvider = Provider<GoRouter>((ref) {
               name: RouteNames.devices,
               builder: (c, s) => const DeviceListScreen()),
           GoRoute(
+              path: RoutePaths.assistant,
+              name: RouteNames.assistant,
+              builder: (c, s) =>
+                  AssistantScreen(intent: s.uri.queryParameters['intent'])),
+          // The pad_protocols catalogue as dropdowns — the browsing counterpart
+          // to the Assistant's chip flow. Both end on the same pad map.
+          GoRoute(
+              path: RoutePaths.performanceProtocols,
+              name: RouteNames.performanceProtocols,
+              builder: (c, s) => const PerformanceProtocolsScreen()),
+          GoRoute(
               path: RoutePaths.ai,
               name: RouteNames.ai,
-              builder: (c, s) => const AiScreen()),
+              builder: (c, s) => const AiHubScreen()),
+          GoRoute(
+              path: RoutePaths.users,
+              name: RouteNames.users,
+              builder: (c, s) => const UsersScreen()),
+          // Still routable on its own (deep links, "see all history" pushes);
+          // the nav tab now opens the Users screen, whose History segment
+          // renders this same list.
           GoRoute(
               path: RoutePaths.history,
               name: RouteNames.history,
@@ -272,6 +327,21 @@ final routerProvider = Provider<GoRouter>((ref) {
             );
           }),
       GoRoute(
+        path: RoutePaths.sessionAfter,
+        name: RouteNames.sessionAfter,
+        builder: (c, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? const {};
+          // Both overrides are optional: when the app-wide gate opens this
+          // screen there is no live engine to read them from, so the queued
+          // snapshot supplies them instead.
+          return SessionAfterScreen(
+            sessionId: (extra['sessionId'] ?? '').toString(),
+            stoppedEarly: extra['stoppedEarly'] as bool?,
+            remainingSeconds: (extra['remainingSeconds'] as num?)?.toInt(),
+          );
+        },
+      ),
+      GoRoute(
           path: RoutePaths.deviceRegister,
           name: RouteNames.deviceRegister,
           builder: (c, s) => const DeviceRegisterScreen()),
@@ -289,18 +359,20 @@ final routerProvider = Provider<GoRouter>((ref) {
                     ? s.extra as SessionHistoryItem
                     : null,
               )),
-      GoRoute(
-          path: RoutePaths.profileEdit,
-          name: RouteNames.profileEdit,
-          builder: (c, s) => const ProfileEditScreen()),
-      GoRoute(
-          path: RoutePaths.changePassword,
-          name: RouteNames.changePassword,
-          builder: (c, s) => const ChangePasswordScreen()),
+      // Edit profile and Change password are bottom sheets now (the UI spec's
+      // `profileSheet()` / `passwordSheet()`), so they have no routes.
       GoRoute(
           path: RoutePaths.subscription,
           name: RouteNames.subscription,
           builder: (c, s) => const SubscriptionScreen()),
+      GoRoute(
+          path: RoutePaths.notifications,
+          name: RouteNames.notifications,
+          builder: (c, s) => const NotificationsScreen()),
+      GoRoute(
+          path: RoutePaths.legal,
+          name: RouteNames.legal,
+          builder: (c, s) => const LegalScreen()),
       GoRoute(
           path: RoutePaths.presets,
           name: RouteNames.presets,
@@ -334,6 +406,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: RoutePaths.aiReportClients,
         name: RouteNames.aiReportClients,
         builder: (c, s) => const ClientsListScreen(),
+      ),
+      // The 5-step Guided Assessment (the spec's `scr-wizard`). Full screen and
+      // outside the shell: the body stage and the per-area protractor need the
+      // room, and it used to be duplicated inline on two different hosts.
+      GoRoute(
+        path: RoutePaths.guidedAssessment,
+        name: RouteNames.guidedAssessment,
+        builder: (c, s) => const GuidedAssessmentScreen(),
       ),
       GoRoute(
         path: RoutePaths.kineticChain3d,
@@ -386,6 +466,18 @@ class _AppShell extends ConsumerWidget {
   final Widget child;
   const _AppShell({required this.child});
 
+  static void _toast(BuildContext context, String text,
+      {bool isError = false}) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: isError ? RefPalette.of(context).low : null,
+      ),
+    );
+  }
+
   bool _isLiveStatus(SessionStatus status) {
     return status == SessionStatus.running || status == SessionStatus.paused;
   }
@@ -407,12 +499,23 @@ class _AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).matchedLocation;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    int idx = 0;
-    if (location.startsWith(RoutePaths.devices)) idx = 1;
-    if (location.startsWith(RoutePaths.ai)) idx = 2;
-    if (location.startsWith(RoutePaths.history)) idx = 3;
-    if (location.startsWith(RoutePaths.settings)) idx = 4;
+    final idx = _tabIndexFor(location);
+
+    // AI report generation runs in the background and the user is free to walk
+    // away from the screen that started it, so completion has to be announced
+    // app-wide. This is the only listener — the old in-screen status banner was
+    // removed when the reports list took over showing in-flight jobs.
+    ref.listen<List<AiReportJob>>(aiReportGenerationProvider, (prev, next) {
+      final seen = {for (final j in prev ?? const <AiReportJob>[]) j.id: j.phase};
+      for (final job in next) {
+        if (seen[job.id] == job.phase) continue; // unchanged
+        if (job.phase == AiReportPhase.done) {
+          _toast(context, '${job.label} ready ✓');
+        } else if (job.phase == AiReportPhase.error) {
+          _toast(context, job.message ?? 'AI report failed', isError: true);
+        }
+      }
+    });
 
     // Backend-driven live feed (same source as the History → Live tab) so the
     // badge stays consistent and clears when a session stops/finishes.
@@ -423,57 +526,57 @@ class _AppShell extends ConsumerWidget {
     return Scaffold(
       body: child,
       bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          // Web-parity: dark slate nav chrome (both modes).
-          color: ThemeConstants.navBackground,
+        decoration: const BoxDecoration(
+          // styles.css:297 — brand navy, hard-coded identical in light and
+          // dark, and deliberately opaque (the nav has no blur).
+          color: _navBg,
           border: Border(
-            top: BorderSide(
-              color: ThemeConstants.onNav.withValues(alpha: 0.10),
-              width: 1,
-            ),
+            top: BorderSide(color: Color.fromRGBO(255, 255, 255, .07)),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.12),
-              blurRadius: 20,
-              offset: const Offset(0, -4),
+              color: Color.fromRGBO(16, 20, 24, .28),
+              blurRadius: 24,
+              offset: Offset(0, -8),
             ),
           ],
         ),
         child: SafeArea(
-          child: SizedBox(
-            height: 72,
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 11, 14, 13),
             child: Row(
               children: [
                 _NavTab(
-                    icon: Icons.home_outlined,
-                    activeIcon: Icons.home_rounded,
-                    label: 'Home',
+                    asset: HwIcons.home,
+                    label: 'Hub',
                     active: idx == 0,
-                    onTap: () => context.go(RoutePaths.protocols)),
+                    onTap: () => context.go(RoutePaths.home)),
+                const SizedBox(width: 4),
                 _NavTab(
-                    icon: Icons.bluetooth_outlined,
-                    activeIcon: Icons.bluetooth_connected_rounded,
-                    label: 'Devices',
+                    asset: HwIcons.bolt,
+                    label: 'Session',
                     active: idx == 1,
-                    onTap: () => context.go(RoutePaths.devices)),
-                _NavTab(
-                    icon: Icons.auto_awesome_outlined,
-                    activeIcon: Icons.auto_awesome_rounded,
-                    label: 'AI',
-                    active: idx == 2,
-                    onTap: () => context.go(RoutePaths.ai)),
-                _NavTab(
-                    icon: Icons.history_outlined,
-                    activeIcon: Icons.history_rounded,
-                    label: 'History',
-                    active: idx == 3,
+                    // Live runs surface on the Session Plan screen (above
+                    // Select User), so the running-session badge points here.
                     badgeCount: activeBackgroundCount,
-                    onTap: () => context.go(RoutePaths.history)),
+                    onTap: () => context.go(RoutePaths.devices)),
+                const SizedBox(width: 4),
                 _NavTab(
-                    icon: Icons.settings_outlined,
-                    activeIcon: Icons.settings_rounded,
-                    label: 'Settings',
+                    asset: HwIcons.assistant,
+                    label: 'Assistant',
+                    active: idx == 2,
+                    onTap: () => context.go(RoutePaths.assistant)),
+                const SizedBox(width: 4),
+                _NavTab(
+                    asset: HwIcons.users,
+                    label: 'Users',
+                    active: idx == 3,
+                    onTap: () => context.go(RoutePaths.users)),
+                const SizedBox(width: 4),
+                _NavTab(
+                    asset: HwIcons.more,
+                    label: 'More',
                     active: idx == 4,
                     onTap: () => context.go(RoutePaths.settings)),
               ],
@@ -485,17 +588,47 @@ class _AppShell extends ConsumerWidget {
   }
 }
 
+/// `#1B2830` — styles.css:297. Not a theme token: the spec fixes the nav to
+/// brand navy in both light and dark for a high-contrast footer.
+const Color _navBg = Color(0xFF1B2830);
+const Color _navOn = Color(0xFFFFFFFF);
+const Color _navOff = Color.fromRGBO(244, 239, 234, .55);
+
+/// Which tab lights up for a given location.
+///
+/// Mirrors the spec's `NAV_ALIAS` (app.js:362): screens reached *from* a tab
+/// keep that tab lit rather than dropping the highlight. History belongs to
+/// Users; the protocol catalogue, presets, AI and settings sub-screens are all
+/// entered from More.
+int _tabIndexFor(String location) {
+  if (location.startsWith(RoutePaths.devices)) return 1;
+  if (location.startsWith(RoutePaths.assistant)) return 2;
+  if (location.startsWith(RoutePaths.users) ||
+      location.startsWith(RoutePaths.history)) {
+    return 3;
+  }
+  if (location.startsWith(RoutePaths.settings) ||
+      location.startsWith(RoutePaths.protocols) ||
+      location.startsWith(RoutePaths.protocolPlus) ||
+      location.startsWith(RoutePaths.presets) ||
+      location.startsWith(RoutePaths.chat) ||
+      location.startsWith(RoutePaths.notifications) ||
+      location.startsWith(RoutePaths.legal) ||
+      location.startsWith('/ai-')) {
+    return 4;
+  }
+  return 0;
+}
+
 class _NavTab extends StatelessWidget {
-  final IconData icon;
-  final IconData activeIcon;
+  final String asset;
   final String label;
   final bool active;
   final int badgeCount;
   final VoidCallback onTap;
 
   const _NavTab(
-      {required this.icon,
-      required this.activeIcon,
+      {required this.asset,
       required this.label,
       required this.active,
       this.badgeCount = 0,
@@ -503,28 +636,25 @@ class _NavTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Nav chrome is the dark slate background in both modes, so inactive
-    // items are cream (onNav) dimmed; active items use the tan accent.
-    final inactiveColor = ThemeConstants.onNav.withValues(alpha: 0.60);
+    final color = active ? _navOn : _navOff;
 
     return Expanded(
-      child: GestureDetector(
+      child: _NavPress(
         onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Stack(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 7, bottom: 5),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Active icon rides 2px up on the spring curve (styles.css:305).
+              AnimatedSlide(
+                offset: active ? const Offset(0, -0.09) : Offset.zero,
+                duration: HwMotion.t3,
+                curve: HwMotion.spring,
+                child: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    Icon(
-                      active ? activeIcon : icon,
-                      size: 22,
-                      color: active ? ThemeConstants.accent : inactiveColor,
-                    ),
+                    HwIcon(asset, size: 22, color: color),
                     if (badgeCount > 0)
                       Positioned(
                         right: -8,
@@ -533,12 +663,10 @@ class _NavTab extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: ThemeConstants.accent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: ThemeConstants.navBackground,
-                              width: 1.5,
-                            ),
+                            color: RefPalette.light.low,
+                            borderRadius:
+                                BorderRadius.circular(HwRadius.pill),
+                            border: Border.all(color: _navBg, width: 2),
                           ),
                           constraints: const BoxConstraints(
                             minWidth: 18,
@@ -557,19 +685,70 @@ class _NavTab extends StatelessWidget {
                       ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                    color: active ? ThemeConstants.accent : inactiveColor,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 3),
+              // The only active indicator the spec has — a 4px copper dot.
+              // No pill, no underline.
+              AnimatedOpacity(
+                opacity: active ? 1 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  width: 4,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: RefPalette.light.copper,
+                    shape: BoxShape.circle,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// `#bottomnav button:active{transform:scale(.9)}` + the selection haptic that
+/// Principles §7 requires on every tap.
+class _NavPress extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  const _NavPress({required this.child, required this.onTap});
+
+  @override
+  State<_NavPress> createState() => _NavPressState();
+}
+
+class _NavPressState extends State<_NavPress> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapCancel: () => setState(() => _down = false),
+      onTap: () {
+        setState(() => _down = false);
+        HapticFeedback.selectionClick();
+        widget.onTap();
+      },
+      child: AnimatedScale(
+        scale: _down ? 0.9 : 1,
+        duration: HwMotion.t1,
+        curve: HwMotion.spring,
+        child: widget.child,
       ),
     );
   }

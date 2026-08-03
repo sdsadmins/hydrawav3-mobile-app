@@ -8,10 +8,12 @@ import '../../../../core/network/dio_client.dart';
 import '../../../../core/storage/secure_storage.dart';
 import '../../../../core/utils/logger.dart';
 import '../../domain/active_session_model.dart';
+import '../../domain/session_model.dart' as session_model;
 import '../../services/session_engine.dart';
 import '../../services/session_sync_service.dart';
 import '../../services/sessions_socket.dart';
 import 'active_sessions_provider.dart';
+import 'pending_outcomes_provider.dart';
 
 /// The org-wide live-session feed — the single source of truth for which
 /// sessions are running, on mobile as on the web. Backed by the backend
@@ -25,6 +27,73 @@ final liveSessionsProvider =
   final notifier = LiveSessionsNotifier(ref);
   ref.onDispose(notifier.stop);
   return notifier;
+});
+
+/// A session counts as live while the backend feed still carries it and it
+/// hasn't been stopped — that includes fully-paused and completed runs, which
+/// linger until someone hits Stop All.
+bool _isVisibleStatus(SessionStatus status) =>
+    status == SessionStatus.running ||
+    status == SessionStatus.paused ||
+    status == SessionStatus.completed;
+
+bool isVisibleActiveSession(ActiveSession session) {
+  if (_isVisibleStatus(session.status)) return true;
+  for (final deviceId in session.deviceIds) {
+    if (_isVisibleStatus(
+        session.deviceStatuses[deviceId] ?? SessionStatus.idle)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// BACKEND session ids of runs THIS phone has already finished but that the feed
+/// still carries.
+///
+/// The backend keeps a session in `GET /sessions/active` until it is explicitly
+/// stopped, and a `completed` run deliberately stays on screen until someone
+/// hits Stop All. So the feed alone can't tell "still running" from "over" — and
+/// every surface that reads it went on claiming a finished run was *running*.
+///
+/// The local engine is the authority for a run we own: `stopped` / `completed`
+/// there means it is over, whatever the feed still says. A run awaiting its
+/// post-session review counts as finished too.
+///
+/// These sessions are NOT hidden — they stay on the banner as the way back into
+/// the run (to review it, or to Stop All and clear it). They're just labelled
+/// honestly instead of being announced as live.
+///
+/// Foreign runs (no local mapping) never appear here — the feed is the only
+/// thing that knows anything about them.
+final finishedOwnSessionIdsProvider = Provider<Set<String>>((ref) {
+  final sessions = ref.watch(liveSessionsProvider);
+  if (sessions.isEmpty) return const <String>{};
+
+  final backendToLocal = ref.watch(ownBackendToLocalSessionProvider);
+  final awaitingReview = <String>{
+    for (final e in ref.watch(pendingOutcomesProvider))
+      if (e.answers == null) e.sessionId,
+  };
+
+  final finished = <String>{};
+  for (final session in sessions) {
+    final localId = backendToLocal[session.id];
+    if (localId == null) continue; // foreign run — the feed is all we have
+    if (awaitingReview.contains(localId)) {
+      finished.add(session.id);
+      continue;
+    }
+    // `.select` so this doesn't recompute on every timer tick of a live run.
+    final status = ref.watch(
+      sessionEngineFamilyProvider(localId).select((s) => s.status),
+    );
+    if (status == session_model.SessionStatus.stopped ||
+        status == session_model.SessionStatus.completed) {
+      finished.add(session.id);
+    }
+  }
+  return finished;
 });
 
 class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {

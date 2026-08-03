@@ -2,250 +2,187 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
-import '../../../../core/theme/widgets/premium.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/theme/widgets/hw_icon.dart';
+import '../../../../core/theme/widgets/hw_primitives.dart';
+import '../../../clients/domain/client_model.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
 import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
-import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../../session/domain/active_session_model.dart';
 import '../../../session/domain/pending_session_outcome_model.dart';
-import '../../../session/presentation/providers/active_sessions_provider.dart';
-import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/pending_outcomes_provider.dart';
 import '../../../session/presentation/widgets/post_session_outcomes_sheet.dart';
-import '../../../session/services/session_sync_service.dart';
 
-enum _HistoryTab { live, history }
-
-enum _HistoryFilter { all, guest }
-
+/// Session history — ported from the UI spec's `renderHistory()` (app.js:2656).
+///
+/// Rows group under day headers, and each carries the outcome-check result
+/// rather than a raw duration. Everything comes from `GET /intake/all`.
 class HistoryListScreen extends ConsumerStatefulWidget {
-  const HistoryListScreen({super.key});
+  /// Rendered as a tab inside the Users screen rather than as its own page:
+  /// drops the Scaffold, the backbar and the segmented control (the host page
+  /// already provides that context) and keeps the filter + list.
+  final bool embedded;
+
+  const HistoryListScreen({super.key, this.embedded = false});
 
   @override
   ConsumerState<HistoryListScreen> createState() => _HistoryListScreenState();
 }
 
 class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
-  _HistoryTab _selectedTab = _HistoryTab.live;
-  _HistoryFilter _historyFilter = _HistoryFilter.all;
+  /// Null = the "All" chip; otherwise a client id.
+  String? _clientId;
   bool _outcomesSheetOpen = false;
 
   @override
   void initState() {
     super.initState();
-    // Defensively ensure the org-wide live feed is running (idempotent if the
-    // app bootstrap already started it) so the Live tab reflects the backend.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final orgId = ref.read(authStateProvider).selectedOrgId;
-      if (orgId != null && orgId.isNotEmpty) {
-        ref.read(liveSessionsProvider.notifier).start(orgId);
-      }
       // Retry any answered-but-unsynced outcome POSTs (best-effort).
       ref.read(pendingOutcomesProvider.notifier).drainSyncPending();
     });
   }
 
-  /// A session stays on the Live tab as long as it's still present in the
-  /// backend live feed and hasn't been stopped — that includes the fully-paused
-  /// case AND the completed case. Completed sessions are intentionally kept
-  /// (not auto-cleared) so the user can still open them and hit Stop All to send
-  /// the backend stop and remove them from the feed. They only disappear once
-  /// the backend drops them (after Stop All).
-  bool _isVisibleStatus(SessionStatus status) {
-    return status == SessionStatus.running ||
-        status == SessionStatus.paused ||
-        status == SessionStatus.completed;
-  }
-
-  bool _isVisibleActiveSession(ActiveSession session) {
-    if (_isVisibleStatus(session.status)) {
-      return true;
-    }
-    for (final deviceId in session.deviceIds) {
-      final deviceStatus =
-          session.deviceStatuses[deviceId] ?? SessionStatus.idle;
-      if (_isVisibleStatus(deviceStatus)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final allActiveSessions = ref.watch(liveSessionsProvider);
+    final p = RefPalette.of(context);
 
-    // Sessions still awaiting a post-session review (unanswered only). Rendered
-    // as "Needs review" cards that persist until the user answers or skips —
-    // even after the backend drops the live card. Answered-but-unsynced entries
-    // are excluded (they retry silently and never re-appear).
+    // Sessions still awaiting a post-session review (unanswered only), pinned
+    // above the history. No auto-prompt — the sheet opens on tap.
     final pendingReviews = ref
         .watch(pendingOutcomesProvider)
         .where((e) => e.answers == null)
-        .toList();
-    final pendingIds = {for (final p in pendingReviews) p.sessionId};
-
-    // Keep only genuinely live sessions (running on top, older below), and drop
-    // any that already have a needs-review card so a session shows once.
-    final runningSessions = allActiveSessions
-        .where(_isVisibleActiveSession)
-        .where((s) => !pendingIds.contains(s.id))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    // No auto-prompt (web parity): pending client sessions surface as tap-to-
-    // answer "Needs review" cards on the Live tab; the sheet opens on tap or via
-    // the session screen's Stop All / Done.
-
     final sessionsAsync = ref.watch(allSessionsProvider);
-    final savedSessions = sessionsAsync.asData?.value ?? const <SessionHistoryItem>[];
-    final trackedMinutes = savedSessions.fold<int>(
-      0,
-      (sum, s) => sum + (_intakeDurationSeconds(s) ~/ 60),
+    final clients = ref.watch(clientListProvider).valueOrNull ?? const [];
+    final all = sessionsAsync.valueOrNull ?? const <SessionHistoryItem>[];
+
+    final filtered = (_clientId == null
+        ? [...all]
+        : all.where((s) => s.clientId == _clientId).toList())
+      ..sort((a, b) {
+        final ad = a.createdAt;
+        final bd = b.createdAt;
+        if (ad == null && bd == null) return 0;
+        if (ad == null) return 1; // unknown dates sink
+        if (bd == null) return -1;
+        return bd.compareTo(ad);
+      });
+
+    // Chips for whoever actually appears in history — not the whole roster.
+    final seen = <String>{
+      for (final s in all)
+        if (!s.isGuest && s.clientId != null) s.clientId!,
+    };
+    final chipClients =
+        clients.where((c) => seen.contains(c.id)).toList(growable: false);
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!widget.embedded) ...[
+          HwBackBar(
+            title: 'History',
+            subtitle: '${filtered.length} session'
+                '${filtered.length == 1 ? '' : 's'} · outcome checks build '
+                'the story',
+          ),
+          const SizedBox(height: HwSpace.s2),
+          HwSegmented(
+            labels: const ['Team', 'AI Reports', 'History'],
+            selectedIndex: 2,
+            onSelected: (i) {
+              if (i == 0) context.go(RoutePaths.users);
+              if (i == 1) context.push(RoutePaths.aiReports);
+            },
+          ),
+          const SizedBox(height: HwSpace.s3),
+        ],
+        if (chipClients.isNotEmpty) ...[
+          HwChipRow(
+            labels: [
+              'All',
+              // Full name, not just the first word — two clients sharing a
+              // first name were indistinguishable in the filter row.
+              for (final c in chipClients) c.displayName,
+            ],
+            selectedIndex: _clientId == null
+                ? 0
+                : chipClients.indexWhere((c) => c.id == _clientId) + 1,
+            onSelected: (i) => setState(() {
+              _clientId = i == 0 ? null : chipClients[i - 1].id;
+            }),
+          ),
+          const SizedBox(height: HwSpace.s2),
+        ],
+        Expanded(
+          child: RefreshIndicator(
+            color: p.copper,
+            backgroundColor: p.card,
+            onRefresh: () => ref.refresh(allSessionsProvider.future),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.only(bottom: widget.embedded ? 16 : 108),
+              children: [
+                for (final entry in pendingReviews)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: HwSpace.s2),
+                    child: _NeedsReviewCard(
+                      entry: entry,
+                      onTap: () => _reviewOutcomes(entry),
+                    ),
+                  ),
+                if (sessionsAsync.isLoading && all.isEmpty)
+                  const _HistorySkeleton()
+                else if (sessionsAsync.hasError && all.isEmpty)
+                  _Message(
+                    "Couldn't load history.",
+                    onRetry: () => ref.invalidate(allSessionsProvider),
+                  )
+                else if (filtered.isEmpty)
+                  const _Message(
+                    'No sessions yet — completed sessions land here.',
+                  )
+                else
+                  _SessionList(sessions: filtered, clients: clients),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
 
+    if (widget.embedded) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: content,
+      );
+    }
+
     return Scaffold(
-      backgroundColor: ThemeConstants.background,
+      backgroundColor: p.bg,
       body: SafeArea(
+        bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AnimatedEntrance(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Session History',
-                        style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w700,
-                            color: ThemeConstants.textPrimary,
-                            letterSpacing: -0.5)),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      _SummaryChip(
-                          value: '${runningSessions.length}',
-                          label: 'Live',
-                          icon: Icons.play_circle_outline_rounded),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          value: '${savedSessions.length}',
-                          label: 'History',
-                          icon: Icons.history_rounded),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          value: '${trackedMinutes}m',
-                          label: 'Tracked',
-                          icon: Icons.timer_outlined),
-                    ]),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: ThemeConstants.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _HistoryTabButton(
-                              label: 'Live Session',
-                              icon: Icons.bolt_rounded,
-                              selected: _selectedTab == _HistoryTab.live,
-                              onTap: () => setState(
-                                () => _selectedTab = _HistoryTab.live,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: _HistoryTabButton(
-                              label: 'History',
-                              icon: Icons.history_rounded,
-                              selected: _selectedTab == _HistoryTab.history,
-                              onTap: () => setState(
-                                () => _selectedTab = _HistoryTab.history,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: _selectedTab == _HistoryTab.live
-                    ? _buildLiveSessions(runningSessions, pendingReviews)
-                    : _buildHistorySessions(sessionsAsync),
-              ),
-            ],
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: content,
         ),
       ),
     );
   }
 
-  Widget _buildLiveSessions(
-    List<ActiveSession> runningSessions,
-    List<PendingSessionOutcome> pendingReviews,
-  ) {
-    if (runningSessions.isEmpty && pendingReviews.isEmpty) {
-      return const _EmptyHistoryState(
-        title: 'No live sessions',
-        subtitle: 'Start a session to see it appear here while it is running.',
-        icon: Icons.play_disabled_rounded,
-      );
-    }
-
-    // Needs-review cards are pinned above the live sessions.
-    final reviews = [...pendingReviews]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final total = reviews.length + runningSessions.length;
-
-    return ListView.separated(
-      physics: const ClampingScrollPhysics(),
-      itemCount: total,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        if (index < reviews.length) {
-          final entry = reviews[index];
-          return AnimatedEntrance(
-            index: index,
-            child: _NeedsReviewCard(
-              entry: entry,
-              onTap: () => _reviewOutcomes(entry),
-            ),
-          );
-        }
-        final session = runningSessions[index - reviews.length];
-        return AnimatedEntrance(
-          index: index,
-          child: _ActiveSessionCard(
-            session: session,
-            canOpenLive: _isVisibleActiveSession(session),
-          ),
-        );
-      },
-    );
-  }
-
   /// Show the outcomes sheet for [entry], then finalize (single `/intake` POST
-  /// with answers, or a bare log on Skip/dismiss). Removing the entry drops its
-  /// "Needs review" card from the Live tab.
+  /// with answers, or a bare log on Skip/dismiss).
   Future<void> _reviewOutcomes(PendingSessionOutcome entry) async {
     if (_outcomesSheetOpen) return;
     _outcomesSheetOpen = true;
     try {
       final outcomes = await showPostSessionOutcomesSheet(
         context,
-        protocolQuestions: entry.orderedProtocolQuestions,
-        discomfortAreas: entry.discomfortAreasForSheet,
+        pendingOutcome: entry,
       );
       await ref
           .read(pendingOutcomesProvider.notifier)
@@ -254,982 +191,266 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
       _outcomesSheetOpen = false;
     }
   }
-
-  Widget _buildHistorySessions(
-      AsyncValue<List<SessionHistoryItem>> sessionsAsync) {
-    return Column(
-      children: [
-        _HistoryFilterToggle(
-          filter: _historyFilter,
-          onChanged: (value) => setState(() => _historyFilter = value),
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: sessionsAsync.when(
-            loading: () => ListView.separated(
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: 7,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (_, __) => const _HistoryCardSkeleton(),
-            ),
-            error: (error, _) => _EmptyHistoryState(
-              title: 'Couldn\'t load history',
-              subtitle: 'Pull down to retry. ($error)',
-              icon: Icons.cloud_off_rounded,
-              onRetry: () => ref.invalidate(allSessionsProvider),
-            ),
-            data: (sessions) {
-              final filtered = _historyFilter == _HistoryFilter.guest
-                  ? sessions.where((s) => s.isGuest).toList()
-                  : [...sessions];
-
-              // Most recent first (the backend returns these unsorted).
-              filtered.sort((a, b) {
-                final aDate = a.createdAt;
-                final bDate = b.createdAt;
-                if (aDate == null && bDate == null) return 0;
-                if (aDate == null) return 1; // unknown dates sink to the bottom
-                if (bDate == null) return -1;
-                return bDate.compareTo(aDate);
-              });
-
-              if (filtered.isEmpty) {
-                return RefreshIndicator(
-                  color: ThemeConstants.accent,
-                  onRefresh: () => ref.refresh(allSessionsProvider.future),
-                  child: ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    children: [
-                      const SizedBox(height: 40),
-                      _EmptyHistoryState(
-                        title: _historyFilter == _HistoryFilter.guest
-                            ? 'No guest sessions'
-                            : 'No saved sessions',
-                        subtitle: _historyFilter == _HistoryFilter.guest
-                            ? 'Guest sessions saved to the database will appear here.'
-                            : 'Completed sessions saved to the database will appear here.',
-                        icon: Icons.history_rounded,
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return RefreshIndicator(
-                color: ThemeConstants.accent,
-                onRefresh: () => ref.refresh(allSessionsProvider.future),
-                child: ListView.separated(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    return AnimatedEntrance(
-                      index: index,
-                      child: _HistorySessionCard(session: filtered[index]),
-                    );
-                  },
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
 }
 
-/// Total session duration (seconds) for an intake — the longest protocol run.
-int _intakeDurationSeconds(SessionHistoryItem session) {
-  var maxSeconds = 0;
-  for (final protocol in session.protocols) {
-    final value = protocol.duration ?? 0;
-    if (value > maxSeconds) maxSeconds = value;
-  }
-  return maxSeconds;
-}
+// ---------------------------------------------------------------------------
 
-String _formatHistoryDate(DateTime value) {
-  final local = value.toLocal();
-  final month = local.month.toString().padLeft(2, '0');
-  final day = local.day.toString().padLeft(2, '0');
-  final hour = local.hour.toString().padLeft(2, '0');
-  final minute = local.minute.toString().padLeft(2, '0');
-  return '$day/$month/${local.year}  $hour:$minute';
-}
+/// The whole list lives in one card, with day headers injected between rows
+/// whenever the date changes.
+class _SessionList extends StatelessWidget {
+  final List<SessionHistoryItem> sessions;
+  final List<Client> clients;
 
-String _formatHistoryDuration(int seconds) {
-  final safeSeconds = seconds < 0 ? 0 : seconds;
-  final hours = safeSeconds ~/ 3600;
-  final minutes = (safeSeconds % 3600) ~/ 60;
-  if (hours > 0) return '${hours}h ${minutes}m';
-  if (minutes > 0) return '${minutes}m';
-  return '${safeSeconds}s';
-}
-
-class _ActiveSessionCard extends ConsumerWidget {
-  final ActiveSession session;
-  final bool canOpenLive;
-  const _ActiveSessionCard({required this.session, required this.canOpenLive});
-
-  /// Effective per-device status for the card. Prefers the backend per-device
-  /// status (live feed), falls back to the session status, and treats a device
-  /// whose backend countdown has reached 0 as completed even if the still-
-  /// running session hasn't flipped that device's status yet.
-  SessionStatus _effectiveDeviceStatus(int index) {
-    final id = session.deviceIds[index];
-    final live = index < session.liveDevices.length
-        ? session.liveDevices[index]
-        : null;
-    final raw = live?.status ?? session.deviceStatuses[id] ?? session.status;
-    final remaining = live?.remainingSeconds;
-    if (raw == SessionStatus.running && remaining != null && remaining <= 0) {
-      return SessionStatus.completed;
-    }
-    return raw;
-  }
-
-  /// Per-device countdown to display. Normal/foreign runs use the backend
-  /// `remainingSeconds` verbatim. For an OWN Protocol Plus run the backend
-  /// resets each device's clock on every sub-protocol switch (its
-  /// `remainingSeconds` jumps back up to the whole-sequence total), so derive a
-  /// continuous countdown from the non-resetting whole-sequence total
-  /// ([LiveDeviceState.totalDurationSeconds]) and the run's start instead —
-  /// matching the continuous timer on the live session screen.
-  int? _displayRemainingSeconds({
-    required LiveDeviceState? live,
-    required bool isPlusOwnRun,
-    required DateTime plusStart,
-  }) {
-    final backend = live?.remainingSeconds;
-    if (!isPlusOwnRun) return backend;
-    final total = live?.totalDurationSeconds ?? 0;
-    if (total <= 0) return backend;
-    final elapsed = DateTime.now().difference(plusStart).inSeconds;
-    final remaining = total - elapsed;
-    return remaining < 0 ? 0 : remaining;
-  }
+  const _SessionList({required this.sessions, required this.clients});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // session.status is the ActiveSession SessionStatus enum — compare against
-    // that, not session_model's (the cross-enum compare was always false, so the
-    // card always read 'Running').
-    final effectiveDeviceStatuses = [
-      for (var i = 0; i < session.deviceIds.length; i++)
-        _effectiveDeviceStatus(i),
-    ];
-    // Once every device has finished, the card's main badge should read
-    // Completed too, instead of the stale session-level "Running".
-    final allCompleted = effectiveDeviceStatuses.isNotEmpty &&
-        effectiveDeviceStatuses.every((s) => s == SessionStatus.completed);
-    final status = allCompleted
-        ? 'Completed'
-        : (session.status == SessionStatus.paused ? 'Paused' : 'Running');
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final rows = <Widget>[];
+    String? lastDay;
 
-    // Control gating (parity with web):
-    //   • own run        → tap to open the live screen (full control).
-    //   • foreign WiFi    → remote-controllable via the cloud broker (no open).
-    //   • foreign BLE     → read-only (can't reach a BLE device we aren't bonded to).
-    final isWifi = session.transport == 'wifi';
-    final canRemoteControl = !session.isOwn && isWifi;
-    // Resolve the LOCAL active session this backend run maps to (own runs only);
-    // re-opening must target the real local engine, not the backend sessionId.
-    final localId = ref.read(ownBackendToLocalSessionProvider)[session.id];
-    ActiveSession? localSession;
-    if (localId != null) {
-      for (final s in ref.read(activeSessionsProvider)) {
-        if (s.id == localId) {
-          localSession = s;
-          break;
-        }
+    for (var i = 0; i < sessions.length; i++) {
+      final s = sessions[i];
+      final day = _dayKey(s.createdAt);
+      if (day != lastDay) {
+        rows.add(Padding(
+          padding: EdgeInsets.fromLTRB(0, rows.isEmpty ? 6 : 12, 0, 4),
+          child: HwEyebrow(_dayLabel(s.createdAt)),
+        ));
+        lastDay = day;
+      } else if (rows.isNotEmpty) {
+        rows.add(Divider(height: 1, color: p.divider));
+      }
+      rows.add(_SessionRow(session: s, clients: clients));
+    }
+
+    return HwCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Column(children: rows),
+    );
+  }
+
+  static String _dayKey(DateTime? at) {
+    if (at == null) return 'unknown';
+    final l = at.toLocal();
+    return '${l.year}-${l.month}-${l.day}';
+  }
+
+  static String _dayLabel(DateTime? at) {
+    if (at == null) return 'Undated';
+    final l = at.toLocal();
+    final now = DateTime.now();
+    if (l.year == now.year && l.month == now.month && l.day == now.day) {
+      return 'Today';
+    }
+    final y = now.subtract(const Duration(days: 1));
+    if (l.year == y.year && l.month == y.month && l.day == y.day) {
+      return 'Yesterday';
+    }
+    return '${l.year}-${l.month.toString().padLeft(2, '0')}-'
+        '${l.day.toString().padLeft(2, '0')}';
+  }
+}
+
+class _SessionRow extends StatelessWidget {
+  final SessionHistoryItem session;
+  final List<Client> clients;
+
+  const _SessionRow({required this.session, required this.clients});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final name = session.isGuest
+        ? 'Guest'
+        : clients
+                .where((c) => c.id == session.clientId)
+                .map((c) => c.displayName)
+                .firstOrNull ??
+            'Client';
+
+    return HwRow(
+      leading: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: p.tanSoft,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Center(
+          child: Text(
+            _initials(name),
+            style: TextStyle(
+              fontSize: HwType.sm,
+              fontWeight: FontWeight.w700,
+              color: p.copperInk,
+            ),
+          ),
+        ),
+      ),
+      title: name,
+      subtitle: _label(session),
+      trailing: _OutcomePill(session),
+      onTap: () => context.push('/history/${session.id}', extra: session),
+    );
+  }
+
+  static String _label(SessionHistoryItem s) {
+    final protocol = s.protocols.isEmpty
+        ? 'Session'
+        : (s.protocols.first.protocol ?? 'Session');
+    final at = s.createdAt?.toLocal();
+    final time = at == null
+        ? null
+        : '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final duration = _formatDuration(s.protocols.firstOrNull?.duration);
+    final device = s.protocols.firstOrNull?.deviceName;
+    final parts = <String>[];
+    if (protocol.isNotEmpty) parts.add(protocol);
+    if (time != null) parts.add(time);
+    if (duration != null && duration.isNotEmpty) parts.add(duration);
+    if (device != null && device.isNotEmpty) parts.add(device);
+    return parts.join(' · ');
+  }
+
+  static String? _formatDuration(int? seconds) {
+    if (seconds == null || seconds <= 0) return null;
+    final minutes = (seconds / 60).ceil();
+    return '$minutes min';
+  }
+
+  static String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    if (parts.isEmpty) return '–';
+    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+    return (parts.first.characters.first + parts.last.characters.first)
+        .toUpperCase();
+  }
+}
+
+/// The spec's trailing status, in its precedence order (app.js:1338): the
+/// outcome check first, then "—".
+///
+/// The outcome check is the ONLY thing the post-session sheet collects, and it
+/// lands in `protocols[].questionAnswers`.
+class _OutcomePill extends StatelessWidget {
+  final SessionHistoryItem session;
+  const _OutcomePill(this.session);
+
+  @override
+  Widget build(BuildContext context) {
+    final answer = _firstAnswer(session);
+    if (answer != null) {
+      final normalized = answer.toLowerCase();
+      if (normalized == 'yes') {
+        return const HwPill('YES ✓', tone: HwPillTone.good);
+      }
+      if (normalized == 'no') return const HwPill('NO', tone: HwPillTone.low);
+      // Preset sets aren't always yes/no — show what was actually answered
+      // rather than forcing it into a verdict the data doesn't support.
+      return HwPill(
+          answer.length > 14 ? '${answer.substring(0, 13)}…' : answer);
+    }
+
+    return const HwPill('—');
+  }
+
+  /// The first non-empty outcome answer logged on any of the session's
+  /// protocols, or null when the review was skipped.
+  static String? _firstAnswer(SessionHistoryItem s) {
+    for (final p in s.protocols) {
+      for (final qa in p.questionAnswers) {
+        final a = qa.answer.trim();
+        if (a.isNotEmpty) return a;
       }
     }
-    final canOpen = session.isOwn && canOpenLive && localSession != null;
-
-    // Protocol Plus countdown fix (parity with the live session screen): the
-    // backend resets each device's clock on every sub-protocol switch while
-    // keeping totalDurationSeconds at the WHOLE-sequence total, so its
-    // `remainingSeconds` jumps back up to the full length at each switch. For an
-    // OWN Plus run, derive a continuous countdown from the (non-resetting)
-    // whole-sequence total and the run's start instead. Plus bindings live on
-    // the resolved local session (own run) but may also be on this feed item.
-    final plusBindings =
-        (localSession?.protocolPlusBindings.isNotEmpty ?? false)
-            ? localSession!.protocolPlusBindings
-            : session.protocolPlusBindings;
-    final isPlusOwnRun = session.isOwn && plusBindings.isNotEmpty;
-    final plusStart = localSession?.createdAt ?? session.createdAt;
-
-    return GradientCard(
-      onTap: () {
-        // Own run → open the local live screen against the real engine.
-        final local = localSession;
-        if (canOpen && local != null) {
-          context.pushNamed(
-            RouteNames.session,
-            extra: {
-              'sessionId': local.id,
-              'protocolId': local.protocolId,
-              'deviceIds': local.deviceIds,
-              'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
-              'advancedSettings': {},
-              'advancedSettingsByDevice': {},
-              'delayedDeviceId': null,
-              'protocolByDeviceId': {},
-              'skipEngineBootstrap': false,
-              'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
-              // Restore Protocol Plus wiring so Stop cancels the server schedule.
-              if (local.protocolPlusBindings.isNotEmpty) ...{
-                'protocolPlusBindings': local.protocolPlusBindings,
-                'protocolPlusId':
-                    local.protocolPlusBindings.first['plusId'] ?? '',
-              },
-            },
-          );
-          return;
-        }
-        // Every other case opens the live REMOTE VIEW (no local engine, no
-        // restart; display comes from the backend feed). This covers foreign
-        // WiFi (full broker control), foreign BLE (Pause All / Stop All routed
-        // through the backend — we can't reach the pads, but we can stop &
-        // clear the session), and an own run whose local engine is already
-        // gone (e.g. completed). The session-wide Pause All / Stop All live on
-        // that screen's top control card.
-        context.pushNamed(
-          RouteNames.session,
-          extra: {
-            'remoteView': true,
-            'backendSessionId': session.id,
-            'sessionId': session.id,
-            'protocolId': '',
-            'deviceIds': session.deviceIds,
-            'transport': session.transport,
-            'skipEngineBootstrap': true,
-          },
-        );
-      },
-      padding: const EdgeInsets.all(16),
-      showShadow: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: ThemeConstants.accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  Icons.devices_rounded,
-                  color: ThemeConstants.accent,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      // Protocol Plus run: show the sequence/template name
-                      // (e.g. "1. Deep-Tension Recovery"), not the current
-                      // sub-protocol. Falls back to the protocol name otherwise.
-                      session.protocolPlusName.isNotEmpty
-                          ? session.protocolPlusName
-                          : session.protocolName,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: ThemeConstants.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${session.deviceIds.length} device(s) • ${session.transport.toUpperCase()}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: ThemeConstants.textTertiary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Started ${_formatDate(session.createdAt)}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: ThemeConstants.textTertiary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: (session.status == SessionStatus.paused
-                          ? ThemeConstants.warning
-                          : ThemeConstants.success)
-                      .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: session.status == SessionStatus.paused
-                        ? ThemeConstants.warning
-                        : ThemeConstants.success,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: ThemeConstants.surface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: ThemeConstants.border),
-            ),
-            child: Column(
-              children: List.generate(session.deviceIds.length, (index) {
-                final id = session.deviceIds[index];
-                final name = session.deviceNames[id] ?? 'Device ${index + 1}';
-                final live = index < session.liveDevices.length
-                    ? session.liveDevices[index]
-                    : null;
-                final remaining = _displayRemainingSeconds(
-                  live: live,
-                  isPlusOwnRun: isPlusOwnRun,
-                  plusStart: plusStart,
-                );
-                final deviceStatus = _effectiveDeviceStatus(index);
-                final statusColor = switch (deviceStatus) {
-                  SessionStatus.paused => ThemeConstants.warning,
-                  SessionStatus.running => ThemeConstants.success,
-                  SessionStatus.completed => ThemeConstants.success,
-                  SessionStatus.stopped => ThemeConstants.textTertiary,
-                  SessionStatus.idle => ThemeConstants.textTertiary,
-                };
-                final statusLabel = switch (deviceStatus) {
-                  SessionStatus.paused => 'Paused',
-                  SessionStatus.running => 'Running',
-                  SessionStatus.completed => 'Completed',
-                  SessionStatus.stopped => 'Stopped',
-                  SessionStatus.idle => 'Idle',
-                };
-
-                return Padding(
-                  padding: EdgeInsets.only(
-                      bottom: index == session.deviceIds.length - 1 ? 0 : 8),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: statusColor,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: ThemeConstants.textPrimary,
-                          ),
-                        ),
-                      ),
-                      // Sun/moon pad colors straight from the backend
-                      // (web parity). Moon = left pad, Sun = right pad.
-                      if (live != null) ...[
-                        _PadDot(
-                          icon: Icons.nightlight_round,
-                          color: _padColor(live.moon),
-                        ),
-                        const SizedBox(width: 6),
-                        _PadDot(
-                          icon: Icons.wb_sunny_rounded,
-                          color: _padColor(live.sun),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      // Per-device countdown straight from the backend (never
-                      // computed on-device). Hidden when not provided.
-                      if (remaining != null && remaining > 0) ...[
-                        Text(
-                          _formatRemaining(remaining),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: ThemeConstants.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      Text(
-                        statusLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: statusColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ),
-          ),
-          if (!session.isOwn) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Icon(
-                  Icons.touch_app_outlined,
-                  size: 14,
-                  color: ThemeConstants.textTertiary,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  canRemoteControl
-                      ? 'Tap to open & control'
-                      : 'Tap to open & stop (BLE on another device)',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
-
-    if (difference.inMinutes < 60) {
-      return '${difference.inMinutes}m ago';
-    } else if (difference.inHours < 24) {
-      return '${difference.inHours}h ago';
-    } else {
-      return '${date.day}/${date.month}/${date.year}';
-    }
+    return null;
   }
 }
 
-String _formatRemaining(int seconds) {
-  final s = seconds < 0 ? 0 : seconds;
-  final m = s ~/ 60;
-  final r = s % 60;
-  return '${m.toString().padLeft(2, '0')}:${r.toString().padLeft(2, '0')}';
-}
+// ---------------------------------------------------------------------------
 
-/// Web-parity pad colors (Hydrawav3-ai liveSession.tsx): hot/red → red,
-/// cold/blue → blue, anything else (disabled/off/empty) → grey.
-Color _padColor(String? v) {
-  if (v == null) return Colors.grey;
-  final s = v.toLowerCase().trim();
-  if (s.contains('hot') || s == 'red') return Colors.red;
-  if (s.contains('cold') || s == 'blue') return Colors.blue;
-  return Colors.grey;
-}
-
-/// A labelled pad chip (Moon = left pad, Sun = right pad) coloured from the
-/// backend sun/moon string.
-class _PadDot extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  const _PadDot({required this.icon, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        shape: BoxShape.circle,
-        border: Border.all(color: color.withValues(alpha: 0.6)),
-      ),
-      child: Icon(icon, size: 12, color: color),
-    );
-  }
-}
-
-class _SummaryChip extends StatelessWidget {
-  final String value, label;
-  final IconData icon;
-  const _SummaryChip(
-      {required this.value, required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(
-          color: ThemeConstants.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: ThemeConstants.border),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: ThemeConstants.accent, size: 16),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: ThemeConstants.textPrimary)),
-                  Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 10, color: ThemeConstants.textTertiary)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryTabButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _HistoryTabButton({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          // Match the Devices list segmented control: dark slate selected
-          // segment with cream text/icons (web-parity), not an accent tint.
-          color: selected
-              ? ThemeConstants.segmentActiveBg
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: ThemeConstants.segmentActiveBg
-                        .withValues(alpha: 0.22),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 17,
-              color:
-                  selected ? ThemeConstants.onNav : ThemeConstants.textSecondary,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                color: selected
-                    ? ThemeConstants.onNav
-                    : ThemeConstants.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryFilterToggle extends StatelessWidget {
-  final _HistoryFilter filter;
-  final ValueChanged<_HistoryFilter> onChanged;
-
-  const _HistoryFilterToggle({required this.filter, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _FilterPill(
-          label: 'All',
-          icon: Icons.all_inclusive_rounded,
-          selected: filter == _HistoryFilter.all,
-          onTap: () => onChanged(_HistoryFilter.all),
-        ),
-        const SizedBox(width: 8),
-        _FilterPill(
-          label: 'Guest only',
-          icon: Icons.person_outline_rounded,
-          selected: filter == _HistoryFilter.guest,
-          onTap: () => onChanged(_HistoryFilter.guest),
-        ),
-      ],
-    );
-  }
-}
-
-class _FilterPill extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _FilterPill({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected
-              ? ThemeConstants.accent.withValues(alpha: 0.16)
-              : ThemeConstants.surface,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected ? ThemeConstants.accent : ThemeConstants.border,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 15,
-              color: selected
-                  ? ThemeConstants.accent
-                  : ThemeConstants.textSecondary,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: selected
-                    ? ThemeConstants.accent
-                    : ThemeConstants.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryCardSkeleton extends StatelessWidget {
-  const _HistoryCardSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: ThemeConstants.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ThemeConstants.border.withValues(alpha: 0.6)),
-      ),
-      child: const Row(
-        children: [
-          ShimmerBox(width: 40, height: 40, borderRadius: 12),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ShimmerBox(width: 130, height: 13, borderRadius: 6),
-                SizedBox(height: 8),
-                ShimmerBox(width: double.infinity, height: 11, borderRadius: 6),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HistorySessionCard extends StatelessWidget {
-  final SessionHistoryItem session;
-
-  const _HistorySessionCard({required this.session});
-
-  @override
-  Widget build(BuildContext context) {
-    final protocolName = session.protocols.isNotEmpty
-        ? (session.protocols.first.protocol ?? 'Session')
-        : 'Session';
-    final deviceCount = session.protocols
-        .map((p) => p.deviceName)
-        .whereType<String>()
-        .where((name) => name.isNotEmpty)
-        .toSet()
-        .length;
-    final durationLabel = _formatHistoryDuration(_intakeDurationSeconds(session));
-    final dateLabel =
-        session.createdAt != null ? _formatHistoryDate(session.createdAt!) : '—';
-    final meta = StringBuffer('$dateLabel  •  $durationLabel');
-    if (deviceCount > 0) {
-      meta.write('  •  $deviceCount device(s)');
-    }
-
-    return GradientCard(
-      onTap: () => context.push('/history/${session.id ?? ''}', extra: session),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      showShadow: false,
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: ThemeConstants.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              Icons.history_rounded,
-              size: 20,
-              color: ThemeConstants.accent,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  protocolName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: ThemeConstants.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  meta.toString(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: ThemeConstants.textTertiary,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A completed session awaiting its post-session outcomes. Persists on the Live
-/// tab until the user answers or skips, then finalizes (single `/intake` POST).
 class _NeedsReviewCard extends StatelessWidget {
   final PendingSessionOutcome entry;
   final VoidCallback onTap;
+
   const _NeedsReviewCard({required this.entry, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final deviceCount = entry.deviceIds.length;
-    final qCount = entry.orderedProtocolQuestions
-        .fold<int>(0, (sum, p) => sum + p.questions.length);
-    return GradientCard(
-      onTap: onTap,
-      padding: const EdgeInsets.all(16),
-      showShadow: false,
-      child: Row(
+    final p = RefPalette.of(context);
+    return HwCard(
+      accented: true,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: HwRow(
+        leading: HwIcon(HwIcons.chat, size: 19, color: p.copperInk),
+        title: 'Session needs a quick check',
+        subtitle: 'One check — builds your proof board',
+        trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+class _Message extends StatelessWidget {
+  final String text;
+  final VoidCallback? onRetry;
+  const _Message(this.text, {this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: ThemeConstants.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(Icons.assignment_turned_in_rounded,
-                color: ThemeConstants.accent, size: 22),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: HwType.sm, height: 1.5, color: p.ink2),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  entry.protocolName.isEmpty ? 'Session' : entry.protocolName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: ThemeConstants.textPrimary,
-                  ),
+          if (onRetry != null) ...[
+            const SizedBox(height: HwSpace.s3),
+            HwPress(
+              onTap: onRetry!,
+              child: Text(
+                'Retry',
+                style: TextStyle(
+                  fontSize: HwType.sm,
+                  fontWeight: FontWeight.w700,
+                  color: p.copperInk,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '$deviceCount device(s) • Completed',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: ThemeConstants.textTertiary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: ThemeConstants.warning.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    qCount > 0 ? 'Needs review • $qCount question(s)' : 'Needs review',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: ThemeConstants.warning,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-          Icon(Icons.chevron_right_rounded,
-              color: ThemeConstants.textTertiary),
+          ],
         ],
       ),
     );
   }
 }
 
-class _EmptyHistoryState extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final VoidCallback? onRetry;
-
-  const _EmptyHistoryState({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    this.onRetry,
-  });
+class _HistorySkeleton extends StatelessWidget {
+  const _HistorySkeleton();
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: double.infinity,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: ThemeConstants.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: ThemeConstants.border),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 36, color: ThemeConstants.textTertiary),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: ThemeConstants.textPrimary,
+    final p = RefPalette.of(context);
+    return Column(
+      children: [
+        for (var i = 0; i < 6; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: HwSpace.s2),
+            child: Container(
+              height: 68,
+              decoration: BoxDecoration(
+                color: p.card,
+                borderRadius: BorderRadius.circular(HwRadius.lg),
+                border: Border.all(color: p.cardline),
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: ThemeConstants.textSecondary,
-              ),
-            ),
-            if (onRetry != null) ...[
-              const SizedBox(height: 14),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: Icon(Icons.refresh_rounded,
-                    size: 18, color: ThemeConstants.accent),
-                label: Text(
-                  'Retry',
-                  style: TextStyle(
-                    color: ThemeConstants.accent,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+          ),
+      ],
     );
   }
 }

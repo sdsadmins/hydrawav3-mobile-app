@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../ble/data/ble_repository.dart';
+import '../../../ble/services/ble_connector.dart';
 import '../../data/client_repository.dart';
 import '../../domain/client_model.dart';
 import '../providers/lease_controller.dart';
@@ -38,6 +39,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
   // Register-form state.
   bool _formOpen = false;
   final _macCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _showPassword = false;
 
@@ -54,6 +56,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
   @override
   void dispose() {
     _macCtrl.dispose();
+    _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _resetPwdCtrl.dispose();
     super.dispose();
@@ -83,6 +86,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         _formOpen = false;
         _resetMode = false;
         _macCtrl.clear();
+        _usernameCtrl.clear();
         _passwordCtrl.clear();
         _resetPwdCtrl.clear();
       });
@@ -93,9 +97,15 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
 
   Future<void> _register() async {
     final mac = _macCtrl.text.trim();
+    // Username is space-stripped as you type/paste, but trim defensively too.
+    final username = _usernameCtrl.text.trim();
     final pwd = _passwordCtrl.text;
     if (!_macRegex.hasMatch(mac)) {
       _snack('Enter a valid MAC address (AA:BB:CC:DD:EE:FF).');
+      return;
+    }
+    if (username.isEmpty) {
+      _snack('Enter a lease username.');
       return;
     }
     if (pwd.length < 6) {
@@ -105,6 +115,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
     final updated = await _controller.registerLease(
       clientId: widget.clientId,
       macAddress: mac,
+      username: username,
       password: pwd,
     );
     _applyResult(updated);
@@ -303,6 +314,22 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             onPressed: flow.busy ? null : _scanFillMac,
             icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
             label: const Text('Scan device to fill MAC'),
+          ),
+          const SizedBox(height: 14),
+          _label('Lease Username'),
+          TextField(
+            controller: _usernameCtrl,
+            enabled: !flow.busy,
+            // No spaces allowed — the formatter strips any whitespace whether
+            // typed or pasted, so a copied value with spaces lands clean.
+            inputFormatters: [
+              FilteringTextInputFormatter.deny(RegExp(r'\s')),
+            ],
+            keyboardType: TextInputType.text,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: _fieldDecoration('No spaces allowed'),
+            style: TextStyle(color: ThemeConstants.textPrimary),
           ),
           const SizedBox(height: 14),
           _label('Lease Password'),
@@ -576,15 +603,20 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
 /// Bluetooth device picker sheet. Streams live scan results and returns the
 /// chosen [BluetoothDevice] to the caller. A "Hydrawav only" toggle (on by
 /// default) hides unrelated Bluetooth devices by name prefix.
-class _DevicePickerSheet extends StatefulWidget {
+///
+/// Already-connected units are folded in alongside the scan results: a BLE
+/// peripheral stops advertising the moment it accepts a connection, so a device
+/// connected from the Devices list can never appear in a scan and the picker
+/// looked empty until the user went back and disconnected it.
+class _DevicePickerSheet extends ConsumerStatefulWidget {
   final BleRepository repo;
   const _DevicePickerSheet({required this.repo});
 
   @override
-  State<_DevicePickerSheet> createState() => _DevicePickerSheetState();
+  ConsumerState<_DevicePickerSheet> createState() => _DevicePickerSheetState();
 }
 
-class _DevicePickerSheetState extends State<_DevicePickerSheet> {
+class _DevicePickerSheetState extends ConsumerState<_DevicePickerSheet> {
   bool _hydraOnly = true;
 
   /// Normalized Hydra GATT service UUID advertised by the firmware. Null/empty
@@ -608,6 +640,52 @@ class _DevicePickerSheetState extends State<_DevicePickerSheet> {
   String _nameOf(ScanResult r) => r.device.platformName.isNotEmpty
       ? r.device.platformName
       : r.advertisementData.advName;
+
+  /// Units this app is already connected to, as scan-result entries. The
+  /// synthesised advertisement declares the Hydra service UUID so [_isHydra]
+  /// keeps them — the connector only ever connects to Hydra units, so that is
+  /// an accurate claim, not a filter bypass.
+  List<ScanResult> _connectedResults() {
+    final ids = ref.read(bleConnectorProvider).connectedDeviceIds.toSet();
+    if (ids.isEmpty) return const <ScanResult>[];
+
+    const expected = BleConstants.preferredServiceUuid;
+    final serviceUuids = <Guid>[
+      if (expected != null && expected.isNotEmpty) Guid(expected),
+    ];
+
+    final now = DateTime.now();
+    return [
+      for (final device in FlutterBluePlus.connectedDevices)
+        if (ids.contains(device.remoteId.str))
+          ScanResult(
+            device: device,
+            advertisementData: AdvertisementData(
+              advName: device.platformName,
+              txPowerLevel: null,
+              appearance: null,
+              connectable: true,
+              manufacturerData: const {},
+              serviceData: const {},
+              serviceUuids: serviceUuids,
+            ),
+            rssi: 0,
+            timeStamp: now,
+          ),
+    ];
+  }
+
+  /// Live scan results plus the already-connected units, de-duped by remote id.
+  List<ScanResult> _merge(List<ScanResult> scanned) {
+    final byId = <String, ScanResult>{};
+    for (final r in scanned) {
+      byId[r.device.remoteId.str] = r;
+    }
+    for (final r in _connectedResults()) {
+      byId.putIfAbsent(r.device.remoteId.str, () => r);
+    }
+    return byId.values.toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -644,8 +722,9 @@ class _DevicePickerSheetState extends State<_DevicePickerSheet> {
                 stream: widget.repo.scanResults,
                 initialData: widget.repo.currentScanResults,
                 builder: (context, snapshot) {
-                  final results = (snapshot.data ?? const <ScanResult>[])
-                      .where((r) {
+                  final results =
+                      _merge(snapshot.data ?? const <ScanResult>[])
+                          .where((r) {
                     if (_hydraOnly) return _isHydra(r);
                     // Unfiltered view still hides nameless junk devices.
                     return _nameOf(r).isNotEmpty;

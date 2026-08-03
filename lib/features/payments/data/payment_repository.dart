@@ -73,6 +73,23 @@ class PaymentRepository {
     }
   }
 
+  /// Subscription products, including the non-purchasable "Free" product that
+  /// [getProducts] filters out server-side. Used to resolve a free org's token
+  /// grant; returns an empty list rather than throwing, since it only ever
+  /// feeds a usage bar.
+  Future<List<Product>> getSubscriptionProducts() async {
+    try {
+      final response = await _dio.get(ApiEndpoints.subscriptionProducts);
+      final data = response.data;
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+      return items
+          .map((e) => Product.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<String> createCheckoutSession({
     required String orgId,
     required String plan,
