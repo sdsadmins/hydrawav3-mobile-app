@@ -41,9 +41,16 @@ void openLiveSession(BuildContext context, WidgetRef ref, ActiveSession session)
         'skipEngineBootstrap': false,
         'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
         // Restore Protocol Plus wiring so Stop cancels the server schedule.
+        //
+        // `protocolPlusId` is only meaningful when every bound device is running
+        // the SAME stack. Two Plus devices can run different templates, and
+        // taking `first` then labelled the whole run with one of them — so send
+        // it only when the bindings agree, and let the per-device state carry it
+        // otherwise. The bindings themselves are always passed in full; they are
+        // what Stop uses to cancel the right server schedule.
         if (local.protocolPlusBindings.isNotEmpty) ...{
           'protocolPlusBindings': local.protocolPlusBindings,
-          'protocolPlusId': local.protocolPlusBindings.first['plusId'] ?? '',
+          'protocolPlusId': _sharedPlusId(local.protocolPlusBindings),
         },
       },
     );
@@ -64,6 +71,20 @@ void openLiveSession(BuildContext context, WidgetRef ref, ActiveSession session)
   );
 }
 
+/// The one Protocol Plus template id every bound device is running, or `''` when
+/// they differ.
+///
+/// A mixed-stack run has no single plus id, and naming it after whichever binding
+/// happened to be first is a wrong answer rather than a missing one — the screen
+/// treats this value as "the stack this run is on".
+String _sharedPlusId(List<Map<String, String>> bindings) {
+  final ids = {
+    for (final b in bindings)
+      if ((b['plusId'] ?? '').trim().isNotEmpty) b['plusId']!.trim(),
+  };
+  return ids.length == 1 ? ids.first : '';
+}
+
 /// The live-session strip that sits directly above "Select User" on the session
 /// page. Collapses to nothing when no session is running — live runs are
 /// surfaced here, where sessions are started, rather than in Session History.
@@ -80,6 +101,7 @@ class LiveSessionsBanner extends ConsumerWidget {
     // transition, so the feed drops it within a poll; this filter just closes
     // the gap in between rather than being the fix on its own.
     final finishedIds = ref.watch(finishedOwnSessionIdsProvider);
+    final backendToLocal = ref.watch(ownBackendToLocalSessionProvider);
     final sessions = ref
         .watch(liveSessionsProvider)
         .where(isVisibleActiveSession)
@@ -87,17 +109,38 @@ class LiveSessionsBanner extends ConsumerWidget {
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    if (sessions.isEmpty) return const SizedBox.shrink();
+    // ONE CARD PER RUN, not per backend session.
+    //
+    // A single launch can register SEVERAL backend sessions — the normal devices
+    // share one, and every Protocol Plus device gets its own — and all of them
+    // map back to the same local run. Listing them raw announced "2 sessions
+    // running" for one launch, and because every card resolves through that map
+    // to the same local run, both opened the SAME screen showing BOTH devices.
+    // Two cards that cannot be told apart and cannot be acted on separately are
+    // worse than one honest card: per-device Pause/Resume/Stop lives inside the
+    // screen, which is where the device-level controls actually are.
+    //
+    // Foreign runs have no local mapping and so are never collapsed — each stays
+    // its own card, which is correct: they really are separate runs.
+    final seenLocalIds = <String>{};
+    final visible = <ActiveSession>[];
+    for (final s in sessions) {
+      final localId = backendToLocal[s.id];
+      if (localId != null && !seenLocalIds.add(localId)) continue;
+      visible.add(s);
+    }
+
+    if (visible.isEmpty) return const SizedBox.shrink();
 
     final p = RefPalette.of(context);
-    final multiple = sessions.length > 1;
+    final multiple = visible.length > 1;
     final accent = p.good;
 
     final title =
-        multiple ? '${sessions.length} sessions running' : '1 session running';
+        multiple ? '${visible.length} sessions running' : '1 session running';
     final subtitle = multiple
         ? 'Tap to view & switch'
-        : '${_sessionLabel(sessions.first)} — tap to view';
+        : '${_sessionLabel(visible.first)} — tap to view';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -106,8 +149,8 @@ class LiveSessionsBanner extends ConsumerWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(18),
           onTap: () => multiple
-              ? _showLiveSessionPicker(context, ref, sessions)
-              : openLiveSession(context, ref, sessions.first),
+              ? _showLiveSessionPicker(context, ref, visible)
+              : openLiveSession(context, ref, visible.first),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),

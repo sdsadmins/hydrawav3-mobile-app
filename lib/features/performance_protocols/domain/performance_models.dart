@@ -306,6 +306,9 @@ class PadSet {
             (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
       );
 
+  /// Raw-index title. Prefer [PadSetPayload.titleOf], which prints the set
+  /// number the way the surface it came from counts — performance authors
+  /// `set_index` 0-based, so this getter alone labels its first set "Set 0".
   String get title => placementLabel.trim().isEmpty
       ? 'Set $setIndex'
       : 'Set $setIndex · $placementLabel';
@@ -406,6 +409,27 @@ class PadSetPayload {
   /// A withheld set has no pads, so it can never make a refusal into a
   /// placement — the test is whether anything is actually applied.
   bool get isRefusal => chain == null || appliedSets.isEmpty;
+
+  /// One payload shape serves BOTH surfaces; the assistant tells them apart by
+  /// this same field before it even opens the screen.
+  bool get isRecovery => discipline.trim().toLowerCase() == 'recovery';
+
+  /// The set number to PRINT for [set].
+  ///
+  /// The two corpora disagree on the origin: recovery authors `set_index`
+  /// 1-based (1..5, per Rulebook A.1), performance authors it 0-based — its
+  /// normalizer literally stores `parseInt(line) - 1` and the schema defaults to
+  /// 0. Rendering the raw value therefore labelled the first performance set
+  /// "Set 0". Shifting it in the model would be worse: the same number indexes
+  /// the palette, the marker `setIndex` and the viewer's focus, so it has to
+  /// stay 0-based everywhere except the label.
+  int displayIndexOf(PadSet set) =>
+      isRecovery ? set.setIndex : set.setIndex + 1;
+
+  /// [PadSet.title] with the printable set number.
+  String titleOf(PadSet set) => set.placementLabel.trim().isEmpty
+      ? 'Set ${displayIndexOf(set)}'
+      : 'Set ${displayIndexOf(set)} · ${set.placementLabel}';
 
   String get disciplineLabel =>
       displayName.trim().isEmpty ? discipline : displayName;

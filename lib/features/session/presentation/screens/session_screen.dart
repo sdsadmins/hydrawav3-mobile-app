@@ -25,6 +25,7 @@ import '../../domain/session_model.dart';
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
+import '../../../ble/services/auto_connect_manager.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
@@ -158,7 +159,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Per-device grace timers for the "device is not in range" popup. Armed on a
   /// connectedâ†’disconnected edge, cancelled if the unit comes back.
+  ///
+  /// These control ONLY when the popup is (re-)shown. The visible "Bluetooth
+  /// lost" state is derived from the LIVE connection state instead (see
+  /// [_isLinkLost]) so the banner cannot vanish while the unit is still gone.
   final Map<String, Timer> _outOfRangeTimers = {};
+
+  /// Devices for which a manual SCAN (from the live card's pill) is in flight.
+  /// Drives the `SCANNINGâ€¦` label so a second tap can't stack reconnects.
+  final Set<String> _rescanningDeviceIds = {};
+
+  /// Remaining time frozen while a Protocol Plus device sits on a BREAK waiting
+  /// for its next sub-protocol, keyed by device id. The backend countdown is
+  /// pure wall-clock and keeps draining through a break the device is idle for,
+  /// so without this the display reaches 00:00 while the unit still has
+  /// protocols left to run. Cleared when the switch lands.
+  final Map<String, Duration> _breakHeldRemainingByDevice = {};
 
   /// Remaining time frozen at the moment a device was paused, keyed by device
   /// id. Cleared on resume/stop. See the pause branch in
@@ -180,6 +196,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// It also silently covers the connector's OWN disconnectâ†’reconnect during
   /// write recovery (350ms + connect â‰¤6s), which must never raise a popup.
   static const Duration _kOutOfRangeGrace = Duration(seconds: 12);
+
+  /// How often the "not in range" popup comes BACK while the unit is still
+  /// gone. The banner is permanent for the whole outage; this is only about
+  /// re-nagging the user to walk closer after they dismissed the dialog, since
+  /// the run keeps going and the device may be mid-treatment.
+  static const Duration _kOutOfRangeRepeat = Duration(seconds: 60);
+
+  /// How long the pill shows `SCANNINGâ€¦` after a manual tap. The scan itself is
+  /// owned by [AutoConnectManager]; this is just honest feedback that the tap
+  /// registered, and the pill flips to `LINKED` on its own if the unit returns.
+  static const Duration _kRescanFeedback = Duration(seconds: 6);
 
   final Map<String, String> _deviceLabelById = {};
 
@@ -234,7 +261,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Last backend status we reconciled, so remote pause/resume is applied only
   /// on an actual transition (edge-triggered) â€” never level-triggered off the
   /// 1s poll, which would fight a local pause during the backend round-trip.
-  active_session.SessionStatus? _lastRemoteStatus;
+  /// Keyed by device id: a multi-device run has one backend status PER DEVICE,
+  /// and reconciling off a single value (device[0]'s) let one device's remote
+  /// pause/resume drive every other device in the run.
+  final Map<String, active_session.SessionStatus> _lastRemoteStatusByDevice = {};
 
   /// When the LOCAL user last drove a session pause/resume. During the backend
   /// round-trip the live feed flaps (per-device `dev.status` and session-level
@@ -252,6 +282,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Last reconcile log signature, to log transitions without per-second spam.
   String? _lastReconcileSig;
+
+  /// Devices we have already re-posted a stop for because the backend still
+  /// reported them RUNNING after this phone had finished them locally. Without
+  /// the re-post the device stays locked ("Running â€” controlled elsewhere") and
+  /// keeps consuming a slot against the plan's concurrent-device limit; without
+  /// this set the 1s poll would re-post it every second until the feed caught up.
+  final Set<String> _reReleasedDevices = {};
 
   /// Listener that reconciles the local engine with remote stop/pause/resume
   /// for a normal run (Protocol Plus runs are reconciled by their controller).
@@ -759,65 +796,103 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     }
 
     _backendSessionSeen = true;
-    // Use the PER-DEVICE backend status, not the session-level one: pausing a
-    // single device leaves the session status RUNNING on the backend, so the
-    // session-level status would miss a per-device pause/resume.
-    final dev = _findBackendLiveDevice(sessions, widget.deviceIds.first);
-    final remote = dev?.status ?? backendSession.status;
 
-    // Log transitions so we can see remote vs local state without per-second spam.
-    final sig = 'dev=${dev?.status} sess=${backendSession.status} '
-        'local=$localStatus lastRemote=$_lastRemoteStatus';
-    if (sig != _lastReconcileSig) {
-      _lastReconcileSig = sig;
-      appLogger.i(
-          'Reconcile[$backendId]: $sig (firstDev=${widget.deviceIds.first})');
-    }
-
-    // Edge-triggered: only act when the backend status actually changes, so a
-    // local pause isn't undone by the poll still reporting the old status during
-    // the backend round-trip. applyRemoteLifecycle is a no-op if already there.
-    if (_lastRemoteStatus == remote) return;
-
-    // Local action wins during its settle window: while a just-issued local
-    // pause/resume is still propagating, the feed flaps between the old and new
-    // status (per-device vs session-level disagree). Ignore any backend value
-    // that contradicts the local engine â€” and crucially do NOT advance
-    // _lastRemoteStatus, so the matching value keeps short-circuiting above and
-    // the contradicting value never edge-triggers an engine action. Genuine
-    // remote changes still apply once the window elapses.
+    // Reconcile EVERY device, each against its own backend status.
+    //
+    // This used to read `widget.deviceIds.first` and then drive the SESSION-wide
+    // pause()/resume(). In a multi-device run that is wrong twice over: device[0]'s
+    // remote state moved every other device with it, and no other device's remote
+    // state was ever reconciled at all.
+    final engineState = ref.read(sessionEngineFamilyProvider(_engineKey));
     final localAction = _localLifecycleActionAt;
-    final localActive = localStatus == SessionStatus.running ||
-        localStatus == SessionStatus.paused;
-    if (localAction != null && localActive) {
-      if (DateTime.now().difference(localAction) <
-          _localLifecycleSettleWindow) {
-        if (remote != _toActiveStatus(localStatus)) {
-          appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote '
-              'while local=$localStatus settles');
-          return;
+    final settling = localAction != null &&
+        DateTime.now().difference(localAction) < _localLifecycleSettleWindow;
+    var anySettleBlocked = false;
+
+    for (final deviceId in widget.deviceIds) {
+      final dev = _findBackendLiveDevice(sessions, deviceId);
+      // Per-device status where the feed gives one; the session-level status is
+      // only a fallback for a frame that carried no per-device breakdown.
+      final remote = dev?.status ?? backendSession.status;
+      final deviceLocal = engineState.deviceStatuses[deviceId];
+      if (deviceLocal == null) continue;
+
+      // We finished this device but the backend still has it RUNNING â€” its stop
+      // never landed (offline, a failed POST, or a teardown that skipped it).
+      // Re-post it once, or the device stays locked as "Running â€” controlled
+      // elsewhere" and can't be used for the next session.
+      final localTerminal = deviceLocal == SessionStatus.stopped ||
+          deviceLocal == SessionStatus.completed;
+      final remoteLive = remote == active_session.SessionStatus.running ||
+          remote == active_session.SessionStatus.paused;
+      if (localTerminal && remoteLive && dev != null) {
+        if (_reReleasedDevices.add(deviceId)) {
+          appLogger.w(
+            'Reconcile[$backendId]: $deviceId is stopped locally but the '
+            'backend still reports $remote â€” re-posting the stop to release it',
+          );
+          unawaited(ref
+              .read(sessionSyncServiceProvider)
+              .stopServerSessionDeviceByIdentity(
+                backendId,
+                deviceId,
+                deviceName: dev.deviceName,
+                slotId: dev.slotId,
+              ));
         }
-      } else {
-        // Window elapsed â€” drop the guard so later remote changes are honoured.
-        _localLifecycleActionAt = null;
+        continue;
+      }
+
+      // Log transitions only, so this doesn't spam once a second.
+      final sig = '$deviceId dev=${dev?.status} sess=${backendSession.status} '
+          'local=$deviceLocal last=${_lastRemoteStatusByDevice[deviceId]}';
+      if (sig != _lastReconcileSig) {
+        _lastReconcileSig = sig;
+        appLogger.i('Reconcile[$backendId]: $sig');
+      }
+
+      // Edge-triggered: act only when this device's backend status actually
+      // changes, so a local pause isn't undone by the poll still reporting the
+      // old status during the backend round-trip.
+      if (_lastRemoteStatusByDevice[deviceId] == remote) continue;
+
+      // Local action wins during its settle window: while a just-issued local
+      // pause/resume propagates, the feed flaps between the old and new status
+      // (per-device vs session-level disagree). Ignore a backend value that
+      // contradicts the local engine â€” and crucially do NOT record it, so the
+      // matching value keeps short-circuiting above and the contradicting one
+      // never edge-triggers an engine action.
+      final deviceLive = deviceLocal == SessionStatus.running ||
+          deviceLocal == SessionStatus.paused;
+      if (settling && deviceLive && remote != _toActiveStatus(deviceLocal)) {
+        appLogger.i('Reconcile[$backendId]: ignoring backend echo $remote for '
+            '$deviceId while local=$deviceLocal settles');
+        anySettleBlocked = true;
+        continue;
+      }
+
+      _lastRemoteStatusByDevice[deviceId] = remote;
+      if (remote == active_session.SessionStatus.paused &&
+          deviceLocal == SessionStatus.running) {
+        appLogger.i('Reconcile[$backendId]: APPLY remote PAUSE to $deviceId');
+        unawaited(engineCtrl.pauseDevice(deviceId));
+      } else if (remote == active_session.SessionStatus.running &&
+          deviceLocal == SessionStatus.paused) {
+        appLogger.i('Reconcile[$backendId]: APPLY remote RESUME to $deviceId');
+        unawaited(engineCtrl.resumeDevice(deviceId));
+      } else if (remote == active_session.SessionStatus.stopped ||
+          remote == active_session.SessionStatus.completed) {
+        if (deviceLive) {
+          appLogger.i('Reconcile[$backendId]: APPLY remote STOP to $deviceId');
+          unawaited(engineCtrl.stopDevice(deviceId));
+        }
       }
     }
 
-    _lastRemoteStatus = remote;
-    if (remote == active_session.SessionStatus.paused &&
-        localStatus == SessionStatus.running) {
-      appLogger.i('Reconcile[$backendId]: APPLY remote PAUSE');
-      // Full pause path (cancels the ticker + syncs the background runtime) so
-      // it sticks; applyRemoteLifecycle alone gets resynced back to running.
-      // Re-sending the Wi-Fi pause is idempotent (device is already paused).
-      unawaited(engineCtrl.pause());
-    } else if (remote == active_session.SessionStatus.running &&
-        localStatus == SessionStatus.paused) {
-      appLogger.i('Reconcile[$backendId]: APPLY remote RESUME');
-      unawaited(engineCtrl.resume());
-    } else {
-      appLogger.i('Reconcile[$backendId]: remote changed to $remote but '
-          'local=$localStatus â€” no engine action');
+    // Drop the guard once nothing is still being held back by it, so later
+    // remote changes are honoured.
+    if (localAction != null && !settling && !anySettleBlocked) {
+      _localLifecycleActionAt = null;
     }
   }
 
@@ -1194,17 +1269,38 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// Find the backend live-device for a local device id across all live
   /// sessions. Matches WiFi by exact (normalized) MAC and BLE by Â±1 last byte
   /// (units advertise on a MAC Â±1 from the registered/firmware id).
+  ///
+  /// An EXACT match always wins over a Â±1 one. Two units from the same batch
+  /// can have adjacent MACs, and taking the first Â±1 hit let both cards in a
+  /// two-device run resolve to the SAME backend device â€” so one device showed
+  /// the other's timer, pads and status. The Â±1 fallback also refuses any id
+  /// that is the exact match of a DIFFERENT device in this run, for the same
+  /// reason.
   active_session.LiveDeviceState? _findBackendLiveDevice(
     List<active_session.ActiveSession> sessions,
     String localId,
   ) {
+    final exact = _normalizeMac(localId);
+    // Exact ids of the OTHER devices in this run — never claim one of those.
+    final otherExact = <String>{
+      for (final id in widget.deviceIds)
+        if (_normalizeMac(id) != exact) _normalizeMac(id),
+    };
+
+    active_session.LiveDeviceState? adjacent;
     final candidates = _normalizedMacVariants(localId);
     for (final s in sessions) {
       for (final d in s.liveDevices) {
-        if (candidates.contains(_normalizeMac(d.deviceId))) return d;
+        final devId = _normalizeMac(d.deviceId);
+        if (devId == exact) return d;
+        if (adjacent == null &&
+            candidates.contains(devId) &&
+            !otherExact.contains(devId)) {
+          adjacent = d;
+        }
       }
     }
-    return null;
+    return adjacent;
   }
 
   /// The backend session containing [localId] that the feed flagged as a
@@ -1465,11 +1561,39 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// session itself is deliberately left alone â€” the firmware keeps running the
   /// loaded protocol after the link drops, so a walk out of range must not end
   /// a valid treatment (see `SessionEngine.handleBleDisconnect`).
+  ///
+  /// The first prompt waits out [_kOutOfRangeGrace] so the built-in recovery
+  /// (connector retries + AutoConnectManager rescan) gets a chance first. After
+  /// that it REPEATS every [_kOutOfRangeRepeat] for as long as the unit is
+  /// still gone: dismissing the dialog used to be the end of it, which left the
+  /// user with a running countdown and no indication anything was wrong.
   void _armOutOfRangeWarning(String deviceId) {
     _outOfRangeTimers[deviceId]?.cancel();
     _outOfRangeTimers[deviceId] = Timer(_kOutOfRangeGrace, () {
-      _outOfRangeTimers.remove(deviceId);
       unawaited(_showOutOfRangeWarning(deviceId));
+      _scheduleOutOfRangeRepeat(deviceId);
+    });
+  }
+
+  /// Keep re-prompting while the device is still missing. Self-cancels the
+  /// moment it reconnects (or the run is no longer live), and is cleared
+  /// wholesale by [_cancelOutOfRangeWarning] on the reconnect edge.
+  void _scheduleOutOfRangeRepeat(String deviceId) {
+    _outOfRangeTimers[deviceId]?.cancel();
+    _outOfRangeTimers[deviceId] = Timer(_kOutOfRangeRepeat, () {
+      if (!mounted) return;
+      if (ref.read(bleRepositoryProvider).isConnected(deviceId)) {
+        _outOfRangeTimers.remove(deviceId)?.cancel();
+        return;
+      }
+      // The run ended (or was stopped) while the unit was away — stop nagging.
+      final status = ref.read(sessionEngineFamilyProvider(_engineKey)).status;
+      if (status != SessionStatus.running && status != SessionStatus.paused) {
+        _outOfRangeTimers.remove(deviceId)?.cancel();
+        return;
+      }
+      unawaited(_showOutOfRangeWarning(deviceId));
+      _scheduleOutOfRangeRepeat(deviceId);
     });
   }
 
@@ -1790,6 +1914,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         plusDelaySeconds: plusDelay,
         plusOnBreak: plusOnBreak,
         plusBreakRemaining: plusBreakRemaining,
+        plusBreakHoldSeconds:
+            engine.protocolPlusBreakHoldByDevice[id] ?? 0,
         scrollable: scrollable,
       );
     }
@@ -2586,12 +2712,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final live =
         status == SessionStatus.running || status == SessionStatus.paused;
     if (!live) return false;
-    return _outOfRangeTimers.containsKey(deviceId) ||
-        _outOfRangeDialogDeviceId == deviceId;
+    if (widget.remoteView || widget.transport != 'ble') return false;
+
+    // LIVE connection state, not the popup's grace timer. The timer removes
+    // itself the moment it fires, and the dialog clears its device id as soon
+    // as it is dismissed â€” deriving the banner from either made the warning
+    // disappear ~12s into an outage that was still ongoing, leaving a silently
+    // running countdown. This also puts the pill in agreement with the
+    // per-device buttons, which already read this provider.
+    final connected = ref.watch(bleDeviceStatusProvider(deviceId)) ==
+        BleConnectionStatus.connected;
+    if (connected) return false;
+
+    // Deliberate drops are not faults: an in-app stop/disconnect, the
+    // connector's own mid-write recovery, or Wi-Fi provisioning (the firmware
+    // ALWAYS drops BLE when it accepts credentials â€” that's the flow working).
+    if (ref.read(bleRepositoryProvider).isReconnectSuppressed(deviceId)) {
+      return false;
+    }
+    if (ref.watch(bleProvisioningIdsProvider).contains(deviceId)) return false;
+
+    return true;
   }
 
   /// The spec's `liveCard` header: `{device}` with the protocol as a quiet
-  /// suffix, and a `Linked` / `⚠ Bluetooth lost` pill on the right.
+  /// suffix, and the `LINKED` / `SCAN` link pill on the right.
   Widget _lcHeader({
     required String deviceId,
     required String deviceLabel,
@@ -2633,24 +2778,99 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ),
         if (showPill) ...[
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: lost ? pal.lowSoft : pal.goodSoft,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              lost ? '⚠ Bluetooth lost' : 'Linked',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                color: lost ? pal.low : pal.good,
-              ),
-            ),
-          ),
+          _lcLinkPill(deviceId: deviceId, lost: lost),
         ],
       ],
     );
+  }
+
+  /// The link pill: `LINKED` when connected, and while the unit is gone a
+  /// tappable `SCAN` (→ `SCANNING…` while an attempt is in flight) that kicks
+  /// off a targeted rescan for THIS device on top of the automatic background
+  /// reconnect.
+  Widget _lcLinkPill({required String deviceId, required bool lost}) {
+    final scanning = _rescanningDeviceIds.contains(deviceId);
+    final label = !lost
+        ? 'LINKED'
+        : scanning
+            ? 'SCANNING…'
+            : 'SCAN';
+    final pill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: lost ? pal.lowSoft : pal.goodSoft,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (lost) ...[
+            scanning
+                ? SizedBox(
+                    width: 9,
+                    height: 9,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      valueColor: AlwaysStoppedAnimation<Color>(pal.low),
+                    ),
+                  )
+                : Icon(Icons.bluetooth_searching_rounded,
+                    size: 11, color: pal.low),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: lost ? pal.low : pal.good,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (!lost) return pill;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: scanning ? null : () => unawaited(_rescanDevice(deviceId)),
+        child: pill,
+      ),
+    );
+  }
+
+  /// Manual reconnect for one device, triggered from the live card's `SCAN`
+  /// pill. Delegates to [AutoConnectManager], which is scan-then-connect â€” the
+  /// only form that works on iOS, where `remoteId` is an opaque per-install
+  /// UUID rather than a MAC and you can only connect to a peripheral the scan
+  /// actually discovered.
+  ///
+  /// The `SCANNINGâ€¦` label is held for a bounded window rather than until the
+  /// connect resolves: the manager owns the actual attempt, and the pill flips
+  /// back to `LINKED` on its own the moment the connection state says so.
+  Future<void> _rescanDevice(String deviceId) async {
+    if (_rescanningDeviceIds.contains(deviceId)) return;
+    setState(() => _rescanningDeviceIds.add(deviceId));
+    try {
+      // A device that was ever force-stopped is barred from the connector's own
+      // reconnect loop (`suppressReconnect` pins attempts at the max and is
+      // otherwise cleared only by an explicit connect). Lift that first, or the
+      // tap does nothing for exactly the devices that most need it.
+      ref.read(bleRepositoryProvider).clearReconnectSuppression(deviceId);
+      ref.read(autoConnectManagerProvider).requestReconnect(deviceId);
+      await Future<void>.delayed(_kRescanFeedback);
+    } catch (e) {
+      appLogger.w('Session: manual rescan of $deviceId failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _rescanningDeviceIds.remove(deviceId));
+      } else {
+        _rescanningDeviceIds.remove(deviceId);
+      }
+    }
   }
 
   /// `.blewarn` — the spec's warning strip (app.js:1327).
@@ -2997,6 +3217,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     int plusDelaySeconds = 0,
     bool plusOnBreak = false,
     int plusBreakRemaining = 0,
+    /// Seconds this device has spent idle on breaks between stacked protocols.
+    /// Added back onto the backend countdown, which is pure wall-clock and
+    /// would otherwise deduct that dead time from the treatment.
+    int plusBreakHoldSeconds = 0,
     // Horizontal pager gives each card a fixed height, so its content scrolls
     // within (true). In the vertical list the outer ListView scrolls, so the
     // card must size to its content instead (false).
@@ -3035,9 +3259,32 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final useBackendTimer = !deviceTerminal &&
         backendRemainingSeconds != null &&
         backendRemainingSeconds >= 0;
+    // Give back the time this device spent idle BETWEEN stacked protocols. The
+    // backend countdown runs off a single wall-clock start time and cannot know
+    // the unit was waiting for its next sub-protocol, so every break — and above
+    // all one stretched by a BLE outage, where the switch can't be delivered
+    // until the unit is back — was silently deducted from the treatment. That is
+    // what drove the display to 00:00 while the device kept running for minutes.
+    // The local engine timer already discounts breaks, so this applies only to
+    // the backend value.
     var displayRemaining = useBackendTimer
-        ? Duration(seconds: backendRemainingSeconds)
+        ? Duration(seconds: backendRemainingSeconds + plusBreakHoldSeconds)
         : timer.remaining;
+
+    // ON BREAK the clock stands still. The hold above keeps the TOTAL honest,
+    // but between two ticks of the 1s feed the raw backend value still creeps
+    // down, so latch the countdown for as long as the device is waiting — the
+    // user asked for the timer to stop, not merely to end at the right moment.
+    if (plusOnBreak && !deviceTerminal) {
+      final held = _breakHeldRemainingByDevice[id];
+      if (held == null || held < displayRemaining) {
+        _breakHeldRemainingByDevice[id] = displayRemaining;
+      } else {
+        displayRemaining = held;
+      }
+    } else {
+      _breakHeldRemainingByDevice.remove(id);
+    }
 
     // PAUSED holds the clock. The feed only freezes once the backend has
     // applied the pause, so between the button press and the server's
@@ -3062,9 +3309,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (useBackendTimer &&
         backendTotalSeconds != null &&
         backendTotalSeconds > 0) {
-      // Derived from the (possibly pause-held) remaining, so the ring and bar
-      // stop exactly where the digits do.
-      displayProgress = (1 - displayRemaining.inSeconds / backendTotalSeconds)
+      // Derived from the (possibly pause- or break-held) remaining, so the ring
+      // and bar stop exactly where the digits do. The break hold is added to the
+      // TOTAL as well: it extends the run rather than rewinding it, and without
+      // it a remaining greater than the total would clamp the ring to empty.
+      final effectiveTotal = backendTotalSeconds + plusBreakHoldSeconds;
+      displayProgress = (1 - displayRemaining.inSeconds / effectiveTotal)
           .clamp(0.0, 1.0);
     } else {
       displayProgress = timer.progress;
@@ -3393,29 +3643,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ref.watch(bleDeviceStatusProvider(deviceId)) !=
             BleConnectionStatus.connected;
 
-    // Protocol Plus runs on a server-scheduled timeline; pausing/resuming would
-    // desync the scheduled protocol switches, so only Stop is offered. Normal
-    // protocol devices (incl. those in a mixed session) keep pause/resume.
-    if (isProtocolPlusDevice &&
-        (status == SessionStatus.running || status == SessionStatus.paused)) {
-      // During a break the firmware is idle and the BLE link is expected to be
-      // down â€” that's NOT a reason to block Stop. Stopping then just cancels the
-      // server-scheduled remaining protocols (no live link needed), so keep the
-      // button enabled even while disconnected mid-break.
-      final blockStop = disconnected && !plusOnBreak;
-      return SizedBox(
-        height: 44,
-        width: double.infinity,
-        child: ElevatedButton(
-          onPressed: blockStop ? null : stopFn,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: pal.low,
-            foregroundColor: pal.ink,
-          ),
-          child: const Text('Stop'),
-        ),
-      );
-    }
+    // Stop stays available to a device whose link is down: during a Plus break
+    // the firmware is idle and BLE is EXPECTED to be down, and even mid-protocol
+    // the stop is still worth issuing â€” it ends the device locally and releases
+    // it on the backend, which is what frees it for the next session.
+    final blockStop = disconnected && isProtocolPlusDevice && !plusOnBreak;
+
+    // Pause/resume DO need a live link (they are a BLE write to the unit), so
+    // they stay gated on the connection.
+    final blockPauseResume = disconnected;
 
     if (status == SessionStatus.running) {
       return Row(
@@ -3424,13 +3660,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: OutlinedButton(
-                onPressed: disconnected ? null : pauseFn,
+                onPressed: blockPauseResume ? null : pauseFn,
                 style: OutlinedButton.styleFrom(
                   backgroundColor: softSurface,
                   foregroundColor: pal.ink,
                   side: BorderSide(color: pal.line2),
                 ),
-                child: Text('Pause'),
+                child: const Text('Pause'),
               ),
             ),
           ),
@@ -3439,12 +3675,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: disconnected ? null : stopFn,
+                onPressed: blockStop ? null : stopFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: pal.low,
                   foregroundColor: pal.ink,
                 ),
-                child: Text('Stop'),
+                child: const Text('Stop'),
               ),
             ),
           ),
@@ -3458,12 +3694,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: disconnected ? null : resumeFn,
+                onPressed: blockPauseResume ? null : resumeFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: pal.copperInk,
                   foregroundColor: pal.ink,
                 ),
-                child: Text('Resume'),
+                child: const Text('Resume'),
               ),
             ),
           ),
@@ -3472,12 +3708,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             child: SizedBox(
               height: 44,
               child: ElevatedButton(
-                onPressed: disconnected ? null : stopFn,
+                onPressed: blockStop ? null : stopFn,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: pal.low,
                   foregroundColor: pal.ink,
                 ),
-                child: Text('Stop'),
+                child: const Text('Stop'),
               ),
             ),
           ),

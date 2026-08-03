@@ -533,6 +533,20 @@ class BleConnector {
   bool isReconnectSuppressed(String deviceId) =>
       _manualDisconnects.contains(deviceId);
 
+  /// Undo [suppressReconnect] for [deviceId] without connecting.
+  ///
+  /// Suppression is otherwise cleared ONLY inside [connect] — but the
+  /// scan-driven reconnect path never reaches [connect] for a suppressed
+  /// device, so a unit that was ever force-stopped (a spurious `rs:stop`, a
+  /// Protocol Plus break false-positive) could never be recovered. The manual
+  /// SCAN control on the live session card calls this first so the user always
+  /// has a way back.
+  void clearReconnectSuppression(String deviceId) {
+    if (!_manualDisconnects.remove(deviceId)) return;
+    _reconnectAttempts.remove(deviceId);
+    appLogger.i('BLE: auto-reconnect suppression cleared for $deviceId');
+  }
+
   /// Disconnect a specific device.
   Future<void> disconnect(String deviceId) async {
     // Always suppress any pending/in-flight auto-reconnect for this device,

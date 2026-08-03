@@ -68,6 +68,11 @@ class BleRepository {
   bool isReconnectSuppressed(String deviceId) =>
       _connector.isReconnectSuppressed(deviceId);
 
+  /// See [BleConnector.clearReconnectSuppression] — re-enables auto-reconnect
+  /// for a device that was force-stopped, so a manual retry can reach it.
+  void clearReconnectSuppression(String deviceId) =>
+      _connector.clearReconnectSuppression(deviceId);
+
   Stream<BleNotification> get notifications => _connector.notifications;
 
   Stream<Map<String, int>> get batteryLevels => _connector.batteryLevels;

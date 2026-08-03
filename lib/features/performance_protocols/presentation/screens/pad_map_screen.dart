@@ -13,6 +13,7 @@ import '../../../pad_placement/presentation/widgets/anatomy_scene_flag.dart';
 import '../../../pad_placement/presentation/widgets/anatomy_scene_view.dart';
 import '../../../pad_placement/presentation/widgets/pad_anatomy_view.dart';
 import '../../domain/performance_models.dart';
+import '../widgets/pad_geometry_diagram.dart';
 import 'go_to_session.dart';
 
 // The set palette now lives in `pad_placement/domain/set_colors.dart` — the same
@@ -223,6 +224,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   for (final set in widget.payload.withheldSets)
                     _withheldNote(p, set),
                   _sessionGuidance(p),
+                  // What this chain is FOR, straight from the protocol record —
+                  // web parity with the "Common injuries" and "Performance
+                  // improvements" blocks. Both were already on the payload and
+                  // simply never rendered here.
+                  _chainOutcomes(p),
                   _padGuide(p),
                   // Driver → thermal → intent → reassessment → disclaimers,
                   // in the web panel's order.
@@ -372,7 +378,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             Icon(Icons.lock_outline_rounded, size: 13, color: p.ink3),
             const SizedBox(width: HwSpace.s2),
             Text(
-              'Set ${set.setIndex} · not this session',
+              'Set ${widget.payload.displayIndexOf(set)} · not this session',
               style: TextStyle(
                 fontSize: HwType.sm,
                 fontWeight: FontWeight.w600,
@@ -404,7 +410,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Set ${set.setIndex}'
+                'Set ${widget.payload.displayIndexOf(set)}'
                 '${set.role.trim().isEmpty ? '' : ' · ${set.role}'}',
                 style: TextStyle(
                   fontSize: HwType.lg,
@@ -484,7 +490,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               TextSpan(
                 children: [
                   TextSpan(
-                    text: 'Set ${set.setIndex}',
+                    text: 'Set ${widget.payload.displayIndexOf(set)}',
                     style: TextStyle(
                       fontSize: HwType.sm,
                       fontWeight: FontWeight.w700,
@@ -590,8 +596,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   ///     (`transparentBody={!muscleMode}`). Muscle Mode reads as "solid body";
   ///     with it off you get the X-ray, which the older viewer could not do at
   ///     all because it shared one material across every mesh.
-  ///   • `colorBySet` + `showSetLinks` are always on here: this is the surface
-  ///     where a chain of sets has to read as a chain.
+  ///   • `showSetLinks` is always on here: this is the surface where a chain of
+  ///     sets has to read as a chain, and the labelled arc is what carries the
+  ///     set identity.
+  ///   • `colorBySet` is deliberately OFF. With it on, focusing a set repainted
+  ///     the pads and muscles in that set's palette colour, so the same pad
+  ///     changed colour depending on which set was selected and Sun/Moon stopped
+  ///     being readable at a glance. Role colour (Sun red / Moon blue) is the
+  ///     one thing on this model that must never move.
   Widget _stage() {
     final p = RefPalette.of(context);
     final markers = _data.markers(
@@ -627,7 +639,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       showLabels: _showLabels,
       padStyle: _muscleMode ? 'muscle' : 'badge',
       transparentBody: !_muscleMode,
-      colorBySet: true,
+      colorBySet: false,
       showSetLinks: true,
       focusSetIndex: _visibleSetIndex,
       dimUnselected: !_showAllSets,
@@ -687,11 +699,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           initialShowLabels: _showLabels,
           padStyle: _muscleMode ? 'muscle' : 'badge',
           transparentBody: !_muscleMode,
-          colorBySet: true,
+          colorBySet: false,
           showSetLinks: true,
           focusSetIndex: _visibleSetIndex,
           dimUnselected: !_showAllSets,
-          // Same rule as the inline stage — full screen has to colour the sets
+          // Same rule as the inline stage — full screen has to colour the pads
           // the same way, or expanding one changes what it shows.
           activeMarkers: _activeMarkers(
             _data.markers(
@@ -865,7 +877,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               ),
               const SizedBox(width: HwSpace.s1 + 2),
               Text(
-                'Set ${sets[i].setIndex}',
+                'Set ${widget.payload.displayIndexOf(sets[i])}',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w700,
@@ -924,7 +936,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              set.title,
+                              widget.payload.titleOf(set),
                               style: TextStyle(
                                 fontSize: HwType.base,
                                 fontWeight: FontWeight.w700,
@@ -970,14 +982,34 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             if (sun != null) _padLine(p, sun),
             if (moon != null) _padLine(p, moon),
             if (PadGeometryInfo.of(set.padGeometry) case final geometry?) ...[
-              Text(
-                geometry.intent,
-                style: TextStyle(
-                  fontSize: HwType.eyebrow,
-                  height: 1.5,
-                  fontStyle: FontStyle.italic,
-                  color: p.ink3,
-                ),
+              // The diagram sits WITH its sentence, not up beside the chip: the
+              // picture says how the pair relates and the sentence says why, and
+              // splitting them left the chip's one-word "reads" carrying the
+              // whole idea on its own.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PadGeometryDiagram(
+                    geometry: set.padGeometry,
+                    padColor: p.copperInk,
+                    bodyColor: p.ink3,
+                    linkColor: p.copper,
+                    captionColor: p.ink3,
+                    width: 72,
+                  ),
+                  const SizedBox(width: HwSpace.s2),
+                  Expanded(
+                    child: Text(
+                      geometry.intent,
+                      style: TextStyle(
+                        fontSize: HwType.eyebrow,
+                        height: 1.5,
+                        fontStyle: FontStyle.italic,
+                        color: p.ink3,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: HwSpace.s1),
             ],
@@ -1224,7 +1256,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        set.title,
+                        widget.payload.titleOf(set),
                         style: TextStyle(
                           fontSize: HwType.base,
                           fontWeight: FontWeight.w700,
@@ -1313,6 +1345,64 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   ],
                 ),
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "Common injuries" and "Performance improvements" — what the selected chain
+  /// is for, as the web renders them under the stage.
+  ///
+  /// Both lists are authored on the protocol record and already parsed into
+  /// [ChainInfo]; they were simply never shown on this screen. Each block is
+  /// dropped entirely when its list is empty rather than rendered as an empty
+  /// heading, which is what the web does and what keeps a sparse chain from
+  /// looking broken.
+  ///
+  /// Performance-only: a recovery placement carries no chain, so this is a
+  /// no-op there.
+  Widget _chainOutcomes(RefPalette p) {
+    final chain = widget.payload.chain;
+    if (chain == null) return const SizedBox.shrink();
+
+    final injuries = chain.injuryRiskReduction
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final benefits = chain.performanceRomBenefits
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (injuries.isEmpty && benefits.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (injuries.isNotEmpty) ...[
+              const HwEyebrow('Common injuries'),
+              const SizedBox(height: HwSpace.s2),
+              Text(
+                'Injuries commonly seen in this role:',
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  height: 1.5,
+                  color: p.ink2,
+                ),
+              ),
+              const SizedBox(height: HwSpace.s2),
+              _bullets(p, injuries),
+            ],
+            if (injuries.isNotEmpty && benefits.isNotEmpty)
+              const SizedBox(height: HwSpace.s2),
+            if (benefits.isNotEmpty) ...[
+              const HwEyebrow('Performance improvements'),
+              const SizedBox(height: HwSpace.s2),
+              _bullets(p, benefits),
             ],
           ],
         ),

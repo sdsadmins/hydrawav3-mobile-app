@@ -87,8 +87,23 @@ class AutoConnectManager {
     _lastStates = Map.of(states);
   }
 
-  void _ensureScanning() {
-    if (!_ref.read(autoConnectEnabledProvider)) return;
+  /// Ask the manager to (re)connect [deviceId] now — the manual counterpart to
+  /// the automatic connected→disconnected trigger in [_onConnStates].
+  ///
+  /// Goes through the same scan-then-connect path rather than connecting to a
+  /// constructed MAC, which is the only form that works on iOS: there
+  /// `remoteId` is an opaque per-install UUID, and you can only connect to a
+  /// peripheral the scan actually discovered.
+  void requestReconnect(String deviceId) {
+    if (_ref.read(bleConnectorProvider).isConnected(deviceId)) return;
+    _wantReconnect.add(deviceId);
+    appLogger.i('AutoConnect: manual reconnect requested for $deviceId');
+    // `force`: an explicit user tap must scan even when auto-connect is off.
+    _ensureScanning(force: true);
+  }
+
+  void _ensureScanning({bool force = false}) {
+    if (!force && !_ref.read(autoConnectEnabledProvider)) return;
     if (_inFlight.isNotEmpty) return; // don't scan during active connects
     final repo = _ref.read(bleRepositoryProvider);
     if (repo.isScanning) return;
@@ -97,7 +112,10 @@ class AutoConnectManager {
   }
 
   void _onScanResults(List<ScanResult> results) {
-    if (!_ref.read(autoConnectEnabledProvider)) return;
+    // With auto-connect off we still honour an EXPLICIT reconnect request
+    // (the live card's SCAN button) — but nothing else.
+    final autoOn = _ref.read(autoConnectEnabledProvider);
+    if (!autoOn && _wantReconnect.isEmpty) return;
 
     const expectedUuid = BleConstants.preferredServiceUuid;
     if (expectedUuid == null || expectedUuid.isEmpty) return;
@@ -112,6 +130,7 @@ class AutoConnectManager {
       if (_inFlight.contains(id)) continue;
       if (connecting.contains(id)) continue;
       if (connector.isConnected(id)) continue;
+      if (!autoOn && !_wantReconnect.contains(id)) continue;
 
       final isHydrawave = result.advertisementData.serviceUuids.any(
         (u) => BleConstants.normalizeUuid(u.str) == targetUuid,
