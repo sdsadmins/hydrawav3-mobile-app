@@ -31,7 +31,10 @@ String _initials(String name) {
 Future<void> _openExternal(String url) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return;
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+  final mode = uri.scheme == 'http' || uri.scheme == 'https'
+      ? LaunchMode.inAppBrowserView
+      : LaunchMode.externalApplication;
+  await launchUrl(uri, mode: mode);
 }
 
 // ---------------------------------------------------------------------------
@@ -903,8 +906,6 @@ const String _kBreathTrackerUrl =
 /// (`tel:+18005550100`, app.js:659) which must never reach a practitioner's
 /// dialler — until the real one is set here the tile opens the help centre,
 /// where the live contact details are. Set this and it dials directly.
-const String? _kSupportPhone = null;
-
 class HubLabsCard extends StatelessWidget {
   const HubLabsCard({super.key});
 
@@ -1034,14 +1035,8 @@ class HubResources extends ConsumerWidget {
                 child: _ResCard(
                   icon: HwIcons.phone,
                   title: 'Call customer support',
-                  sub: _kSupportPhone == null
-                      ? 'Tap for contact options'
-                      : 'Tap to call',
-                  onTap: () => _openExternal(
-                    _kSupportPhone == null
-                        ? 'https://hydrawav3.com/help-center'
-                        : 'tel:$_kSupportPhone',
-                  ),
+                  sub: 'Tap for contact options',
+                  onTap: () => _openExternal('https://hydrawav3.com/help-center'),
                 ),
               ),
             ],

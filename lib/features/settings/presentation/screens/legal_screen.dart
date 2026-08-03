@@ -160,7 +160,7 @@ class LegalScreen extends StatelessWidget {
   static Future<void> _open(BuildContext context, String url) async {
     final ok = await launchUrl(
       Uri.parse(url),
-      mode: LaunchMode.externalApplication,
+      mode: LaunchMode.inAppBrowserView,
     );
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
