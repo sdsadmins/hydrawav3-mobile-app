@@ -774,8 +774,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     final engineCtrl =
         ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final engineState = ref.read(sessionEngineFamilyProvider(_engineKey));
     final localStatus =
-        ref.read(sessionEngineFamilyProvider(_engineKey)).status;
+        engineState.status;
     final localLive = localStatus == SessionStatus.running ||
         localStatus == SessionStatus.paused;
 
@@ -784,13 +785,38 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       // but only if we'd actually seen it (so we don't stop a run whose backend
       // session simply hasn't appeared in the feed yet).
       if (_backendSessionSeen && !_normalServerStopped && localLive) {
+        final plusLocalIds = <String>{
+          for (final binding in _resolvedPlusBindings.isNotEmpty
+              ? _resolvedPlusBindings
+              : widget.protocolPlusBindings)
+            binding.localMac,
+        };
+        final hasMixedRun = plusLocalIds.isNotEmpty &&
+            widget.deviceIds.any((id) => !plusLocalIds.contains(id));
+
         _normalServerStopped = true;
-        // The server side is already stopped, so the engine must not POST a stop
-        // of its own when this local stop takes it terminal.
-        engineCtrl.markBackendSessionEnded();
-        appLogger
-            .i('Session: backend $backendId removed â€” applying remote stop');
-        unawaited(engineCtrl.stop());
+        if (hasMixedRun) {
+          engineCtrl.markBackendSessionEnded();
+          appLogger.i(
+            'Session: backend $backendId removed — stopping only normal '
+            'devices, keeping Protocol Plus devices alive',
+          );
+          for (final deviceId in widget.deviceIds) {
+            if (plusLocalIds.contains(deviceId)) continue;
+            final deviceLocal = engineState.deviceStatuses[deviceId];
+            if (deviceLocal == SessionStatus.running ||
+                deviceLocal == SessionStatus.paused) {
+              unawaited(engineCtrl.stopDevice(deviceId));
+            }
+          }
+        } else {
+          // The server side is already stopped, so the engine must not POST a
+          // stop of its own when this local stop takes it terminal.
+          engineCtrl.markBackendSessionEnded();
+          appLogger
+              .i('Session: backend $backendId removed — applying remote stop');
+          unawaited(engineCtrl.stop());
+        }
       }
       return;
     }
@@ -803,7 +829,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // pause()/resume(). In a multi-device run that is wrong twice over: device[0]'s
     // remote state moved every other device with it, and no other device's remote
     // state was ever reconciled at all.
-    final engineState = ref.read(sessionEngineFamilyProvider(_engineKey));
     final localAction = _localLifecycleActionAt;
     final settling = localAction != null &&
         DateTime.now().difference(localAction) < _localLifecycleSettleWindow;
@@ -3267,15 +3292,26 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // what drove the display to 00:00 while the device kept running for minutes.
     // The local engine timer already discounts breaks, so this applies only to
     // the backend value.
+    // Only disconnected BLE devices need break-hold compensation. When the
+    // device stays connected, the user expects the countdown to keep moving
+    // through the planned break instead of being held/fluctuating around a
+    // latched value.
+    final bleConnected = widget.remoteView || widget.transport != 'ble'
+        ? true
+        : ref.watch(bleDeviceStatusProvider(id)) ==
+            BleConnectionStatus.connected;
+    final effectiveBreakHoldSeconds =
+        plusOnBreak && !deviceTerminal && !bleConnected
+            ? plusBreakHoldSeconds
+            : 0;
     var displayRemaining = useBackendTimer
-        ? Duration(seconds: backendRemainingSeconds + plusBreakHoldSeconds)
+        ? Duration(seconds: backendRemainingSeconds + effectiveBreakHoldSeconds)
         : timer.remaining;
 
-    // ON BREAK the clock stands still. The hold above keeps the TOTAL honest,
-    // but between two ticks of the 1s feed the raw backend value still creeps
-    // down, so latch the countdown for as long as the device is waiting — the
-    // user asked for the timer to stop, not merely to end at the right moment.
-    if (plusOnBreak && !deviceTerminal) {
+    // Only freeze the visible countdown when a BLE device is ACTUALLY offline
+    // during a Plus break. When the unit stays connected, the backend timer +
+    // break-hold compensation should continue to render live without latching.
+    if (plusOnBreak && !deviceTerminal && !bleConnected) {
       final held = _breakHeldRemainingByDevice[id];
       if (held == null || held < displayRemaining) {
         _breakHeldRemainingByDevice[id] = displayRemaining;
@@ -3313,7 +3349,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       // and bar stop exactly where the digits do. The break hold is added to the
       // TOTAL as well: it extends the run rather than rewinding it, and without
       // it a remaining greater than the total would clamp the ring to empty.
-      final effectiveTotal = backendTotalSeconds + plusBreakHoldSeconds;
+      final effectiveTotal = backendTotalSeconds + effectiveBreakHoldSeconds;
       displayProgress = (1 - displayRemaining.inSeconds / effectiveTotal)
           .clamp(0.0, 1.0);
     } else {
@@ -3351,7 +3387,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     final displayTotal = (useBackendTimer &&
             backendTotalSeconds != null &&
             backendTotalSeconds > 0)
-        ? Duration(seconds: backendTotalSeconds)
+        ? Duration(seconds: backendTotalSeconds + effectiveBreakHoldSeconds)
         : (timer.totalDuration > Duration.zero
             ? timer.totalDuration
             : timer.remaining);

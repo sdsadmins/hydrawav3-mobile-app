@@ -169,6 +169,20 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         .read(ownBackendToLocalSessionProvider.notifier)
         .update((m) => {...m}..remove(backendSid));
     if (localId == null) return;
+
+    final backendToLocal = _ref.read(ownBackendToLocalSessionProvider);
+    final stillHasOwnedSibling = _ownedSessionIds.any((sessionId) {
+      if (sessionId == backendSid) return false;
+      return backendToLocal[sessionId] == localId;
+    });
+    if (stillHasOwnedSibling) {
+      appLogger.i(
+        'LiveSessions: owned session $backendSid stopped, but local session '
+        '$localId still has other owned Plus bindings â€” keeping it alive',
+      );
+      return;
+    }
+
     final stillActive =
         _ref.read(activeSessionsProvider.notifier).getSessionById(localId) !=
             null;
