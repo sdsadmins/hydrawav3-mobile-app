@@ -12,6 +12,7 @@ import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
+import '../../../../core/utils/log_export.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../auth/presentation/screens/select_organization_page.dart'
@@ -145,7 +146,6 @@ class SettingsScreen extends ConsumerWidget {
       }
     }
   }
-
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -927,6 +927,25 @@ class _SessionDefaultsSection extends ConsumerWidget {
 // 8 · Settings & support
 // ---------------------------------------------------------------------------
 
+Future<void> _shareDiagnosticLogs(BuildContext context) async {
+  try {
+    final shared = await shareLogFile();
+    if (!context.mounted) return;
+    if (!shared) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No log file is available yet.'),
+        ),
+      );
+    }
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Could not share logs: $e')),
+    );
+  }
+}
+
 class _SupportSection extends ConsumerWidget {
   const _SupportSection();
 
@@ -970,6 +989,14 @@ class _SupportSection extends ConsumerWidget {
             title: 'Legal & licenses',
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
+          ),
+          _MoreRow(
+            icon: HwIcons.note,
+            title: 'Share diagnostic logs',
+            subtitle: 'Send the current session trace',
+            onTap: () {
+              _shareDiagnosticLogs(context);
+            },
           ),
         ]),
       ],

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -20,6 +21,7 @@ import 'background_session_runtime.dart';
 import 'session_sync_service.dart';
 import '../data/session_repository.dart';
 import '../domain/pending_session_outcome_model.dart';
+import '../domain/plus_reconnect_registry.dart';
 import '../domain/session_model.dart';
 import '../presentation/providers/pending_outcomes_provider.dart';
 
@@ -239,6 +241,15 @@ class SessionEngineState {
   /// hardware is actually doing.
   final Map<String, int> protocolPlusBreakHoldByDevice;
 
+  /// True while a Plus device's countdown/ring is FROZEN waiting for it to come
+  /// back into BLE range. Set by [SessionEngine.handleBleDisconnect] the instant
+  /// a bound Plus device drops (mid-protocol or mid-break) and cleared by
+  /// [SessionEngine.handleBleReconnect]. Drives the global "bring device back in
+  /// range" reminder; the freeze itself is implemented by stopping that device's
+  /// [SessionEngine._deviceStopwatches] entry, so no separate hold-accounting is
+  /// needed here (unlike [protocolPlusBreakHoldByDevice]).
+  final Map<String, bool> protocolPlusAwaitingReconnectByDevice;
+
   /// Live device→app telemetry per device (faults, warnings, pad state, sensors).
   /// Empty until the first frame arrives over BLE notify or the backend channel.
   final Map<String, DeviceTelemetry> telemetryByDevice;
@@ -274,6 +285,7 @@ class SessionEngineState {
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
     this.protocolPlusBreakHoldByDevice = const {},
+    this.protocolPlusAwaitingReconnectByDevice = const {},
     this.telemetryByDevice = const {},
     this.questionsByProtocolName = const {},
     this.error,
@@ -303,6 +315,7 @@ class SessionEngineState {
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
     Map<String, int>? protocolPlusBreakHoldByDevice,
+    Map<String, bool>? protocolPlusAwaitingReconnectByDevice,
     Map<String, DeviceTelemetry>? telemetryByDevice,
     Map<String, List<ProtocolQuestion>>? questionsByProtocolName,
     String? error,
@@ -341,6 +354,9 @@ class SessionEngineState {
           this.protocolPlusBreakRemainingByDevice,
       protocolPlusBreakHoldByDevice:
           protocolPlusBreakHoldByDevice ?? this.protocolPlusBreakHoldByDevice,
+      protocolPlusAwaitingReconnectByDevice:
+          protocolPlusAwaitingReconnectByDevice ??
+              this.protocolPlusAwaitingReconnectByDevice,
       telemetryByDevice: telemetryByDevice ?? this.telemetryByDevice,
       questionsByProtocolName:
           questionsByProtocolName ?? this.questionsByProtocolName,
@@ -526,6 +542,43 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// unit is back) drained minutes, which is what made the display hit 00:00
   /// while the device was still running.
   final Map<String, Duration> _plusBreakHoldByDevice = {};
+
+  /// Plus device ids currently BLE-disconnected, per [handleBleDisconnect] /
+  /// [handleBleReconnect]. Deliberately NOT used to freeze anything by
+  /// itself — the firmware keeps running the current sub-protocol regardless
+  /// of the app's BLE link, so the countdown must keep advancing through a
+  /// mid-protocol disconnect. It only matters once a device is ALSO on break
+  /// ([_computeBreakState]): that combination is what
+  /// [SessionEngineState.protocolPlusAwaitingReconnectByDevice] (computed each
+  /// tick in [_syncDisplayedTimerFromStopwatch]) surfaces to the UI.
+  final Set<String> _plusDisconnectedIds = {};
+
+  /// This engine's own contribution to the shared
+  /// [plusAwaitingReconnectDeviceIdsProvider] registry — tracked so a change
+  /// (or disposal) can cleanly remove exactly these ids without touching
+  /// another engine instance's entries.
+  Set<String> _publishedAwaitingReconnectIds = const {};
+
+  /// Pushes this engine's current awaiting-reconnect device ids into the
+  /// GLOBAL registry so [PlusReconnectWatchdog] can find them without needing
+  /// to know this engine's family key (see plus_reconnect_registry.dart for
+  /// why that lookup is unreliable). No-op when nothing changed.
+  void _publishAwaitingReconnectIds(Set<String> nextIds) {
+    if (setEquals(nextIds, _publishedAwaitingReconnectIds)) return;
+    try {
+      final registryNotifier =
+          _ref.read(plusAwaitingReconnectDeviceIdsProvider.notifier);
+      final updated = Set<String>.from(registryNotifier.state)
+        ..removeAll(_publishedAwaitingReconnectIds)
+        ..addAll(nextIds);
+      registryNotifier.state = updated;
+      _publishedAwaitingReconnectIds = nextIds;
+    } catch (e) {
+      appLogger.d(
+        'Session: awaiting-reconnect registry publish ignored (container disposed)',
+      );
+    }
+  }
 
   /// Total break time to discount for [id] — completed breaks plus the one in
   /// progress. Add to remaining / subtract from elapsed to get a clock that
@@ -983,43 +1036,45 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final current = state.deviceStatuses[deviceId];
     if (current == null) return;
 
-    switch (normalized) {
-      case 'pause':
-        if (current == SessionStatus.running) {
-          appLogger.i(
-              'Session: device $deviceId reported rs=pause → pausing that device');
-          unawaited(pauseDevice(deviceId));
-          // Web parity: mirror the per-device pause to the backend too.
-          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
-        }
-        break;
-      case 'play':
-        if (current == SessionStatus.paused) {
-          appLogger.i(
-              'Session: device $deviceId reported rs=play → resuming that device');
-          unawaited(resumeDevice(deviceId));
-          // Web parity: mirror the per-device resume to the backend too.
-          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
-        }
-        break;
-      case 'stop':
-        if (current != SessionStatus.stopped &&
-            current != SessionStatus.completed) {
-          appLogger.i(
-              'Session: device $deviceId reported rs=stop → stopping that device');
-          // Use the force-stop path (NOT stopDevice): the firmware stops and
-          // then drops the BLE link, so by the time this runs the device may
-          // already be disconnected — and stopDevice deliberately skips a
-          // disconnected device. force-stop registers it regardless and
-          // suppresses the auto-reconnect so it doesn't come back.
-          _forceDeviceStopped(deviceId);
-          // Web parity: also drive the BACKEND stop for just this device
-          // (stopAll:false) so the server ends/deducts it and every other
-          // client's live feed reconciles — not only our local state.
-          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
-        }
-        break;
-    }
+    // TEMP-DISABLED (rs status handler for non-Plus firmware devices) — commented
+    // out at request, pending investigation. Restore by uncommenting.
+    // switch (normalized) {
+    //   case 'pause':
+    //     if (current == SessionStatus.running) {
+    //       appLogger.i(
+    //           'Session: device $deviceId reported rs=pause → pausing that device');
+    //       unawaited(pauseDevice(deviceId));
+    //       // Web parity: mirror the per-device pause to the backend too.
+    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
+    //     }
+    //     break;
+    //   case 'play':
+    //     if (current == SessionStatus.paused) {
+    //       appLogger.i(
+    //           'Session: device $deviceId reported rs=play → resuming that device');
+    //       unawaited(resumeDevice(deviceId));
+    //       // Web parity: mirror the per-device resume to the backend too.
+    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
+    //     }
+    //     break;
+    //   case 'stop':
+    //     if (current != SessionStatus.stopped &&
+    //         current != SessionStatus.completed) {
+    //       appLogger.i(
+    //           'Session: device $deviceId reported rs=stop → stopping that device');
+    //       // Use the force-stop path (NOT stopDevice): the firmware stops and
+    //       // then drops the BLE link, so by the time this runs the device may
+    //       // already be disconnected — and stopDevice deliberately skips a
+    //       // disconnected device. force-stop registers it regardless and
+    //       // suppresses the auto-reconnect so it doesn't come back.
+    //       _forceDeviceStopped(deviceId);
+    //       // Web parity: also drive the BACKEND stop for just this device
+    //       // (stopAll:false) so the server ends/deducts it and every other
+    //       // client's live feed reconciles — not only our local state.
+    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
+    //     }
+    //     break;
+    // }
   }
 
   /// Single source of truth for "is this device running a Plus sequence".
@@ -1268,6 +1323,18 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// other device in a multi-device run along with it.
   void applyRemoteDeviceLifecycle(String deviceId, SessionStatus remoteStatus) {
     if (!_isActive) return;
+    // Ignore the echo of our OWN connectivity-freeze mirror
+    // (_mirrorDeviceLifecycleToBackend, called from the tick loop when a Plus
+    // device freezes/unfreezes waiting to reconnect): the backend broadcasts
+    // SESSION_PAUSED/SESSION_RESUMED back to every client watching this
+    // session, including us. Applying that here would flip deviceStatuses to
+    // `paused`, which makes _computeBreakState stop treating the device as
+    // on-break, which immediately fires the OPPOSITE mirror call — a loop
+    // that flips pause/resume every tick and, worse, hits the backend's
+    // resume path (which resets ITS OWN elapsed clock) over and over. While
+    // this device is in [_plusDisconnectedIds] we already know its true
+    // state locally; a remote echo for it carries no new information.
+    if (_plusDisconnectedIds.contains(deviceId)) return;
     final current = state.deviceStatuses[deviceId];
     if (current == null || current == remoteStatus) return;
 
@@ -1501,6 +1568,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _plusSegmentEndByDevice.clear();
     _plusBreakStartedAt.clear();
     _plusBreakHoldByDevice.clear();
+    _plusDisconnectedIds.clear();
     _startInProgress = false;
     _deviceStopwatches
       ..clear()
@@ -2852,14 +2920,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
   /// A BLE disconnect is a CONNECTIVITY event, NOT a session-ending one. The
   /// Hydra firmware keeps running the loaded protocol autonomously after the
-  /// link drops, so we keep the session and its timers running and never
-  /// force-stop anything — parity with the web app, whose `gattserverdisconnected`
-  /// handler only updates a connection badge and leaves the run alive.
+  /// link drops, so for a NORMAL protocol we keep the session and its timers
+  /// running and never force-stop anything — parity with the web app, whose
+  /// `gattserverdisconnected` handler only updates a connection badge and
+  /// leaves the run alive.
   ///
-  /// Applies to ALL BLE sessions (normal protocol and Protocol Plus). The BLE
-  /// connector auto-reconnects in the background; if a Protocol Plus switch is
-  /// due while disconnected, the write path reconnects on demand. The run ends
-  /// only on its natural timer completion (or an explicit user stop) — not here.
+  /// Protocol Plus is different: its firmware timing is re-armed by each
+  /// `START_PROTOCOL` config write at a sub-protocol boundary, so the app's
+  /// displayed progress can silently drift ahead of what the disconnected
+  /// device actually did. For a Plus device we therefore FREEZE its countdown
+  /// and progress ring by stopping its [_deviceStopwatches] entry (every
+  /// display/break computation reads off that Stopwatch's `.elapsed`, so
+  /// stopping it freezes both with no extra bookkeeping) and flag it via
+  /// [SessionEngineState.protocolPlusAwaitingReconnectByDevice], which drives
+  /// the global "bring the device back in range" reminder. The run still never
+  /// auto-stops here — only [handleBleReconnect] (or an explicit user stop)
+  /// moves it forward again.
   Future<void> handleBleDisconnect(String deviceId) async {
     if (!_isActive) return;
     if (state.transport != SessionTransport.ble) return;
@@ -2871,6 +2947,24 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return;
     }
 
+    // A Plus device's firmware keeps running its CURRENT sub-protocol
+    // autonomously after the link drops (same as a normal device) — so mid-
+    // protocol we must NOT freeze anything, just like the normal-device path
+    // below. Only record that the device is disconnected; the tick loop
+    // (_syncDisplayedTimerFromStopwatch → _computeBreakState) is what decides
+    // whether that matters, by checking this set once the device's elapsed
+    // time actually reaches the break boundary. See handleBleReconnect and
+    // the awaitingByDevice computation in _syncDisplayedTimerFromStopwatch.
+    if (state.protocolPlusSequenceByDevice.containsKey(deviceId)) {
+      _plusDisconnectedIds.add(deviceId);
+      appLogger.w(
+        'Session: Protocol Plus device=$deviceId disconnected — its current '
+        'protocol keeps running untouched; will freeze only if it reaches a '
+        'break still disconnected (session=$sessionId)',
+      );
+      return;
+    }
+
     // Intentionally do NOT mark the device/session stopped, freeze its timer, or
     // stop the background runtime — the session continues through the disconnect.
     // The live connection state for the UI is tracked separately via
@@ -2879,6 +2973,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       'Session: BLE device=$deviceId disconnected — keeping the session '
       'running (no forced stop; auto-reconnect in progress; session=$sessionId)',
     );
+  }
+
+  /// Clears the disconnected flag [handleBleDisconnect] set for a Plus
+  /// device. If the device was frozen waiting on a break, the next tick's
+  /// [_computeBreakState] pass sees it as connected again and the countdown
+  /// resumes on its own — no direct Stopwatch manipulation needed here.
+  void handleBleReconnect(String deviceId) {
+    if (!_isActive) return;
+    _plusDisconnectedIds.remove(deviceId);
   }
 
   SessionRecord? getSessionRecord({
@@ -2976,6 +3079,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _plusSegmentEndByDevice.clear();
     _plusBreakStartedAt.clear();
     _plusBreakHoldByDevice.clear();
+    _plusDisconnectedIds.clear();
     _lastRsByDevice.clear();
     _clearPlusStopTracking();
     onPlusDeviceStoppedByUser = null;
@@ -3137,6 +3241,35 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final (onBreakByDevice, breakRemainingByDevice) =
         _computeBreakState(updatedStatuses);
     final breakHoldByDevice = _breakHoldSecondsByDevice();
+    // A Plus device is "awaiting reconnect" only once it's ACTUALLY sitting on
+    // a break AND disconnected — not for a mid-protocol drop, which the
+    // firmware rides out on its own. This is what freezes the card's display
+    // and drives the global reconnect nag; see handleBleDisconnect.
+    final awaitingReconnectByDevice = <String, bool>{
+      for (final id in onBreakByDevice.keys)
+        if (onBreakByDevice[id] == true && _plusDisconnectedIds.contains(id))
+          id: true,
+    };
+    _publishAwaitingReconnectIds(awaitingReconnectByDevice.keys.toSet());
+
+    // Mirror the freeze to the BACKEND too — its own countdown is server-side
+    // wall-clock and has no idea this device is disconnected, so without this
+    // it keeps draining (visible to every other client watching the live
+    // feed) even though this app's own display/ring are now frozen. Reuses
+    // the same pause/resume mirror as the manual Pause button
+    // (_mirrorDeviceLifecycleToBackend) but WITHOUT touching local
+    // deviceStatuses — the device must stay "running" locally so the
+    // Plus break/switch reconciliation keeps working exactly as before.
+    final previouslyAwaiting = state.protocolPlusAwaitingReconnectByDevice;
+    for (final id in _plusDeviceIds()) {
+      final wasAwaiting = previouslyAwaiting[id] == true;
+      final isAwaiting = awaitingReconnectByDevice[id] == true;
+      if (isAwaiting && !wasAwaiting) {
+        unawaited(_mirrorDeviceLifecycleToBackend(id, 'pause'));
+      } else if (!isAwaiting && wasAwaiting) {
+        unawaited(_mirrorDeviceLifecycleToBackend(id, 'resume'));
+      }
+    }
 
     try {
       state = state.copyWith(
@@ -3153,6 +3286,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         protocolPlusOnBreakByDevice: onBreakByDevice,
         protocolPlusBreakRemainingByDevice: breakRemainingByDevice,
         protocolPlusBreakHoldByDevice: breakHoldByDevice,
+        protocolPlusAwaitingReconnectByDevice: awaitingReconnectByDevice,
       );
     } catch (e) {
       appLogger.d('Session: tick state update ignored (notifier disposed)');
@@ -3339,6 +3473,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _telemetrySub = null;
     _clearPlusStopTracking();
     _stopwatch.stop();
+    _publishAwaitingReconnectIds(const {});
     super.dispose();
   }
 }

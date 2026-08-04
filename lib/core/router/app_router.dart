@@ -54,6 +54,10 @@ import '../../features/auth/presentation/screens/select_organization_page.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Exposed so app-wide features (e.g. the Protocol Plus reconnect watchdog)
+/// can show a dialog from outside whichever screen currently owns focus.
+GlobalKey<NavigatorState> get rootNavigatorKey => _rootNavigatorKey;
+
 /// Bridges auth changes into something GoRouter can refresh on.
 ///
 /// The router must NOT be rebuilt when auth state changes. `HydrawavApp`

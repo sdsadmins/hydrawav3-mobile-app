@@ -175,6 +175,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// so without this the display reaches 00:00 while the unit still has
   /// protocols left to run. Cleared when the switch lands.
   final Map<String, Duration> _breakHeldRemainingByDevice = {};
+  // Companion latch for the WHOLE-run total shown next to "elapsed" and fed
+  // into the ring's arc-growth. `effectiveBreakHoldSeconds` (the break-hold
+  // compensation) is added to both the backend total AND the backend
+  // remaining, and keeps growing every second a Plus device sits on a break
+  // disconnected — so without also freezing the total, `elapsed = total -
+  // remaining` (and the ring's matching `elapsedSeconds`) kept climbing even
+  // though the countdown itself looked frozen.
+  final Map<String, Duration> _breakHeldTotalByDevice = {};
 
   /// Remaining time frozen at the moment a device was paused, keyed by device
   /// id. Cleared on resume/stop. See the pause branch in
@@ -386,9 +394,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           final previousStatus = previousStates[deviceId];
           final currentStatus = nextStates[deviceId];
 
-          // Back in range â†’ drop the pending warning and close one already up.
+          // Back in range â†’ resume a frozen Plus device and drop the pending
+          // warning / close one already up.
           if (currentStatus == BleConnectionStatus.connected &&
               previousStatus != BleConnectionStatus.connected) {
+            ref
+                .read(sessionEngineFamilyProvider(_engineKey).notifier)
+                .handleBleReconnect(deviceId);
             _cancelOutOfRangeWarning(deviceId);
             continue;
           }
@@ -1593,6 +1605,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// still gone: dismissing the dialog used to be the end of it, which left the
   /// user with a running countdown and no indication anything was wrong.
   void _armOutOfRangeWarning(String deviceId) {
+    // Protocol Plus devices are frozen (timer + ring) on disconnect instead of
+    // "kept running" (see SessionEngine.handleBleDisconnect), and get their own
+    // global, faster-repeating reminder from PlusReconnectWatchdog. This dialog
+    // says "your session keeps running", which is only true for normal devices.
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey));
+    if (engine.protocolPlusSequenceByDevice.containsKey(deviceId)) return;
     _outOfRangeTimers[deviceId]?.cancel();
     _outOfRangeTimers[deviceId] = Timer(_kOutOfRangeGrace, () {
       unawaited(_showOutOfRangeWarning(deviceId));
@@ -3300,6 +3318,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ? true
         : ref.watch(bleDeviceStatusProvider(id)) ==
             BleConnectionStatus.connected;
+    // Freeze/tint ONLY applies once this Plus device is ACTUALLY on a break
+    // and disconnected — a mid-protocol drop must NOT freeze anything, since
+    // the firmware keeps running its current sub-protocol on its own
+    // regardless of the app's BLE link (mirrors
+    // SessionEngine.protocolPlusAwaitingReconnectByDevice, which the same way
+    // only flips true once a device is on break AND disconnected).
+    final plusDisconnectedNotTerminal =
+        plusOnBreak && !deviceTerminal && !bleConnected;
+    // Drives only the VISUAL treatment (ring/label color + segment highlight);
+    // identical to plusOnBreak in practice now, kept as a separate name so the
+    // freeze-specific call sites below read clearly.
+    final visualOnBreak = plusDisconnectedNotTerminal || plusOnBreak;
     final effectiveBreakHoldSeconds =
         plusOnBreak && !deviceTerminal && !bleConnected
             ? plusBreakHoldSeconds
@@ -3308,12 +3338,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ? Duration(seconds: backendRemainingSeconds + effectiveBreakHoldSeconds)
         : timer.remaining;
 
-    // Only freeze the visible countdown when a BLE device is ACTUALLY offline
-    // during a Plus break. When the unit stays connected, the backend timer +
-    // break-hold compensation should continue to render live without latching.
-    if (plusOnBreak && !deviceTerminal && !bleConnected) {
+    // Freeze the visible countdown only for a break-time disconnect. When the
+    // unit stays connected, or it's mid-protocol, the backend timer + break-
+    // hold compensation continue to render live without latching. Captures
+    // ONCE at the moment the freeze starts and holds that exact value — not a
+    // high-water mark — so it stays perfectly in lockstep with the matching
+    // `displayTotal` freeze below (both must move together, or "elapsed" =
+    // total - remaining drifts).
+    if (plusDisconnectedNotTerminal) {
       final held = _breakHeldRemainingByDevice[id];
-      if (held == null || held < displayRemaining) {
+      if (held == null) {
         _breakHeldRemainingByDevice[id] = displayRemaining;
       } else {
         displayRemaining = held;
@@ -3384,13 +3418,28 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // "Unsupported operation: Infinity or NaN toInt" out of `round()`, mid-build
     // of the device card. [TimerState] already carries `totalDuration`, which is
     // exactly what that expression was trying to reconstruct.
-    final displayTotal = (useBackendTimer &&
+    var displayTotal = (useBackendTimer &&
             backendTotalSeconds != null &&
             backendTotalSeconds > 0)
         ? Duration(seconds: backendTotalSeconds + effectiveBreakHoldSeconds)
         : (timer.totalDuration > Duration.zero
             ? timer.totalDuration
             : timer.remaining);
+
+    // Freeze the total in lockstep with `displayRemaining` above — otherwise
+    // the ever-growing break-hold compensation keeps inflating this value
+    // while disconnected, and "elapsed" (= total - remaining) and the ring's
+    // arc both keep climbing even though the countdown itself is frozen.
+    if (plusDisconnectedNotTerminal) {
+      final held = _breakHeldTotalByDevice[id];
+      if (held == null) {
+        _breakHeldTotalByDevice[id] = displayTotal;
+      } else {
+        displayTotal = held;
+      }
+    } else {
+      _breakHeldTotalByDevice.remove(id);
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -3452,7 +3501,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 plusName: plusName,
                 plusSequence: plusSequence,
                 plusIndex: plusIndex,
-                plusOnBreak: plusOnBreak,
+                plusOnBreak: visualOnBreak,
                 paused: status == SessionStatus.paused,
               ),
             ],
@@ -3492,7 +3541,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   activeIndex: _plusRingActiveIndex(
                     sequenceLength: plusSequence.length,
                     plusIndex: plusIndex,
-                    onBreak: plusOnBreak,
+                    onBreak: visualOnBreak,
                   ),
                 ),
                 child: Center(
@@ -3500,9 +3549,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // `.lc-time` — 50px/900, tabular, tight tracking. Paused
-                      // drops it to opacity .45 (app.js:1336).
+                      // drops it to opacity .45 (app.js:1336); a disconnected
+                      // Plus device gets the same fade while it's frozen.
                       Opacity(
-                        opacity: status == SessionStatus.paused
+                        opacity: status == SessionStatus.paused ||
+                                plusDisconnectedNotTerminal
                             ? _TimerRing._pausedFade
                             : 1,
                         child: Text(
@@ -3540,7 +3591,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             _lcActiveName(
               plusSequence: plusSequence,
               plusIndex: plusIndex,
-              plusOnBreak: plusOnBreak,
+              plusOnBreak: visualOnBreak,
               protocolName: protocolName,
               gc: gc,
             ),
@@ -3551,7 +3602,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 plusDurations: plusDurations,
                 breakSeconds: plusDelaySeconds,
                 plusIndex: plusIndex,
-                plusOnBreak: plusOnBreak,
+                plusOnBreak: visualOnBreak,
                 gc: gc,
               ),
               const SizedBox(height: 8),
@@ -3679,11 +3730,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ref.watch(bleDeviceStatusProvider(deviceId)) !=
             BleConnectionStatus.connected;
 
-    // Stop stays available to a device whose link is down: during a Plus break
-    // the firmware is idle and BLE is EXPECTED to be down, and even mid-protocol
-    // the stop is still worth issuing â€” it ends the device locally and releases
-    // it on the backend, which is what frees it for the next session.
-    final blockStop = disconnected && isProtocolPlusDevice && !plusOnBreak;
+    // Stop, Pause and Resume are all disabled together while the link is
+    // down â€” same gate as blockPauseResume below. (stopDevice() itself still
+    // has a disconnected-safe fallback that ends the run locally and frees
+    // the device on the backend even without BLE, so this is a UI choice, not
+    // a functional requirement.)
+    final blockStop = disconnected;
 
     // Pause/resume DO need a live link (they are a BLE write to the unit), so
     // they stay gated on the connection.
