@@ -83,24 +83,24 @@ class AiHubScreen extends ConsumerWidget {
               // 3 — start a guided assessment. This used to land on the Session
               // tab because the wizard was only reachable inline from session
               // setup; it's now its own screen, so the card goes straight there.
-              HwCard(
-                onTap: () => context.push(RoutePaths.guidedAssessment),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    HwCardHeader(
-                      'Generate a report',
-                      trailing: HwPill('~2 min'),
-                    ),
-                    SizedBox(height: 4),
-                    _Body(
-                      'Complete Area of Focus, Range of Motion, Daily '
-                      'Activities, Sleep posture and Hardest position to '
-                      'generate a report.',
-                    ),
-                  ],
-                ),
-              ),
+              // HwCard(
+              //   onTap: () => context.push(RoutePaths.guidedAssessment),
+              //   child: const Column(
+              //     crossAxisAlignment: CrossAxisAlignment.stretch,
+              //     children: [
+              //       HwCardHeader(
+              //         'Generate a report',
+              //         trailing: HwPill('~2 min'),
+              //       ),
+              //       SizedBox(height: 4),
+              //       _Body(
+              //         'Complete Area of Focus, Range of Motion, Daily '
+              //         'Activities, Sleep posture and Hardest position to '
+              //         'generate a report.',
+              //       ),
+              //     ],
+              //   ),
+              // ),
             ],
           ),
         ),
@@ -206,8 +206,7 @@ class _HeroCard extends StatelessWidget {
                             horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
                           color: const Color.fromRGBO(255, 255, 255, .15),
-                          borderRadius:
-                              BorderRadius.circular(HwRadius.pill),
+                          borderRadius: BorderRadius.circular(HwRadius.pill),
                         ),
                         child: Text(
                           pill,

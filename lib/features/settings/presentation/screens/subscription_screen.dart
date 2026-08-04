@@ -10,7 +10,12 @@ class SubscriptionScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: ThemeConstants.background,
-      appBar: AppBar(title: Text('Subscription')),
+      appBar: AppBar(
+        title: const Text('Subscription'),
+        foregroundColor: ThemeConstants.textPrimary,
+        backgroundColor: ThemeConstants.background,
+        elevation: 0,
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -18,23 +23,34 @@ class SubscriptionScreen extends ConsumerWidget {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-                color: ThemeConstants.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: ThemeConstants.border)),
+              color: ThemeConstants.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: ThemeConstants.border),
+            ),
             child: Column(
               children: [
-                Icon(Icons.workspace_premium_rounded,
-                    size: 40, color: ThemeConstants.textTertiary),
+                Icon(
+                  Icons.workspace_premium_rounded,
+                  size: 40,
+                  color: ThemeConstants.textTertiary,
+                ),
                 const SizedBox(height: 12),
-                Text('Free Plan',
-                    style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white)),
+                Text(
+                  'Free Plan',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: ThemeConstants.textPrimary,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text('Upgrade to unlock advanced features',
-                    style: TextStyle(
-                        fontSize: 14, color: ThemeConstants.textSecondary)),
+                Text(
+                  'Upgrade to unlock advanced features',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: ThemeConstants.textSecondary,
+                  ),
+                ),
               ],
             ),
           ),
@@ -44,22 +60,31 @@ class SubscriptionScreen extends ConsumerWidget {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-                color: ThemeConstants.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: ThemeConstants.accent, width: 1.5)),
+              color: ThemeConstants.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: ThemeConstants.accent, width: 1.5),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Icon(Icons.star_rounded,
-                      color: ThemeConstants.accent, size: 22),
-                  const SizedBox(width: 8),
-                  Text('Practitioner Plan',
+                Row(
+                  children: [
+                    Icon(
+                      Icons.star_rounded,
+                      color: ThemeConstants.accent,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Practitioner Plan',
                       style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white)),
-                ]),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: ThemeConstants.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 ...[
                   'Advanced temperature & vibration controls',
@@ -67,23 +92,37 @@ class SubscriptionScreen extends ConsumerWidget {
                   'Session goals & recommendations',
                   'AI chatbot assistant',
                   'Default memory system',
-                ].map((f) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(children: [
-                        Icon(Icons.check_circle_rounded,
-                            size: 18, color: ThemeConstants.success),
+                ].map(
+                  (feature) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle_rounded,
+                          size: 18,
+                          color: ThemeConstants.success,
+                        ),
                         const SizedBox(width: 10),
-                        Text(f,
-                            style:
-                                TextStyle(color: Colors.white, fontSize: 14)),
-                      ]),
-                    )),
+                        Text(
+                          feature,
+                          style: TextStyle(
+                            color: ThemeConstants.textPrimary,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 SizedBox(
-                    height: 48,
-                    width: double.infinity,
-                    child: ElevatedButton(
-                        onPressed: () {}, child: Text('Upgrade Now'))),
+                  height: 48,
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {},
+                    child: const Text('Upgrade Now'),
+                  ),
+                ),
               ],
             ),
           ),
