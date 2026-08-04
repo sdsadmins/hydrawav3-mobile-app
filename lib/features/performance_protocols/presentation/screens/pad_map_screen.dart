@@ -59,6 +59,9 @@ class PadMapScreen extends ConsumerStatefulWidget {
 }
 
 class _PadMapScreenState extends ConsumerState<PadMapScreen> {
+  static const _sunLegend = Color(0xFFE11D48);
+  static const _moonLegend = Color(0xFF2563EB);
+
   // Both controllers exist because `kUseAnatomyScenePerformance` decides which
   // stage is built; the zoom cluster dispatches to whichever is live.
   final _anatomy = AnatomySceneController();
@@ -539,6 +542,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           // naming that view — both stop being true the moment you rotate.
           Positioned(
             top: HwSpace.s3,
+            left: HwSpace.s3,
+            child: _sunMoonLegend(p),
+          ),
+          Positioned(
+            top: HwSpace.s3,
             right: HwSpace.s3,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -584,6 +592,59 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _sunMoonLegend(RefPalette p) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(HwRadius.md),
+        border: Border.all(color: p.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _legendToken(_sunLegend, '☀', 'Sun'),
+          const SizedBox(width: 12),
+          _legendToken(_moonLegend, '☾', 'Moon'),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendToken(Color color, String symbol, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            symbol,
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+        ),
+      ],
     );
   }
 

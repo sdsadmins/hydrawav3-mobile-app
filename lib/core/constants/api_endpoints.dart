@@ -24,7 +24,7 @@ class ApiEndpoints {
   //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
   static const String nodeBaseUrl =
-      'https://selective-printers-lindsay-sas.trycloudflare.com/hydrawav/v1/';
+      'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth

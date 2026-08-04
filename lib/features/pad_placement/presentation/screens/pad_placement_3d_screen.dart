@@ -110,7 +110,8 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
             children: [
               Positioned.fill(child: _stage()),
               Positioned(top: 10, right: 10, child: _controls()),
-              Positioned(top: 10, left: 10, child: _viewSwitcher()),
+              Positioned(top: 10, left: 10, child: _sunMoonLegend()),
+              Positioned(top: 10, left: 10 + 160, child: _viewSwitcher()),
             ],
           ),
         ),
@@ -284,6 +285,59 @@ class _PadPlacement3DScreenState extends State<PadPlacement3DScreen> {
                 color: _showLabels ? Colors.white : _muted,
               ),
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _sunMoonLegend() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _legendToken(const Color(0xFFE11D48), '☀', 'Sun'),
+          const SizedBox(width: 12),
+          _legendToken(const Color(0xFF2563EB), '☾', 'Moon'),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendToken(Color color, String symbol, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            symbol,
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            color: color,
           ),
         ),
       ],
