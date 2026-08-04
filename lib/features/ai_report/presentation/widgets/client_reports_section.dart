@@ -151,7 +151,7 @@ class _ClientReportsSectionState extends ConsumerState<ClientReportsSection> {
         .toList();
 
     if (_error != null && _reports.isEmpty && jobs.isEmpty) {
-      return _ErrorState(error: _error!, onRetry: () => _load(reset: true));
+      return const _ComingSoonState();
     }
     if (_reports.isEmpty && jobs.isEmpty && _loading) {
       return const Padding(
@@ -346,10 +346,8 @@ class _ClientReportsSectionState extends ConsumerState<ClientReportsSection> {
   }
 }
 
-class _ErrorState extends StatelessWidget {
-  final Object error;
-  final VoidCallback onRetry;
-  const _ErrorState({required this.error, required this.onRetry});
+class _ComingSoonState extends StatelessWidget {
+  const _ComingSoonState();
 
   @override
   Widget build(BuildContext context) {
@@ -360,8 +358,11 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const HwComingSoonBanner(),
+            const SizedBox(height: 6),
             Text(
-              'Failed to load reports',
+              'AI reports are coming soon.',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: HwType.base,
                 fontWeight: FontWeight.w800,
@@ -369,25 +370,10 @@ class _ErrorState extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                '$error',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
-              ),
-            ),
-            const SizedBox(height: 12),
-            HwPress(
-              onTap: onRetry,
-              child: Text(
-                'Retry',
-                style: TextStyle(
-                  fontSize: HwType.sm,
-                  fontWeight: FontWeight.w700,
-                  color: p.copperInk,
-                ),
-              ),
+            Text(
+              'You’ll see reports here once the feature is enabled.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
             ),
           ],
         ),

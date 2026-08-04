@@ -58,7 +58,7 @@ class AiHubScreen extends ConsumerWidget {
               // `/ai-reports` with no client would flatten every org report
               // into one anonymous list.
               HwCard(
-                onTap: () => context.push(RoutePaths.aiReportClients),
+                onTap: null,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -68,6 +68,8 @@ class AiHubScreen extends ConsumerWidget {
                           ? null
                           : HwPill('$left left', tone: HwPillTone.copper),
                     ),
+                    const SizedBox(height: 8),
+                    const HwComingSoonBanner(),
                     const SizedBox(height: 4),
                     Text(
                       'Kinetic-chain reports with placements & at-home plans.',

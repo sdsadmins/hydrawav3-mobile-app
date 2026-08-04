@@ -662,31 +662,33 @@ class _CompactModule extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     final meta = _kModuleMeta[module]!;
+    final comingSoon = module == HubModule.mobility;
 
     return HwCard(
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 2),
-      onTap: () => _open(context, ref),
+      onTap: comingSoon ? null : () => _open(context, ref),
       child: HwRow(
         leading: HwIcon(meta.icon, size: 19, color: p.copperInk),
         title: meta.label,
         subtitle: meta.sub,
-        trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+        trailing: comingSoon
+            ? const HwComingSoonBanner(compact: true)
+            : HwIcon(HwIcons.chev, size: 18, color: p.ink3),
       ),
     );
   }
 
   void _open(BuildContext context, WidgetRef ref) {
-    switch (module) {
-      case HubModule.gameday:
-        context.go(RoutePaths.users);
-      case HubModule.lastsession:
-        context.go(RoutePaths.history);
-      case HubModule.mobility:
-        context.push(RoutePaths.aiReportClients);
-      case HubModule.labs:
-        showBreathHowSheet(context);
-      default:
-        break;
+    if (module == HubModule.gameday) {
+      context.go(RoutePaths.users);
+      return;
+    }
+    if (module == HubModule.lastsession) {
+      context.go(RoutePaths.history);
+      return;
+    }
+    if (module == HubModule.labs) {
+      showBreathHowSheet(context);
     }
   }
 }

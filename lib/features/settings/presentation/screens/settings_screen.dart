@@ -354,8 +354,7 @@ class _AccountCard extends ConsumerWidget {
                     '${user!.email} · one login',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                    style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                   ),
                 ],
               ],
@@ -520,8 +519,7 @@ class _OrgCard extends ConsumerWidget {
                     org['description'].toString(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                    style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                   ),
                 ],
               ],
@@ -870,8 +868,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
                           subtitle:
                               '~${(proto.apiTotalDurationSeconds / 60).round()} min',
                           trailing: proto.id == selected
-                              ? const HwPill('Default',
-                                  tone: HwPillTone.copper)
+                              ? const HwPill('Default', tone: HwPillTone.copper)
                               : null,
                           onTap: () {
                             ref2
@@ -990,14 +987,13 @@ class _SupportSection extends ConsumerWidget {
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
           ),
-          _MoreRow(
-            icon: HwIcons.note,
-            title: 'Share diagnostic logs',
-            subtitle: 'Send the current session trace',
-            onTap: () {
-              _shareDiagnosticLogs(context);
-            },
-          ),
+          // _MoreRow(
+          //   icon: HwIcons.note,
+          //   title: 'Share diagnostic logs',
+          //   subtitle: 'Coming soon',
+          //   trailing: const HwComingSoonBanner(compact: true),
+          //   onTap: null,
+          // ),
         ]),
       ],
     );
@@ -1100,8 +1096,8 @@ class _BrandFooter extends StatelessWidget {
             'support readiness, recovery, and mobility; they do not treat, '
             'cure, or diagnose.',
             textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+            style:
+                TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
           ),
           const SizedBox(height: HwSpace.s3),
           Text(
@@ -1332,4 +1328,3 @@ class _SheetMessage extends StatelessWidget {
     );
   }
 }
-
