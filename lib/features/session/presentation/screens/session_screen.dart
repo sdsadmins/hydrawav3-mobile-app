@@ -189,6 +189,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// [_buildDeviceSessionCard].
   final Map<String, Duration> _pausedRemainingByDevice = {};
 
+  /// Seconds left in the break a device was sitting on when it was paused, kept
+  /// for the whole pause so the ring's break arc stops exactly where the pause
+  /// caught it. Recorded every frame while the device is on break and running;
+  /// dropped once the next protocol lands. See the pause branch in
+  /// `buildDeviceCard`.
+  final Map<String, int> _pausedBreakRemainingByDevice = {};
+
+  /// The TOTAL frozen alongside [_pausedRemainingByDevice], for the same reason
+  /// [_breakHeldTotalByDevice] exists: the ring's arc and the "elapsed" figure
+  /// are both derived as `total - remaining`, so freezing only the remaining
+  /// leaves the arc growing every second of a pause even though the digits sit
+  /// still. Both have to be latched together or they drift apart.
+  final Map<String, Duration> _pausedTotalByDevice = {};
+
   /// One out-of-range dialog at a time, and the device it is about (so it can be
   /// dismissed when that device reconnects).
   String? _outOfRangeDialogDeviceId;
@@ -1914,6 +1928,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       var plusOnBreak = engine.protocolPlusOnBreakByDevice[id] ?? false;
       var plusBreakRemaining =
           engine.protocolPlusBreakRemainingByDevice[id] ?? 0;
+
+      // A PAUSE HOLDS THE BREAK WHERE IT STANDS — no more colour goes onto the
+      // ring's break arc until the run resumes. The engine reports a break only
+      // for a RUNNING device, so the moment we pause it stops reporting one:
+      // without this the arc would drop off the break connector and start
+      // filling the protocol segment instead, which reads as progress while
+      // nothing is running. So the last live break is remembered each frame and
+      // replayed, unchanged, for the whole pause.
+      if (deviceStatus == SessionStatus.paused) {
+        final heldBreak = _pausedBreakRemainingByDevice[id];
+        if (heldBreak != null) {
+          plusOnBreak = true;
+          plusBreakRemaining = heldBreak;
+        }
+      } else if (plusOnBreak) {
+        _pausedBreakRemainingByDevice[id] = plusBreakRemaining;
+      } else {
+        _pausedBreakRemainingByDevice.remove(id);
+      }
       if (deviceSequence.isEmpty) {
         final ppSession = _findBackendPlusSession(liveSessions, id);
         if (ppSession != null) {
@@ -3439,6 +3472,27 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     } else {
       _breakHeldTotalByDevice.remove(id);
+    }
+
+    // Same latch for a PAUSE, in lockstep with `_pausedRemainingByDevice` above.
+    // Without it the ring kept filling for the whole pause: the countdown digits
+    // were frozen but the total was not, so `elapsed = total - remaining` (and
+    // the arc drawn from it) climbed a second per second while nothing was
+    // running. Under server-side pause a break can be held indefinitely, so this
+    // was unbounded.
+    if (status == SessionStatus.paused) {
+      final held = _pausedTotalByDevice[id];
+      if (held == null) {
+        _pausedTotalByDevice[id] = displayTotal;
+      } else if (held > displayTotal) {
+        // The feed caught up and reports a SMALLER total than we latched — trust
+        // it, exactly as the remaining latch does in the mirror-image case.
+        _pausedTotalByDevice[id] = displayTotal;
+      } else {
+        displayTotal = held;
+      }
+    } else {
+      _pausedTotalByDevice.remove(id);
     }
 
     return Container(

@@ -232,6 +232,20 @@ class ProtocolPlusController {
     }
   }
 
+  /// One-line read of the pause/resume switch list, e.g. `— held #1 in 84s, #2 in
+  /// 420s`. This is the part worth seeing at a glance in the log: it says the
+  /// sequence really did stop, and with how much left on each remaining switch.
+  String _switchSummary(dynamic data, String key, String verb) {
+    if (data is! Map) return '';
+    final list = data[key];
+    if (list is! List || list.isEmpty) return '— no switches $verb';
+    final parts = list
+        .whereType<Map>()
+        .map((s) => '#${s['protocolIndex']} in ${s['remainingSeconds']}s')
+        .join(', ');
+    return '— $verb ${list.length}: $parts';
+  }
+
   /// GET /protocol-plus — list all Protocol Plus templates.
   Future<List<ProtocolPlus>> getProtocolPlusList() async {
     final dio = _ref.read(nodeDioProvider);
@@ -374,8 +388,13 @@ class ProtocolPlusController {
     );
   }
 
-  /// POST /sessions/:sessionId/pause/:organizationId for every bound device —
-  /// pause the server-side Protocol Plus session(s) so they stay in sync.
+  /// POST /protocol-plus/:sessionId/pause/:organizationId for every bound device.
+  ///
+  /// The Protocol Plus route, not the plain session one: besides stopping the
+  /// device timers it HOLDS the server's queued protocol switches. Those switches
+  /// are delayed jobs that otherwise keep counting down while the run is paused,
+  /// so a long pause would fire the rest of the sequence back to back on resume.
+  /// The response reports what is being held (`protocolPlusHeldSwitches`).
   Future<void> pauseServerSession() async {
     if (_bindings.isEmpty) return;
     final ctx = await _sessionRequestContext();
@@ -384,12 +403,15 @@ class ProtocolPlusController {
     for (final b in _bindings) {
       try {
         final res = await dio.post(
-          ApiEndpoints.sessionPause(b.serverSessionId, ctx.orgId),
+          ApiEndpoints.protocolPlusPause(b.serverSessionId, ctx.orgId),
           data: b.identityBody,
           options: ctx.options,
         );
-        appLogger
-            .i('ProtocolPlus: ⇐ POST pause payload:\n${_pretty(res.data)}');
+        appLogger.i(
+          'ProtocolPlus: ⇐ POST pause '
+          '${_switchSummary(res.data, 'protocolPlusHeldSwitches', 'held')}'
+          '\n${_pretty(res.data)}',
+        );
       } on DioException catch (e) {
         appLogger.e(
           'ProtocolPlus: pause failed (status=${e.response?.statusCode}) '
@@ -401,7 +423,9 @@ class ProtocolPlusController {
     }
   }
 
-  /// POST /sessions/:sessionId/resume/:organizationId for every bound device.
+  /// POST /protocol-plus/:sessionId/resume/:organizationId for every bound
+  /// device. Each held switch goes back on the queue with the wait it had left
+  /// when the pause landed, so the sequence continues from where it stopped.
   Future<void> resumeServerSession() async {
     if (_bindings.isEmpty) return;
     final ctx = await _sessionRequestContext();
@@ -410,12 +434,15 @@ class ProtocolPlusController {
     for (final b in _bindings) {
       try {
         final res = await dio.post(
-          ApiEndpoints.sessionResume(b.serverSessionId, ctx.orgId),
+          ApiEndpoints.protocolPlusResume(b.serverSessionId, ctx.orgId),
           data: b.identityBody,
           options: ctx.options,
         );
-        appLogger
-            .i('ProtocolPlus: ⇐ POST resume payload:\n${_pretty(res.data)}');
+        appLogger.i(
+          'ProtocolPlus: ⇐ POST resume '
+          '${_switchSummary(res.data, 'protocolPlusResumedSwitches', 're-queued')}'
+          '\n${_pretty(res.data)}',
+        );
       } on DioException catch (e) {
         appLogger.e(
           'ProtocolPlus: resume failed (status=${e.response?.statusCode}) '
@@ -1254,6 +1281,27 @@ class ProtocolPlusController {
   /// first applies it; the other sees null and skips.
   void _applyPendingSwitch(SessionEngine engine, String mac,
       {required String reason}) {
+    if (!_pendingSwitches.containsKey(mac)) return;
+
+    // THE BREAK IS PART OF THE PROTOCOL, not dead air to be skipped. A unit that
+    // comes back in range partway through its break must serve the rest of that
+    // break and only then take the next protocol — pushing the switch the instant
+    // the link returns cuts the gap short and starts the next sub-protocol early.
+    // Nothing is scheduled here: the switch stays held and the 4s reconciler
+    // applies it as soon as the break is spent, so a second outage in the
+    // meantime is handled by the same path.
+    final breakLeft = engine.remainingPlusBreak(mac);
+    if (breakLeft > Duration.zero) {
+      // Keep the engine's "switch outstanding" flag set: it is what stops the
+      // device's idle `rs:stop` from being read as the user stopping the unit.
+      engine.setPlusSwitchPending(mac, true);
+      appLogger.i(
+        'ProtocolPlus: $mac back in range mid-break — serving the remaining '
+        '${breakLeft.inSeconds}s of break before the next protocol (via=$reason)',
+      );
+      return;
+    }
+
     final pending = _pendingSwitches.remove(mac);
     if (pending == null) return;
     appLogger.i(

@@ -24,7 +24,7 @@ class ApiEndpoints {
   //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
   static const String nodeBaseUrl =
-      'https://api.hydrawav3.studio/api/hydrawav/v1/';
+      'https://selective-printers-lindsay-sas.trycloudflare.com/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -334,6 +334,19 @@ class ApiEndpoints {
   /// Starts a Protocol Plus sequence (server starts protocol[0] + schedules
   /// the remaining protocol switches, emitted over the `/sessions` socket).
   static const String protocolPlusStart = 'protocol-plus/start';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/pause/:organizationId`
+  /// Pauses the run AND holds the server's queued protocol switches. Without the
+  /// hold those switches keep counting down through the pause and fire together
+  /// on resume. Body optionally targets one device (`macAddress` / `deviceName`
+  /// / `slotId`); an empty body pauses the whole session.
+  static String protocolPlusPause(String sessionId, String organizationId) =>
+      'protocol-plus/$sessionId/pause/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/resume/:organizationId`
+  /// Resumes the run; every held switch is re-queued with the wait it had left.
+  static String protocolPlusResume(String sessionId, String organizationId) =>
+      'protocol-plus/$sessionId/resume/$organizationId';
 
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';

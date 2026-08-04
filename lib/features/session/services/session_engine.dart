@@ -711,15 +711,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// seconds "early" by our clock must not be mistaken for a user stop.
   static const Duration _plusBreakPreGrace = Duration(seconds: 15);
 
-  /// How far AFTER the nominal break end a stop still reads as the break. A
-  /// healthy but late switch costs up to 12s waiting for reconnect
-  /// (applyProtocolPlusSwitch) + ~4s for STOP→config→PLAY + a retry ≈ 22s; 30s
-  /// leaves headroom for server-side jitter.
-  ///
-  /// Both graces are deliberately generous: a false positive tears down a live
-  /// treatment mid-break, while a false negative only DELAYS detection (the
-  /// window always expires and the pending flags always clear).
-  static const Duration _plusBreakPostGrace = Duration(seconds: 30);
+  // There is deliberately NO post-break grace any more. It used to be 30s, after
+  // which an idle device was called a user stop — see [_isInsidePlusBreakWindow]
+  // for why a late switch is not evidence of anything.
 
   Future<void> _stateUpdateQueue = Future.value();
 
@@ -1038,43 +1032,43 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     // TEMP-DISABLED (rs status handler for non-Plus firmware devices) — commented
     // out at request, pending investigation. Restore by uncommenting.
-    // switch (normalized) {
-    //   case 'pause':
-    //     if (current == SessionStatus.running) {
-    //       appLogger.i(
-    //           'Session: device $deviceId reported rs=pause → pausing that device');
-    //       unawaited(pauseDevice(deviceId));
-    //       // Web parity: mirror the per-device pause to the backend too.
-    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
-    //     }
-    //     break;
-    //   case 'play':
-    //     if (current == SessionStatus.paused) {
-    //       appLogger.i(
-    //           'Session: device $deviceId reported rs=play → resuming that device');
-    //       unawaited(resumeDevice(deviceId));
-    //       // Web parity: mirror the per-device resume to the backend too.
-    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
-    //     }
-    //     break;
-    //   case 'stop':
-    //     if (current != SessionStatus.stopped &&
-    //         current != SessionStatus.completed) {
-    //       appLogger.i(
-    //           'Session: device $deviceId reported rs=stop → stopping that device');
-    //       // Use the force-stop path (NOT stopDevice): the firmware stops and
-    //       // then drops the BLE link, so by the time this runs the device may
-    //       // already be disconnected — and stopDevice deliberately skips a
-    //       // disconnected device. force-stop registers it regardless and
-    //       // suppresses the auto-reconnect so it doesn't come back.
-    //       _forceDeviceStopped(deviceId);
-    //       // Web parity: also drive the BACKEND stop for just this device
-    //       // (stopAll:false) so the server ends/deducts it and every other
-    //       // client's live feed reconciles — not only our local state.
-    //       unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
-    //     }
-    //     break;
-    // }
+    switch (normalized) {
+      case 'pause':
+        if (current == SessionStatus.running) {
+          appLogger.i(
+              'Session: device $deviceId reported rs=pause → pausing that device');
+          unawaited(pauseDevice(deviceId));
+          // Web parity: mirror the per-device pause to the backend too.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'pause'));
+        }
+        break;
+      case 'play':
+        if (current == SessionStatus.paused) {
+          appLogger.i(
+              'Session: device $deviceId reported rs=play → resuming that device');
+          unawaited(resumeDevice(deviceId));
+          // Web parity: mirror the per-device resume to the backend too.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
+        }
+        break;
+      case 'stop':
+        if (current != SessionStatus.stopped &&
+            current != SessionStatus.completed) {
+          appLogger.i(
+              'Session: device $deviceId reported rs=stop → stopping that device');
+          // Use the force-stop path (NOT stopDevice): the firmware stops and
+          // then drops the BLE link, so by the time this runs the device may
+          // already be disconnected — and stopDevice deliberately skips a
+          // disconnected device. force-stop registers it regardless and
+          // suppresses the auto-reconnect so it doesn't come back.
+          _forceDeviceStopped(deviceId);
+          // Web parity: also drive the BACKEND stop for just this device
+          // (stopAll:false) so the server ends/deducts it and every other
+          // client's live feed reconciles — not only our local state.
+          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
+        }
+        break;
+    }
   }
 
   /// Single source of truth for "is this device running a Plus sequence".
@@ -1119,9 +1113,37 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // falls back to the much longer unknown-segment confirmation window.
     if (segEnd == null) return false;
     final elapsed = _deviceElapsed(id);
+    // NO UPPER BOUND. Once a device is past its segment end with protocols still
+    // to come, it is idle waiting for the next START_PROTOCOL — and there is no
+    // deadline by which that has to arrive. The server holds queued switches for
+    // the whole of a pause, and a BLE outage holds them until the unit is back,
+    // so "the break has run 30s past its nominal end" says nothing about whether
+    // the user stopped the unit. The window used to close there, which tore down
+    // live treatments that were simply waiting for their next protocol.
+    //
+    // What is lost: a STOP pressed on the hardware DURING a break is no longer
+    // detected while the break lasts. It surfaces when the switch finally lands
+    // and the device refuses it. That is the right trade — a false positive kills
+    // a running treatment, a false negative only delays the teardown.
+    return elapsed >= segEnd - _plusBreakPreGrace;
+  }
+
+  /// What is LEFT of [id]'s current break — the gap the server puts between two
+  /// sub-protocols. Zero when the device is mid-protocol, on the final protocol,
+  /// or the break has already elapsed.
+  ///
+  /// [ProtocolPlusController] uses this on reconnect: a switch held through a BLE
+  /// outage must not be pushed the instant the unit comes back if the break it
+  /// belongs to is still running — the break is part of the protocol, so the
+  /// device serves the rest of it and only then takes the next protocol.
+  Duration remainingPlusBreak(String id) {
+    if (_isPlusDeviceOnFinalProtocol(id)) return Duration.zero;
+    final segEnd = _plusSegmentEndByDevice[id];
+    if (segEnd == null) return Duration.zero;
     final delay = Duration(seconds: state.protocolPlusDelayByDevice[id] ?? 0);
-    return elapsed >= segEnd - _plusBreakPreGrace &&
-        elapsed <= segEnd + delay + _plusBreakPostGrace;
+    if (delay <= Duration.zero) return Duration.zero;
+    final left = (segEnd + delay) - _deviceElapsed(id);
+    return left > Duration.zero ? left : Duration.zero;
   }
 
   /// Turn a long-enough `rs:"stop"` streak into a device-initiated stop.
@@ -1146,6 +1168,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final status = state.deviceStatuses[id];
       if (status != SessionStatus.running && status != SessionStatus.paused) {
         _plusStopSince.remove(id); // already terminal / not started
+        continue;
+      }
+      // A paused run is SUPPOSED to leave the device idle: the app told it to
+      // stop, and the server is holding this device's remaining switches until
+      // resume. Reading that idle as "the user stopped the unit" would end a
+      // treatment the practitioner deliberately paused.
+      if (status == SessionStatus.paused ||
+          state.status == SessionStatus.paused) {
         continue;
       }
       // Our own switch sends STOP first and waits ~4s before PLAY, and a held
