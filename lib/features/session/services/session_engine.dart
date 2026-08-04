@@ -1017,6 +1017,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i(
         '🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
 
+    // `estop` is NOT ambiguous the way `stop` is: the firmware only emits it when
+    // the unit's EMERGENCY STOP was hit, never as the idle between two stacked
+    // sub-protocols. So it is acted on immediately for EVERY device — including a
+    // Protocol Plus one, which otherwise returns just below and defers to the
+    // streak/break-window reasoning in [_evaluatePlusDeviceStops].
+    if (normalized == 'estop') {
+      _handleDeviceReportedEstop(deviceId, isPlus: deviceIsPlus);
+      return;
+    }
+
     // Protocol Plus lifecycle is NOT decided here. The firmware PHYSICALLY STOPS
     // between stacked sub-protocols — and our own switch sends STOP first and
     // waits ~4s before PLAY — so a single `rs:stop` frame is ambiguous: it is
@@ -1051,23 +1061,51 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
         }
         break;
-      case 'stop':
-        if (current != SessionStatus.stopped &&
-            current != SessionStatus.completed) {
-          appLogger.i(
-              'Session: device $deviceId reported rs=stop → stopping that device');
-          // Use the force-stop path (NOT stopDevice): the firmware stops and
-          // then drops the BLE link, so by the time this runs the device may
-          // already be disconnected — and stopDevice deliberately skips a
-          // disconnected device. force-stop registers it regardless and
-          // suppresses the auto-reconnect so it doesn't come back.
-          _forceDeviceStopped(deviceId);
-          // Web parity: also drive the BACKEND stop for just this device
-          // (stopAll:false) so the server ends/deducts it and every other
-          // client's live feed reconciles — not only our local state.
-          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
-        }
-        break;
+      // 'estop' is handled above — before the Plus early-return — so it applies
+      // to Plus devices too.
+    }
+  }
+
+  /// A device reported `rs:"estop"` — its EMERGENCY STOP was pressed on the unit.
+  /// Stop THAT device (the rest of a multi-device session keeps running) and end
+  /// its server session so the backend deducts it and every other client's live
+  /// feed reconciles.
+  ///
+  /// Unlike a plain `rs:"stop"`, this needs no confirmation window: an e-stop is
+  /// never the firmware's expected idle between two stacked sub-protocols, so a
+  /// [isPlus] device is torn down on the first frame instead of waiting for
+  /// [_evaluatePlusDeviceStops] to weigh the streak against the break window.
+  void _handleDeviceReportedEstop(String deviceId, {required bool isPlus}) {
+    final current = state.deviceStatuses[deviceId];
+    if (current == null ||
+        current == SessionStatus.stopped ||
+        current == SessionStatus.completed) {
+      return;
+    }
+    appLogger.w('Session: device $deviceId reported rs=estop → stopping that '
+        'device (plus=$isPlus, status=$current)');
+
+    // Any stop streak this device had accumulated is moot now that it is going
+    // terminal — leaving it would have the tick loop re-fire the same stop.
+    _plusStopSince.remove(deviceId);
+
+    // Use the force-stop path (NOT stopDevice): the firmware stops and then
+    // drops the BLE link, so by the time this runs the device may already be
+    // disconnected — and stopDevice deliberately skips a disconnected device.
+    // force-stop registers it regardless and suppresses the auto-reconnect so
+    // it doesn't come back.
+    _forceDeviceStopped(deviceId);
+
+    if (isPlus) {
+      // A Plus device owns its OWN server session. The controller closes it and
+      // drops any switch held for it, behind the double-post guard that keeps
+      // the several stop paths from double-charging the unit — so this must not
+      // also post the stop itself.
+      onPlusDeviceStoppedByUser?.call(deviceId);
+    } else {
+      // Web parity: drive the BACKEND stop for just this device (stopAll:false)
+      // so the server ends/deducts it — not only our local state.
+      unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
     }
   }
 
