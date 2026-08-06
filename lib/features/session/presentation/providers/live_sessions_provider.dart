@@ -178,7 +178,7 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     if (stillHasOwnedSibling) {
       appLogger.i(
         'LiveSessions: owned session $backendSid stopped, but local session '
-        '$localId still has other owned Plus bindings â€” keeping it alive',
+        '$localId still has other owned Plus bindings” keeping it alive',
       );
       return;
     }
@@ -190,7 +190,8 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     try {
       _ref.read(sessionEngineFamilyProvider(localId).notifier).reset();
     } catch (_) {}
-    unawaited(_ref.read(activeSessionsProvider.notifier).removeSession(localId));
+    unawaited(
+        _ref.read(activeSessionsProvider.notifier).removeSession(localId));
     appLogger.i(
       'LiveSessions: owned session $backendSid stopped remotely — freed local '
       'session $localId',
@@ -202,8 +203,8 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     if (orgId == null) return;
     try {
       final dio = _ref.read(nodeDioProvider);
-      final resp =
-          await dio.get<Map<String, dynamic>>(ApiEndpoints.sessionsActive(orgId));
+      final resp = await dio
+          .get<Map<String, dynamic>>(ApiEndpoints.sessionsActive(orgId));
       _consecutiveFetchFailures = 0;
       // Treat a missing/odd payload as "no active sessions" (web parity: the web
       // replaces its list with whatever the fetch returns), NOT as a reason to
@@ -263,7 +264,8 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         SessionsSocket.subscribeOrganization(socket, _orgId);
         appLogger.i('LiveSessions: socket connected, subscribed org-$_orgId');
       });
-      socket.onDisconnect((r) => appLogger.w('LiveSessions: disconnected ($r)'));
+      socket
+          .onDisconnect((r) => appLogger.w('LiveSessions: disconnected ($r)'));
       socket.onConnectError(
           (e) => appLogger.e('LiveSessions: connect error: $e'));
 

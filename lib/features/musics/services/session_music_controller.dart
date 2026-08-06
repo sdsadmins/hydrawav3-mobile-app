@@ -43,8 +43,8 @@ class SessionMusicState {
 }
 
 /// One app-scoped controller that owns the single [AudioPlayer]. Plays a looping
-/// "Atmosphere" track during a live session, gated on the session being running
-/// and the app being foreground (foreground-only by design — see plan).
+/// "Atmosphere" track during a live session and keeps it alive across app
+/// navigation/background while the session is running.
 ///
 /// EVERY audio operation is wrapped so a device/OEM audio quirk can never crash
 /// or stall a session: failures are logged and swallowed, and the session
@@ -65,9 +65,8 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   bool _sessionConfigured = false;
   String? _loadedUrl;
 
-  // Latest gating conditions, so mute/select can re-evaluate immediately.
+  // Latest gating condition, so mute/select can re-evaluate immediately.
   bool _sessionRunning = false;
-  bool _appForeground = true;
 
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<bool>? _playingSub;
@@ -152,14 +151,12 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   /// session screen on every status change and app-lifecycle transition.
   Future<void> applyConditions({
     required bool sessionRunning,
-    required bool appForeground,
   }) async {
     _sessionRunning = sessionRunning;
-    _appForeground = appForeground;
     await _evaluate();
   }
 
-  /// Stop everything and drop the selection — used when the session ends or the
+  /// Stop everything and drop the selection â€” used when the session ends or the
   /// session screen is left (music must never outlive the session).
   Future<void> stopAndReset() async {
     if (_disposed) return;
@@ -172,8 +169,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   bool get _shouldPlay =>
       state.activeTrackId != null &&
       _loadedUrl != null &&
-      _sessionRunning &&
-      _appForeground;
+      _sessionRunning;
 
   Future<void> _evaluate() async {
     if (_disposed) return;
