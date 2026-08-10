@@ -5,6 +5,7 @@ import '../../../core/constants/api_endpoints.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/error/exceptions.dart';
 import '../../../core/utils/extensions.dart';
+import '../../../core/utils/jwt.dart';
 
 /// An authenticated at-home client session (parity with the web `/client`
 /// login). Distinct from the practitioner [UserProfile] session — a client is
@@ -31,13 +32,23 @@ class ClientSession {
   factory ClientSession.fromJson(Map<String, dynamic> json) {
     final client = json['client'];
     final c = client is Map ? Map<String, dynamic>.from(client) : const {};
+    final accessToken =
+        (json['accessToken'] as String? ?? '').withoutBearerPrefix;
+    // The access token carries the authoritative `leaseId` claim for this
+    // login (see the token payload: {id, leaseId, organizationId, role:
+    // "client", ...}). Prefer it over the client record's copy, which is only
+    // present when the login response embeds the lease fields.
+    final tokenLeaseId = jwtStringClaim(accessToken, 'leaseId');
+    final bodyLeaseId = c['leaseId']?.toString().trim();
     return ClientSession(
-      accessToken: (json['accessToken'] as String? ?? '').withoutBearerPrefix,
+      accessToken: accessToken,
       refreshToken: (json['refreshToken'] as String? ?? '').withoutBearerPrefix,
       clientId: (c['_id'] ?? c['id'] ?? '').toString(),
       clientName: (c['clientName'] ?? '').toString(),
-      leaseId: c['leaseId']?.toString(),
-      organizationId: c['organizationId']?.toString(),
+      leaseId: tokenLeaseId ??
+          ((bodyLeaseId == null || bodyLeaseId.isEmpty) ? null : bodyLeaseId),
+      organizationId: c['organizationId']?.toString() ??
+          jwtStringClaim(accessToken, 'organizationId'),
       macAddress: c['macAddress']?.toString(),
     );
   }
