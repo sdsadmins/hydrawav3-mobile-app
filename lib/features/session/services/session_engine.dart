@@ -2500,16 +2500,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// Public wrapper over the firmware payload builder, for at-home client
   /// sessions that run a single device directly over BLE (no backend session,
   /// default advanced settings). Mirrors the web `templateToRS35Payload`.
+  ///
+  /// [leaseKey] is the logged-in client's `leaseId` (from their JWT). It is sent
+  /// as `leaseKey` so the firmware can check the run against the lease it was
+  /// loaded with via `setLeaseID`. Omitted from the payload when absent, so a
+  /// practitioner-side run is byte-identical to before.
   Map<String, dynamic> buildFirmwarePayload(
     Protocol p, {
     required String mac,
+    String? leaseKey,
   }) {
-    return _protocolToRs35Payload(
+    final payload = _protocolToRs35Payload(
       p,
       mac: mac,
       advancedSettings: const AdvancedSettings(),
       applyStartDelay: false,
     );
+    final key = leaseKey?.trim();
+    if (key != null && key.isNotEmpty) {
+      payload['leaseKey'] = key;
+    }
+    return payload;
   }
 
   Map<String, dynamic> _protocolToRs232Json(
