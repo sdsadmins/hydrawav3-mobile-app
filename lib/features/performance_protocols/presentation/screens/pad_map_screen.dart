@@ -79,8 +79,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// null = the spec's "All areas" chip.
   int? _focusSet;
 
-  /// Sets the engine authored but held back this session.
+  /// Sets the engine authored but whose role doesn't apply to this case at all.
   int get _withheldCount => widget.payload.withheldSets.length;
+
+  /// Sets the engine authored WITH pads, sequenced into a later session.
+  int get _deferredCount => widget.payload.deferredSets.length;
   late String _view;
   bool _showLabels = true;
   bool _showMuscles = false;
@@ -106,7 +109,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
 
   /// What the mirror toggle reads. Bilateral overrides it, so say BOTH rather than naming a side that
   /// is not what is on screen.
-  String get _mirrorLabel => _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
+  String get _mirrorLabel =>
+      _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
 
   /// One source of truth for which pads are visible, so the stage, legend and notes cannot disagree.
   int? get _visibleSetIndex => _showAllSets ? null : _focusSet;
@@ -159,7 +163,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// The one case that still needs the empty list is the flat "Muscles" overlay:
   /// the viewer only falls through to `applyFlatHighlight()` when there is no
   /// per-marker selection to express, so a non-empty list would suppress it.
-  List<Map<String, dynamic>> _activeMarkers(List<Map<String, dynamic>> markers) {
+  List<Map<String, dynamic>> _activeMarkers(
+      List<Map<String, dynamic>> markers) {
     if (_visibleSetIndex == null && _highlightMuscles.isNotEmpty) {
       return const [];
     }
@@ -167,7 +172,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   bool _isUnmapped(ResolvedPad pad) =>
-      pad.isUnmapped || _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
+      pad.isUnmapped ||
+      _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
 
   List<String> get _highlightMuscles {
     // Muscle Mode already colours every target muscle by role, from the markers themselves. Handing
@@ -224,6 +230,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   _legend(p, sets),
                   const SizedBox(height: HwSpace.s3),
                   for (final set in _shownSets(sets)) _setNote(p, set),
+                  if (widget.payload.deferredSets.isNotEmpty) ...[
+                    HwEyebrow(
+                        'Sequence into later sessions · '
+                        '${widget.payload.deferredSets.length} set${widget.payload.deferredSets.length == 1 ? '' : 's'}'),
+                    const SizedBox(height: HwSpace.s2),
+                    for (final set in widget.payload.deferredSets)
+                      _deferredNote(p, set),
+                  ],
                   for (final set in widget.payload.withheldSets)
                     _withheldNote(p, set),
                   _sessionGuidance(p),
@@ -301,8 +315,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           '$count placement set${count == 1 ? '' : 's'}'
           // Web parity with "N set(s) of max M": say when the point authors more
           // than this session applies, so the count never reads as the whole
-          // story.
-          '${_withheldCount == 0 ? '' : ' · $_withheldCount more authored'}'
+          // story — and say WHY separately for "later session" (role applies,
+          // just not yet) vs "not applicable" (role doesn't apply to this case).
+          '${_deferredCount == 0 ? '' : ' · $_deferredCount later session'}'
+          '${_withheldCount == 0 ? '' : ' · $_withheldCount not applicable'}'
           '${widget.payload.contextLine.isEmpty ? '' : ' · ${widget.payload.contextLine}'}',
           style: TextStyle(fontSize: HwType.cap, color: p.ink3),
         ),
@@ -350,14 +366,55 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             const SizedBox(width: HwSpace.s2),
             _setChip(p, i, sets[i]),
           ],
-          // Sets the engine authored but held back. They sit here, after the
-          // ones that apply, so "2 sets authored, 1 applied" is visible at the
-          // control where sets are picked rather than only in the guidance copy.
+          // Sets authored WITH pads but sequenced into a later session — the
+          // role applies, it just isn't applied yet. Sits before the
+          // not-applicable chips, matching the order they're explained below.
+          for (final set in widget.payload.deferredSets) ...[
+            const SizedBox(width: HwSpace.s2),
+            _deferredChip(p, set),
+          ],
+          // Sets the engine authored but whose role doesn't apply to this case
+          // at all. They sit here, after the ones that apply, so "3 sets
+          // authored, 2 applied, 1 not applicable" is visible at the control
+          // where sets are picked rather than only in the guidance copy.
           for (final set in widget.payload.withheldSets) ...[
             const SizedBox(width: HwSpace.s2),
             _withheldChip(p, set),
           ],
         ],
+      ),
+    );
+  }
+
+  /// A deferred set has real pads, just not drawn this session. Tapping it
+  /// shows the full placement so the practitioner can see what's next in the
+  /// chain without it being on the model now.
+  Widget _deferredChip(RefPalette p, PadSet set) {
+    return HwPress(
+      scale: 0.92,
+      onTap: () => _explainDeferred(set),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: p.chipBg,
+          borderRadius: BorderRadius.circular(HwRadius.md),
+          border: Border.all(color: p.line, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.schedule_rounded, size: 13, color: p.ink3),
+            const SizedBox(width: HwSpace.s2),
+            Text(
+              'Set ${widget.payload.displayIndexOf(set)} · later session',
+              style: TextStyle(
+                fontSize: HwType.sm,
+                fontWeight: FontWeight.w600,
+                color: p.ink3,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -378,10 +435,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline_rounded, size: 13, color: p.ink3),
+            Icon(Icons.block_rounded, size: 13, color: p.ink3),
             const SizedBox(width: HwSpace.s2),
             Text(
-              'Set ${widget.payload.displayIndexOf(set)} · not this session',
+              'Set ${widget.payload.displayIndexOf(set)} · not applicable',
               style: TextStyle(
                 fontSize: HwType.sm,
                 fontWeight: FontWeight.w600,
@@ -406,8 +463,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       builder: (_) => SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-              HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
+          padding:
+              const EdgeInsets.fromLTRB(HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -423,7 +480,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                'Authored on this point, not applied this session',
+                'Authored on this point, doesn’t apply to this case',
                 style: TextStyle(fontSize: HwType.cap, color: p.ink3),
               ),
               const SizedBox(height: HwSpace.s3),
@@ -437,6 +494,62 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   color: p.ink2,
                 ),
               ),
+              const SizedBox(height: HwSpace.s4),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A deferred set's own Sun/Moon, read straight off [PadSet] rather than
+  /// through [_data] — deferred sets aren't in `_data.sets` (that's
+  /// `appliedSets` only), so there is no resolved/view-aware pad to read here.
+  /// [Pad.cue] is used as-is: it's already "everything the practitioner needs
+  /// if 3D can't place it", which is exactly right for a set not drawn at all.
+  void _explainDeferred(PadSet set) {
+    final p = RefPalette.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
+      ),
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding:
+              const EdgeInsets.fromLTRB(HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.payload.titleOf(set),
+                style: TextStyle(
+                  fontSize: HwType.lg,
+                  fontWeight: FontWeight.w800,
+                  color: p.ink,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Authored with pads, sequenced for a later session'
+                '${set.role.trim().isEmpty ? '' : ' · ${set.role}'}',
+                style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+              ),
+              const SizedBox(height: HwSpace.s3),
+              if (set.sun != null)
+                Text('Sun — ${set.sun!.cue}',
+                    style: TextStyle(
+                        fontSize: HwType.sm, height: 1.5, color: p.ink2)),
+              if (set.sun != null && set.moon != null)
+                const SizedBox(height: HwSpace.s1),
+              if (set.moon != null)
+                Text('Moon — ${set.moon!.cue}',
+                    style: TextStyle(
+                        fontSize: HwType.sm, height: 1.5, color: p.ink2)),
               const SizedBox(height: HwSpace.s4),
             ],
           ),
@@ -854,7 +967,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            active ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+            active
+                ? Icons.check_box_rounded
+                : Icons.check_box_outline_blank_rounded,
             size: 13,
             color: active ? Colors.white : p.ink3,
           ),
@@ -960,8 +1075,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         .where((r) => r.view != _view && r.view != 'side')
         .toList();
 
-    return Padding
-      (padding: const EdgeInsets.only(bottom: HwSpace.s3),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
       child: HwCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -969,25 +1084,6 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 26,
-                  height: 26,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _setColor(p, i).withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(HwRadius.xs),
-                    border: Border.all(color: _setColor(p, i), width: 1.5),
-                  ),
-                  child: Text(
-                    '${set.setIndex}',
-                    style: TextStyle(
-                      fontSize: HwType.cap,
-                      fontWeight: FontWeight.w800,
-                      color: _setColor(p, i),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: HwSpace.s3),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1080,6 +1176,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 data: Theme.of(context)
                     .copyWith(dividerColor: Colors.transparent),
                 child: ExpansionTile(
+                  initiallyExpanded: true,
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: const EdgeInsets.only(bottom: HwSpace.s2),
                   title: Text(
@@ -1277,6 +1374,105 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// The card for a set the engine authored but did not apply. Deliberately
   /// muted and pad-less — it is here so the practitioner can see the set exists
   /// and what would bring it in, not so it can be run.
+  /// A deferred set's card in the "Sequence into later sessions" list — full
+  /// Sun/Moon placement, same as an applied set's [_setNote], but tagged
+  /// LATER SESSION instead of drawn on the model. Reads pads straight off
+  /// [PadSet] (see [_explainDeferred]) rather than through [_data].
+  Widget _deferredNote(RefPalette p, PadSet set) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: p.chipBg,
+                    borderRadius: BorderRadius.circular(HwRadius.xs),
+                    border: Border.all(color: p.line, width: 1.5),
+                  ),
+                  child: Text(
+                    '${set.setIndex}',
+                    style: TextStyle(
+                      fontSize: HwType.cap,
+                      fontWeight: FontWeight.w800,
+                      color: p.ink3,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: HwSpace.s3),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.payload.titleOf(set),
+                              style: TextStyle(
+                                fontSize: HwType.base,
+                                fontWeight: FontWeight.w700,
+                                color: p.ink,
+                              ),
+                            ),
+                          ),
+                          if (set.padGeometry.trim().isNotEmpty) ...[
+                            const SizedBox(width: HwSpace.s2),
+                            _geometryChip(p, set.padGeometry),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          if (set.role.trim().isNotEmpty)
+                            Expanded(
+                              child: Text(
+                                '${_roleLabel(set.role)}'
+                                '${set.sessionPriority > 0 ? ' · priority ${set.sessionPriority}' : ''}',
+                                style: TextStyle(
+                                  fontSize: HwType.eyebrow,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.3,
+                                  color: p.copperInk,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: HwSpace.s2),
+                          const HwPill('later session'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: HwSpace.s2),
+            if (set.sun != null)
+              Text('☀ ${set.sun!.cue}',
+                  style: TextStyle(
+                      fontSize: HwType.cap, height: 1.5, color: p.ink2)),
+            if (set.moon != null) ...[
+              const SizedBox(height: 3),
+              Text('☾ ${set.moon!.cue}',
+                  style: TextStyle(
+                      fontSize: HwType.cap, height: 1.5, color: p.ink2)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _withheldNote(RefPalette p, PadSet set) {
     return Padding(
       padding: const EdgeInsets.only(bottom: HwSpace.s3),
@@ -1555,7 +1751,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('•', style: TextStyle(fontSize: HwType.cap, color: p.copperInk)),
+                  Text('•',
+                      style:
+                          TextStyle(fontSize: HwType.cap, color: p.copperInk)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1671,7 +1869,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     return [
       // DRIVER — the core teaching: the driver, not the site.
       _recoveryBlock(p, 'Driver', [
-        if (r.driverDescription.trim().isNotEmpty) _body(p, r.driverDescription),
+        if (r.driverDescription.trim().isNotEmpty)
+          _body(p, r.driverDescription),
         _metaRow(p, 'Case', r.caseType),
         _metaRow(p, 'You reported it travels to', r.referralTargetReported),
         _metaRow(p, 'Lymphatic hub', r.lymphaticRegion),
@@ -1697,7 +1896,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         p,
         'Thermal',
         [
-          if (r.thermalRationale.trim().isNotEmpty) _body(p, r.thermalRationale),
+          if (r.thermalRationale.trim().isNotEmpty)
+            _body(p, r.thermalRationale),
           if (r.thermalDowngrade.trim().isNotEmpty)
             _notice(p, 'Adjusted from Fast switch', r.thermalDowngrade,
                 tint: p.mid),
@@ -1782,7 +1982,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             p,
             'Typical window',
             '${r.expectedWindow}'
-            '${r.expectedWindowNote.trim().isEmpty ? '' : ' — ${r.expectedWindowNote}'}',
+                '${r.expectedWindowNote.trim().isEmpty ? '' : ' — ${r.expectedWindowNote}'}',
           ),
       ]),
 
@@ -1798,12 +1998,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       _collapsible(p, 'Data notes on this point', r.reviewFlags),
 
       if (r.recoveryId.trim().isNotEmpty)
-        _sourceLine(p, [
-          r.recoveryId,
-          if (r.pointVersion.trim().isNotEmpty) 'v${r.pointVersion}',
-          if (r.generation.trim().isNotEmpty) r.generation,
-          if (r.pointSource.trim().isNotEmpty) r.pointSource,
-        ].join(' · ')),
+        _sourceLine(
+            p,
+            [
+              r.recoveryId,
+              if (r.pointVersion.trim().isNotEmpty) 'v${r.pointVersion}',
+              if (r.generation.trim().isNotEmpty) r.generation,
+              if (r.pointSource.trim().isNotEmpty) r.pointSource,
+            ].join(' · ')),
       if (r.practitionerDisclaimer.trim().isNotEmpty)
         _sourceLine(p, r.practitionerDisclaimer),
     ];
@@ -1814,8 +2016,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   Widget _claim(RefPalette p, String text) => Container(
         width: double.infinity,
         margin: const EdgeInsets.only(top: 4, bottom: HwSpace.s1),
-        padding: const EdgeInsets.fromLTRB(HwSpace.s3, HwSpace.s2, HwSpace.s3,
-            HwSpace.s2),
+        padding: const EdgeInsets.fromLTRB(
+            HwSpace.s3, HwSpace.s2, HwSpace.s3, HwSpace.s2),
         decoration: BoxDecoration(
           color: p.tanSoft,
           borderRadius: BorderRadius.circular(HwRadius.sm),
@@ -1836,7 +2038,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         padding: const EdgeInsets.only(bottom: HwSpace.s3),
         child: Text(
           text,
-          style: TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+          style:
+              TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
         ),
       );
 

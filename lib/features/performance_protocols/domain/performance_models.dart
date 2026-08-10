@@ -269,11 +269,25 @@ class PadSet {
   final String padGeometry;
 
   /// A set the engine authored but did NOT apply this session, with the reason
-  /// it was held back (`chain.conditional.withheld_sets[]`). It has no pads —
-  /// that is the point — and is shown so the practitioner can see the set exists
-  /// and what would bring it in.
+  /// it was held back (`chain.conditional.withheld_sets[]` /
+  /// `chain.referral.withheld_sets[]`). It has NO pads — the role doesn't apply
+  /// to this presentation at all (e.g. a rom-followup set on a discomfort
+  /// pathway) — and is shown so the practitioner can see the set exists and what
+  /// would bring it in.
   final bool withheld;
   final String withheldReason;
+
+  /// A set the engine authored WITH real pad geometry, but scheduled for a
+  /// LATER session rather than this one (`chain.sequence_later[]`) — distinct
+  /// from [withheld]: this set's role applies to the case, it's just next in
+  /// the chain's sequence rather than applied now. Carries [sun]/[moon] like an
+  /// applied set, so it can be listed with its full placement, just not drawn
+  /// on the model this session.
+  final bool deferred;
+
+  /// `chain.sequence_later[].session_priority` / `chain.apply_now[].session_priority`
+  /// — the order this set's role is applied in across the chain (1 = first).
+  final int sessionPriority;
 
   const PadSet({
     this.setIndex = 1,
@@ -285,6 +299,8 @@ class PadSet {
     this.padGeometry = '',
     this.withheld = false,
     this.withheldReason = '',
+    this.deferred = false,
+    this.sessionPriority = 0,
   });
 
   factory PadSet.fromJson(Map<String, dynamic> json) => PadSet(
@@ -304,6 +320,8 @@ class PadSet {
             : null,
         padGeometry:
             (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
+        sessionPriority:
+            _int(json['session_priority'] ?? json['sessionPriority'], 0),
       );
 
   /// Raw-index title. Prefer [PadSetPayload.titleOf], which prints the set
@@ -400,14 +418,22 @@ class PadSetPayload {
     this.sequencingNote = '',
   });
 
-  /// Sets that will actually be applied — the ones with pads. [sets] also
-  /// carries withheld sets so they can be listed and explained.
-  List<PadSet> get appliedSets => sets.where((s) => !s.withheld).toList();
+  /// Sets that will actually be applied THIS SESSION — the ones with pads
+  /// drawn now. [sets] also carries deferred and withheld sets so they can be
+  /// listed and explained.
+  List<PadSet> get appliedSets =>
+      sets.where((s) => !s.withheld && !s.deferred).toList();
+
+  /// Authored WITH pads, but sequenced into a later session — not applied now,
+  /// not excluded either. Distinct from [withheldSets], whose role doesn't
+  /// apply to this case at all.
+  List<PadSet> get deferredSets => sets.where((s) => s.deferred).toList();
 
   List<PadSet> get withheldSets => sets.where((s) => s.withheld).toList();
 
-  /// A withheld set has no pads, so it can never make a refusal into a
-  /// placement — the test is whether anything is actually applied.
+  /// A withheld or deferred set has no pads drawn this session, so neither can
+  /// make a refusal into a placement — the test is whether anything is
+  /// actually applied.
   bool get isRefusal => chain == null || appliedSets.isEmpty;
 
   /// One payload shape serves BOTH surfaces; the assistant tells them apart by
