@@ -12,6 +12,7 @@ import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
+import '../../../../core/utils/log_export.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../auth/presentation/screens/select_organization_page.dart'
@@ -145,7 +146,6 @@ class SettingsScreen extends ConsumerWidget {
       }
     }
   }
-
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -354,8 +354,7 @@ class _AccountCard extends ConsumerWidget {
                     '${user!.email} · one login',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                    style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                   ),
                 ],
               ],
@@ -520,8 +519,7 @@ class _OrgCard extends ConsumerWidget {
                     org['description'].toString(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                    style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                   ),
                 ],
               ],
@@ -870,8 +868,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
                           subtitle:
                               '~${(proto.apiTotalDurationSeconds / 60).round()} min',
                           trailing: proto.id == selected
-                              ? const HwPill('Default',
-                                  tone: HwPillTone.copper)
+                              ? const HwPill('Default', tone: HwPillTone.copper)
                               : null,
                           onTap: () {
                             ref2
@@ -927,6 +924,25 @@ class _SessionDefaultsSection extends ConsumerWidget {
 // 8 · Settings & support
 // ---------------------------------------------------------------------------
 
+Future<void> _shareDiagnosticLogs(BuildContext context) async {
+  try {
+    final shared = await shareLogFile();
+    if (!context.mounted) return;
+    if (!shared) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No log file is available yet.'),
+        ),
+      );
+    }
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Could not share logs: $e')),
+    );
+  }
+}
+
 class _SupportSection extends ConsumerWidget {
   const _SupportSection();
 
@@ -971,6 +987,13 @@ class _SupportSection extends ConsumerWidget {
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
           ),
+          // _MoreRow(
+          //   icon: HwIcons.note,
+          //   title: 'Share diagnostic logs',
+          //   subtitle: 'Coming soon',
+          //   trailing: const HwComingSoonBanner(compact: true),
+          //   onTap: null,
+          // ),
         ]),
       ],
     );
@@ -1073,8 +1096,8 @@ class _BrandFooter extends StatelessWidget {
             'support readiness, recovery, and mobility; they do not treat, '
             'cure, or diagnose.',
             textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+            style:
+                TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
           ),
           const SizedBox(height: HwSpace.s3),
           Text(
@@ -1305,4 +1328,3 @@ class _SheetMessage extends StatelessWidget {
     );
   }
 }
-

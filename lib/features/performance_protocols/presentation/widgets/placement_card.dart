@@ -69,7 +69,7 @@ class PlacementCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         payload.sets[i].placementLabel.trim().isEmpty
-                            ? 'Set ${payload.sets[i].setIndex}'
+                            ? 'Set ${payload.displayIndexOf(payload.sets[i])}'
                             : payload.sets[i].placementLabel,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,

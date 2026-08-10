@@ -1,3 +1,5 @@
+import 'dart:math';
+
 /// One preset answer option for a post-session question: the answer text plus
 /// its admin-assigned [rank] (1–5). The backend stores options as objects
 /// (`answers: [{answer, rank}]`) and REQUIRES the rank back on the submitted
@@ -283,35 +285,59 @@ class Protocol {
 
   /// Total duration in seconds across all cycles and sessions.
   ///
-  /// Mirrors the backend computation in
-  /// `Hydrawav3-Server` → `protocol.service.ts` `getProtocolsByGoalTagId`
-  /// (the goal-tag list `duration`, which is the source of truth) so the
-  /// home / "All" protocols list matches the goal-filtered list exactly.
+  /// This mirrors the firmware payload calculation used by the web flow, so the
+  /// selected protocol / session preview shows the same runtime the device will
+  /// actually execute.
   ///
-  /// Per cycle: `repetitions * (duration_seconds + pause_seconds)`, plus the
-  /// inter-cycle pause `cycle_pause` for every cycle **except the last**.
-  /// Then scaled by sessions (+ session pauses) and the start/end edge cycles
-  /// (`edgecycleduration + 30` each).
+  /// The device-side payload logic is:
+  /// - start-edge cycle: add `edgeCycleDuration + 30` when `cycle1`
+  /// - for each session, sum the first 3 cycles using
+  ///   `reps * duration + (reps - 1) * pause` and the inter-cycle pause between
+  ///   cycle blocks
+  /// - add session pause between sessions
+  /// - finish-edge cycle: add `30 + edgeCycleDuration` when `cycle5`
+  ///
+  /// Protocol Plus entries do not carry cycles, so those still fall back to the
+  /// server-provided `apiTotalDurationSeconds`.
   int get totalDurationSeconds {
     // Protocol Plus entries (and the goal-tag list) carry a server-computed
     // total and have no cycles — use it directly so they don't read 00:00.
-    if (apiTotalDurationSeconds > 0) return apiTotalDurationSeconds;
+    if (cycles.isEmpty && apiTotalDurationSeconds > 0) {
+      return apiTotalDurationSeconds;
+    }
 
-    double base = 0;
-    for (var i = 0; i < cycles.length; i++) {
-      final cycle = cycles[i];
-      base += cycle.repetitions * (cycle.durationSeconds + cycle.pauseSeconds);
-      if (i < cycles.length - 1) {
-        base += cycle.cyclePause;
+    if (cycles.length < 3) {
+      return apiTotalDurationSeconds > 0 ? apiTotalDurationSeconds : 0;
+    }
+
+    int total = 0;
+
+    if (cycle1) {
+      total += edgecycleduration.toInt() + 30;
+    }
+
+    for (var session = 0; session < sessions; session++) {
+      for (var i = 0; i < 3; i++) {
+        final cycle = cycles[i];
+        final reps = max(1, cycle.repetitions);
+        total += reps * cycle.durationSeconds.toInt();
+        total += (reps - 1) * cycle.pauseSeconds.toInt();
+
+        if (i < 2) {
+          total += cycle.cyclePause.toInt();
+        }
+      }
+
+      if (session < sessions - 1) {
+        total += sessionPause.toInt();
       }
     }
 
-    base = base * sessions + sessionPause * (sessions - 1);
+    if (cycle5) {
+      total += 30 + edgecycleduration.toInt();
+    }
 
-    if (cycle1) base += edgecycleduration + 30;
-    if (cycle5) base += edgecycleduration + 30;
-
-    return base.round();
+    return total;
   }
 
   Duration get totalDuration => Duration(seconds: totalDurationSeconds);

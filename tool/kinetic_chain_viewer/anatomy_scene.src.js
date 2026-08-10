@@ -88,10 +88,13 @@ const BODY_TARGET_CENTER_Y = 0.24;
 
 const PAD_SIZE = 0.13;
 const BADGE_CLUSTER_DISTANCE = PAD_SIZE * 1.45;
-const HIGHLIGHT_COLOR = 0x9af5d2;
 
 // Role colours — identical to the web so a Sun muscle is the same red in both
 // clients. Set identity is NOT encoded here; it lives on the arc and the badge.
+//
+// These are now the ONLY colours painted onto the body. The mint
+// `HIGHLIGHT_COLOR` (0x9af5d2) that used to serve as the badge-mode Moon tint is
+// gone with the branch that used it — one role, one colour, every pad style.
 const PERF_SUN_COLOR = 0xff3b30; // red
 const PERF_MOON_COLOR = 0x2f80ff; // blue
 const PERF_SUN_EMISSIVE = 0x4d0f0b;
@@ -921,11 +924,10 @@ function highlightSize(marker) {
 
 function addMuscleHighlight(group, marker, position, normal, opts) {
   const size = highlightSize(marker);
-  const color = opts.colorBySet
-    ? perfSetColor(marker.setIndex)
-    : marker.role === "sun"
-      ? 0xffb56b
-      : HIGHLIGHT_COLOR;
+  // Same rule as the mesh tint: the halo sits ON the body, so it carries role
+  // and nothing else. Sun red / Moon blue, whatever the pad style or the focused
+  // set — see the note in setMeshMaterialHighlight.
+  const color = marker.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
   const mesh = new THREE.Mesh(
     new THREE.CircleGeometry(1, 64),
     new THREE.MeshBasicMaterial({
@@ -1215,10 +1217,6 @@ function addSetArcs(group, placements) {
 // Highlight + X-ray
 // ---------------------------------------------------------------------------
 
-function darkenHex(hex, factor = 0.3) {
-  return new THREE.Color(hex).multiplyScalar(factor).getHex();
-}
-
 function setMeshMaterialHighlight(mesh, active, marker, opts, strong) {
   const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
   if (!material?.color) return;
@@ -1226,21 +1224,28 @@ function setMeshMaterialHighlight(mesh, active, marker, opts, strong) {
     let color;
     let emissive;
     let intensity;
-    if (opts.padStyle === "muscle") {
-      // Role colour wins: Sun red / Moon blue. No per-set encoding here — set
-      // identity lives on the arc.
-      color = marker?.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
-      emissive = marker?.role === "sun" ? PERF_SUN_EMISSIVE : PERF_MOON_EMISSIVE;
-      intensity = strong ? 0.72 : 0.5;
-    } else if (opts.colorBySet) {
-      color = perfSetColor(marker?.setIndex);
-      emissive = darkenHex(color, 0.34);
-      intensity = strong ? 0.62 : 0.38;
-    } else {
-      color = marker?.role === "sun" ? 0xffb36d : HIGHLIGHT_COLOR;
-      emissive = marker?.role === "sun" ? 0x4a1f05 : 0x07382a;
-      intensity = strong ? 0.62 : 0.38;
-    }
+    // ROLE COLOUR ALWAYS WINS — Sun red, Moon blue — in every pad style.
+    //
+    // The muscle mesh answers exactly one question: is this pad the Sun or the
+    // Moon. Anything else painted onto it is a second variable on the same
+    // channel, and the anatomy is the last place that can carry one: a muscle
+    // that changes colour reads as a different finding about the body, not as a
+    // different selection in the UI.
+    //
+    // Two encodings used to sit here and both were wrong on this surface.
+    // `colorBySet` repainted the SAME pad a different colour depending on which
+    // set was focused, so Sun/Moon stopped being readable. The badge-mode
+    // fallback used a third pair (amber/mint) that agreed with neither, so the
+    // same placement changed colour merely by toggling Muscle Mode.
+    //
+    // Set identity is carried by the labelled arc, the chips and the legend —
+    // three places that are free to use the palette because none of them is the
+    // body. `colorBySet` and `perfSetColor` remain live for the arcs.
+    color = marker?.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
+    emissive = marker?.role === "sun" ? PERF_SUN_EMISSIVE : PERF_MOON_EMISSIVE;
+    intensity = opts.padStyle === "muscle"
+      ? (strong ? 0.72 : 0.5)
+      : (strong ? 0.62 : 0.38);
     material.color.setHex(color);
     if (material.emissive) material.emissive.setHex(emissive);
     if ("emissiveIntensity" in material) material.emissiveIntensity = intensity;

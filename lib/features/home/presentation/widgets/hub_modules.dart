@@ -875,9 +875,11 @@ class HubMobilityCard extends StatelessWidget {
                 TextStyle(fontSize: HwType.sm, height: 1.55, color: p.ink2),
           ),
           const SizedBox(height: 15),
+          const Center(child: HwComingSoonBanner()),
+          const SizedBox(height: 10),
           _HubButton(
             label: '▶ Generate my AI report',
-            onTap: () => context.push(RoutePaths.aiReportClients),
+            onTap: null,
           ),
           const SizedBox(height: 9),
           Text(
@@ -1260,7 +1262,7 @@ class _ResCard extends StatelessWidget {
 /// Rent & Earn override — one shape, per Principles §5.
 class _HubButton extends StatelessWidget {
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool filled;
   final bool compact;
   final Gradient? gradient;
@@ -1288,36 +1290,37 @@ class _HubButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    return HwPress(
-      onTap: onTap,
-      child: Container(
-        width: compact ? null : double.infinity,
-        padding: EdgeInsets.symmetric(
-          horizontal: compactPadding ? 8 : (compact ? 14 : 16),
-          vertical: compact ? 8 : 11,
-        ),
-        decoration: BoxDecoration(
-          gradient: filled ? (gradient ?? p.sunGrad) : null,
-          borderRadius: BorderRadius.circular(HwRadius.sm),
-          border: filled
-              ? null
-              : Border.all(color: borderColor ?? p.copper, width: 1.5),
-        ),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          // A button label is always one line; it ellipsises rather than
-          // wrapping and pushing the row taller than its sibling.
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: HwType.sm,
-            fontWeight: FontWeight.w700,
-            color: filled ? Colors.white : (labelColor ?? p.copperInk),
-          ),
+    final enabled = onTap != null;
+    final button = Container(
+      width: compact ? null : double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: compactPadding ? 8 : (compact ? 14 : 16),
+        vertical: compact ? 8 : 11,
+      ),
+      decoration: BoxDecoration(
+        gradient: filled ? (gradient ?? p.sunGrad) : null,
+        borderRadius: BorderRadius.circular(HwRadius.sm),
+        border: filled ? null : Border.all(color: borderColor ?? p.copper, width: 1.5),
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        // A button label is always one line; it ellipsises rather than
+        // wrapping and pushing the row taller than its sibling.
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: HwType.sm,
+          fontWeight: FontWeight.w700,
+          color: filled ? Colors.white : (labelColor ?? p.copperInk),
         ),
       ),
+    );
+
+    return Opacity(
+      opacity: enabled ? 1 : .55,
+      child: enabled ? HwPress(onTap: onTap!, child: button) : button,
     );
   }
 }

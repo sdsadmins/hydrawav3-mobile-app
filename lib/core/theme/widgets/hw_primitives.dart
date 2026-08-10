@@ -1084,3 +1084,50 @@ class HwStatusBanner extends StatelessWidget {
     );
   }
 }
+
+/// Small notice for feature-gated surfaces that should not be tapped yet.
+class HwComingSoonBanner extends StatelessWidget {
+  final String label;
+  final bool compact;
+
+  const HwComingSoonBanner({
+    super.key,
+    this.label = 'Coming soon',
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 12,
+        vertical: compact ? 4 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: p.midSoft,
+        borderRadius: BorderRadius.circular(HwRadius.pill),
+        border: Border.all(color: p.mid.withValues(alpha: .28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.schedule_rounded,
+            size: compact ? 12 : 14,
+            color: p.mid,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: compact ? HwType.eyebrow : HwType.cap,
+              fontWeight: FontWeight.w800,
+              color: p.mid,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
