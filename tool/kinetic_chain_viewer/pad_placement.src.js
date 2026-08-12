@@ -600,8 +600,11 @@ function loadModel() {
 }
 
 // ---------------------------------------------------------------------------
-// Pad textures (canvas-drawn Sun / Moon decals)
+// Pad textures (canvas-drawn role-coloured decals)
 // ---------------------------------------------------------------------------
+// Plain colour disc — role still reads via colour (COLORS.sun / COLORS.moon)
+// and the S1/M1 badge, without drawing a literal sun-ray or moon-crescent
+// shape on the body.
 function makePadTexture(role) {
   const size = 256;
   const c = document.createElement("canvas");
@@ -619,20 +622,6 @@ function makePadTexture(role) {
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, size, size);
 
-  if (role === "sun") {
-    // Rays
-    ctx.strokeStyle = color;
-    ctx.lineWidth = size * 0.035;
-    ctx.lineCap = "round";
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(cx + Math.cos(a) * r * 1.18, cy + Math.sin(a) * r * 1.18);
-      ctx.lineTo(cx + Math.cos(a) * r * 1.42, cy + Math.sin(a) * r * 1.42);
-      ctx.stroke();
-    }
-  }
-
   // Disc
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -641,15 +630,6 @@ function makePadTexture(role) {
   ctx.lineWidth = size * 0.045;
   ctx.strokeStyle = "#ffffff";
   ctx.stroke();
-
-  if (role === "moon") {
-    // Crescent: punch a circle out of the disc.
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.beginPath();
-    ctx.arc(cx + r * 0.42, cy - r * 0.18, r * 0.78, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalCompositeOperation = "source-over";
-  }
 
   const tex = new THREE.CanvasTexture(c);
   tex.anisotropy = 4;
@@ -762,28 +742,8 @@ function addPad(marker) {
   pad.renderOrder = 10;
   pad.userData.kind = "pad";
   padGroup.add(pad);
-
-  // Badge — S1 / M1 (role initial + set number), billboarded above the pad.
-  const setNo = Number.isFinite(marker.setIndex) ? marker.setIndex + 1 : 1;
-  const text = `${role === "sun" ? "S" : "M"}${setNo}`;
-  const badge = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      // `setColor` keeps the badge in step with the set legend in the app
-      // chrome; without it Set 1 and Set 2 badges are indistinguishable.
-      map: makeBadgeTexture(text, role, marker.setColor),
-      transparent: true,
-      depthTest: false,
-    }),
-  );
-  badge.position
-    .set(snapped[0], snapped[1], snapped[2])
-    .addScaledVector(n, 0.1);
-  badge.position.y += PAD_RADIUS * 1.9;
-  badge.scale.set(0.22, 0.11, 1);
-  badge.renderOrder = 11;
-  badge.userData.kind = "badge";
-  badge.visible = labelsVisible;
-  padGroup.add(badge);
+  // No S1/M1 badge chip here any more — the plain pad decal above is the only
+  // marker on the skin now; role still reads via its colour.
 }
 
 function clearPads() {

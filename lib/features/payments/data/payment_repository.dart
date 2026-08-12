@@ -115,6 +115,14 @@ class PaymentRepository {
   }
 }
 
+/// Every purchasable plan tier (Free is included so it can be shown as the
+/// baseline on the subscription/plan-comparison screen), for comparing
+/// against the org's current plan.
+final subscriptionProductsProvider =
+    FutureProvider.autoDispose<List<Product>>((ref) {
+  return ref.read(paymentRepositoryProvider).getSubscriptionProducts();
+});
+
 /// Provider to check if user has paid subscription.
 final isPaidUserProvider = FutureProvider<bool>((ref) async {
   // TODO: Read org ID from auth state

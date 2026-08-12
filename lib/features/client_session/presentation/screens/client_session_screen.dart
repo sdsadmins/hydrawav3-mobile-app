@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
 import '../../../auth/presentation/providers/client_auth_provider.dart';
 import '../../../ble/data/ble_repository.dart';
@@ -643,12 +644,22 @@ class _ClientTimerRing extends CustomPainter {
 
 /// Bluetooth device picker sheet — streams live scan results and returns the
 /// chosen device.
-class _DevicePickerSheet extends StatelessWidget {
+class _DevicePickerSheet extends StatefulWidget {
   final BleRepository repo;
   const _DevicePickerSheet({required this.repo});
 
   @override
+  State<_DevicePickerSheet> createState() => _DevicePickerSheetState();
+}
+
+class _DevicePickerSheetState extends State<_DevicePickerSheet> {
+  /// Client sessions default to trusted Hydrawav3 hardware. Turning this off
+  /// deliberately exposes every named Bluetooth device discovered by the scan.
+  bool _hydrawav3Only = true;
+
+  @override
   Widget build(BuildContext context) {
+    final repo = widget.repo;
     return SafeArea(
       top: false,
       child: Padding(
@@ -662,6 +673,35 @@ class _DevicePickerSheet extends StatelessWidget {
                     color: ThemeConstants.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.verified_rounded,
+                    size: 16,
+                    color: _hydrawav3Only
+                        ? ThemeConstants.accent
+                        : ThemeConstants.textTertiary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Hydrawav3 devices only',
+                    style: TextStyle(
+                      color: _hydrawav3Only
+                          ? ThemeConstants.textPrimary
+                          : ThemeConstants.textSecondary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: _hydrawav3Only,
+                  activeColor: ThemeConstants.accent,
+                  onChanged: (value) =>
+                      setState(() => _hydrawav3Only = value),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             SizedBox(
               height: 320,
@@ -669,10 +709,29 @@ class _DevicePickerSheet extends StatelessWidget {
                 stream: repo.scanResults,
                 initialData: repo.currentScanResults,
                 builder: (context, snapshot) {
+                  // Hydrawave-only, same filter as the main Devices tab's
+                  // "Hydrawav3" toggle (device_list_screen.dart) — this sheet
+                  // has no toggle of its own since a client logging in only
+                  // ever wants their own hardware, never a stray nearby
+                  // Bluetooth device (headphones, watches, …).
+                  final expectedUuid = BleConstants.preferredServiceUuid;
+                  final targetUuid = (expectedUuid != null &&
+                          expectedUuid.isNotEmpty)
+                      ? BleConstants.normalizeUuid(expectedUuid)
+                      : null;
                   final results = (snapshot.data ?? const <ScanResult>[])
                       .where((r) =>
                           r.device.platformName.isNotEmpty ||
                           r.advertisementData.advName.isNotEmpty)
+                      .where((r) {
+                        if (!_hydrawav3Only) return true;
+                        if (targetUuid == null) return false;
+                        return r.advertisementData.serviceUuids.any(
+                          (uuid) =>
+                              BleConstants.normalizeUuid(uuid.str) ==
+                              targetUuid,
+                        );
+                      })
                       .toList();
                   if (results.isEmpty) {
                     return Center(

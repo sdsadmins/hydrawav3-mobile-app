@@ -764,8 +764,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// The 3D stage.
   ///
   /// The option mapping follows the web performance flow exactly:
-  ///   • `padStyle: 'muscle'` when Muscle Mode is on — the target muscle IS the
-  ///     indicator, so no pad and no badge are drawn.
+  ///   • `padStyle: 'muscle'` ALWAYS — the target muscle IS the indicator, so
+  ///     no pad and no badge are ever drawn on this stage. The Muscle Mode
+  ///     toggle no longer switches styles; it only switches `transparentBody`
+  ///     below, so switching it off still shows the same coloured muscle, just
+  ///     through a see-through body instead of a solid one.
   ///   • `transparentBody: !muscleMode` — this is the web's actual pairing
   ///     (`transparentBody={!muscleMode}`). Muscle Mode reads as "solid body";
   ///     with it off you get the X-ray, which the older viewer could not do at
@@ -811,7 +814,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       setRoles: _data.sets.map((s) => s.role).toList(),
       view: _view,
       showLabels: _showLabels,
-      padStyle: _muscleMode ? 'muscle' : 'badge',
+      // Always the muscle-coloured style — the Muscle Mode toggle only flips
+      // transparentBody below now, not which style draws.
+      padStyle: 'muscle',
       transparentBody: !_muscleMode,
       colorBySet: false,
       showSetLinks: true,

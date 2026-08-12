@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/error/exceptions.dart';
+import '../../../ble/data/ble_repository.dart';
 import '../../../splash/presentation/providers/app_bootstrap_provider.dart';
 import '../../data/auth_repository.dart';
 import '../../domain/auth_models.dart';
@@ -138,6 +139,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
+    // Drop any live BLE connection before signing out — a connected device
+    // must not stay attached to a session no longer authenticated. This is
+    // just the active radio link; the on-device lease is untouched here.
+    try {
+      await _ref.read(bleRepositoryProvider).disconnectAll();
+    } catch (_) {
+      // Best-effort: logout must still proceed even if BLE teardown fails.
+    }
     await _repository.logout();
     await _repository.clearSelectedOrganization();
     // No need to invalidate wifiDevicesByOrgProvider here: it watches

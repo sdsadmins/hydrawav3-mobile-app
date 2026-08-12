@@ -1,7 +1,7 @@
 name: hydrawav3
 description: Hydrawav3 Pro - Physical therapy device control app
 publish_to: "none"
-version: 1.0.5+12
+version: 1.0.5+13
 
 environment:
   sdk: ^3.6.0
@@ -86,6 +86,7 @@ dependencies:
   wakelock_plus: ^1.2.8
   path_provider: ^2.1.5
   path: ^1.9.1
+  flutter_local_notifications: ^22.3.0
 
 dev_dependencies:
   flutter_test:

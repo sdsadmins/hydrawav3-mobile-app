@@ -17,6 +17,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
+      fontFamily: 'Roboto',
       scaffoldBackgroundColor: colors.background,
       colorScheme: ColorScheme(
         brightness: brightness,

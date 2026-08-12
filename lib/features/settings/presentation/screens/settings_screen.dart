@@ -10,6 +10,7 @@ import '../../../../core/network/dio_client.dart';
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/theme_mode_provider.dart';
+import '../../../../core/theme/text_scale_provider.dart';
 import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../../core/utils/log_export.dart';
@@ -543,6 +544,7 @@ class _AppearanceSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     final dark = ref.watch(themeModeProvider) == ThemeMode.dark;
+    final textScale = ref.watch(textScaleProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -598,9 +600,130 @@ class _AppearanceSection extends ConsumerWidget {
             ],
           ),
         ),
+        const SizedBox(height: HwSpace.s3),
+        HwCard(
+          onTap: () => _showTextSizeSheet(context, ref),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: p.card,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: p.cardline, width: 1.5),
+                ),
+                alignment: Alignment.center,
+                child: Text('A',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: p.ink,
+                    )),
+              ),
+              const SizedBox(width: HwSpace.s3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Text Size',
+                      style: TextStyle(
+                        fontSize: HwType.md,
+                        fontWeight: FontWeight.w700,
+                        color: p.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${(textScale * 100).round()}% — tap to adjust',
+                      style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
+                    ),
+                  ],
+                ),
+              ),
+              HwIcon(HwIcons.chev, size: 18, color: p.ink3),
+            ],
+          ),
+        ),
       ],
     );
   }
+}
+
+/// The Text Size card opens this sheet — the shared `#sheet` scaffold
+/// ([showHwSheet]) already draws the grab handle, so the slider is the only
+/// content this needs to provide.
+void _showTextSizeSheet(BuildContext context, WidgetRef ref) {
+  showHwSheet(
+    context: context,
+    builder: (sheetContext) => Consumer(
+      builder: (context, sheetRef, _) {
+        final p = RefPalette.of(context);
+        final textScale = sheetRef.watch(textScaleProvider);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Text Size',
+                  style: TextStyle(
+                    fontSize: HwType.lg,
+                    fontWeight: FontWeight.w700,
+                    color: p.ink,
+                  ),
+                ),
+                Text(
+                  '${(textScale * 100).round()}%',
+                  style: TextStyle(
+                    fontSize: HwType.md,
+                    fontWeight: FontWeight.w700,
+                    color: p.ink3,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: HwSpace.s3),
+            Row(
+              children: [
+                Text('A', style: TextStyle(fontSize: 14, color: p.ink3)),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: p.ink,
+                      inactiveTrackColor: p.cardline,
+                      thumbColor: p.ink,
+                      overlayColor: p.ink.withValues(alpha: 0.12),
+                    ),
+                    child: Slider(
+                      value: textScale,
+                      min: kMinTextScale,
+                      max: kMaxTextScale,
+                      divisions: 11,
+                      label: '${(textScale * 100).round()}%',
+                      onChanged: (v) => sheetRef
+                          .read(textScaleProvider.notifier)
+                          .setScale(v),
+                    ),
+                  ),
+                ),
+                Text('A', style: TextStyle(fontSize: 26, color: p.ink3)),
+              ],
+            ),
+            const SizedBox(height: HwSpace.s2),
+            Text(
+              'The quick brown fox jumps over the lazy dog.',
+              style: TextStyle(fontSize: HwType.md, color: p.ink2),
+            ),
+            const SizedBox(height: HwSpace.s3),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class _Segment extends StatelessWidget {
