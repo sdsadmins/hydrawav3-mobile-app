@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/services/local_notification_service.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../../../core/theme/widgets/hw_info_dialog.dart';
 import '../../../../core/utils/extensions.dart';
@@ -1718,6 +1719,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (ble.isReconnectSuppressed(deviceId)) return;
     // Wi-Fi provisioning always drops BLE Ã¢â‚¬â€ that's the flow working, not a fault.
     if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
+
+    // A real system notification alongside the in-app dialog below — the
+    // dialog is a `Navigator` push and only renders while this screen is
+    // actually on-screen, so backgrounding the app (screen off, another app
+    // in front) meant the user never found out a device dropped. This fires
+    // either way.
+    unawaited(ref
+        .read(localNotificationServiceProvider)
+        .notifyDeviceOutOfRange(deviceLabel: _deviceLabel(deviceId)));
 
     _outOfRangeDialogDeviceId = deviceId;
     try {

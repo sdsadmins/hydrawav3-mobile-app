@@ -247,6 +247,28 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
         state = const [];
       }
     }
+    _retryUnresolvedOwnBackendStops();
+  }
+
+  /// Self-healing sweep for the "one failed backend-stop POST orphans the
+  /// session forever" gap: piggybacked on this poll (already running for the
+  /// whole app session, independent of which screen is open) rather than a
+  /// new timer. Any local session whose engine flagged
+  /// [SessionEngineState.backendStopUnresolved] gets another bounded retry —
+  /// cheap when nothing is unresolved (just reads already-live providers, no
+  /// extra network call).
+  void _retryUnresolvedOwnBackendStops() {
+    for (final session in _ref.read(activeSessionsProvider)) {
+      final unresolved = _ref.read(
+        sessionEngineFamilyProvider(session.id)
+            .select((s) => s.backendStopUnresolved),
+      );
+      if (unresolved) {
+        unawaited(_ref
+            .read(sessionEngineFamilyProvider(session.id).notifier)
+            .retryBackendStopIfNeeded());
+      }
+    }
   }
 
   void _connectSocket() {

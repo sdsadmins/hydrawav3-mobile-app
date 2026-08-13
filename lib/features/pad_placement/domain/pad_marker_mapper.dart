@@ -294,15 +294,22 @@ class PadPlacementViewData {
   factory PadPlacementViewData.from(PadSetPayload payload) {
     final applied = payload.appliedSets;
     final pads = <ResolvedPad>[];
-    for (var i = 0; i < applied.length; i++) {
-      final set = applied[i];
+    for (final set in applied) {
+      // The set's OWN index, not its position in this (possibly filtered,
+      // e.g. sets 2-3 withheld/deferred) list — see
+      // `PadSetPayload.markerIndexOf`. Using loop position here instead used
+      // to relabel "Set 4" as "Set 2" whenever an earlier set was filtered
+      // out, since the SAME number drives the marker's arc label, its
+      // palette colour, and the viewer's set-focus — all wrong together, not
+      // just the label.
+      final markerSetIndex = payload.markerIndexOf(set);
       for (final entry in [('sun', set.sun), ('moon', set.moon)]) {
         final pad = entry.$2;
         if (pad == null) continue;
         pads.add(ResolvedPad(
           pad: pad,
           role: entry.$1,
-          setIndex: i,
+          setIndex: markerSetIndex,
           setTitle: set.title,
           zone: resolveZone(pad),
           side: pad.sideKey ?? _sideFromPlane(pad.plane),

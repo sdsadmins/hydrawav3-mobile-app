@@ -452,6 +452,15 @@ class PadSetPayload {
   int displayIndexOf(PadSet set) =>
       isRecovery ? set.setIndex : set.setIndex + 1;
 
+  /// The 0-based index [set]'s MARKERS use — the same number that keys the
+  /// palette (`setColorFor`), the 3D stage's per-set focus/arcs, and the pad
+  /// lookup (`PadPlacementViewData.padOf`). Same normalization as
+  /// [displayIndexOf], minus the +1 for the label. Callers that need to name
+  /// or focus a set by its own identity (not its position in a filtered
+  /// list — some sets can be withheld/deferred) should use this instead of a
+  /// loop index, or the set's number and its markers/colour disagree.
+  int markerIndexOf(PadSet set) => isRecovery ? set.setIndex - 1 : set.setIndex;
+
   /// [PadSet.title] with the printable set number.
   String titleOf(PadSet set) => set.placementLabel.trim().isEmpty
       ? 'Set ${displayIndexOf(set)}'

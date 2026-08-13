@@ -1666,6 +1666,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               _me(r.payload.chain?.name ?? 'Another match');
               setState(() => _messages.add(_Msg.card(r.payload)));
               _scrollToEnd();
+              // Open the body for THIS chain immediately, same as tapping the
+              // card's own "3D pad map" button — otherwise picking a later
+              // match just adds another card and the 3D view (if already
+              // open from the first match) keeps showing the old one.
+              _openPadMap(r.payload);
             },
           ),
         _ChipAction(

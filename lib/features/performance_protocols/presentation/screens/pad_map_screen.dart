@@ -362,9 +362,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             selected: _focusSet == null,
             onTap: () => _focus(null),
           ),
-          for (var i = 0; i < sets.length; i++) ...[
+          for (final set in sets) ...[
             const SizedBox(width: HwSpace.s2),
-            _setChip(p, i, sets[i]),
+            _setChip(p, widget.payload.markerIndexOf(set), set),
           ],
           // Sets authored WITH pads but sequenced into a later session — the
           // role applies, it just isn't applied yet. Sits before the
@@ -1044,7 +1044,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       spacing: HwSpace.s4,
       runSpacing: HwSpace.s1,
       children: [
-        for (var i = 0; i < sets.length; i++)
+        for (final set in sets)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1052,13 +1052,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 width: 10,
                 height: 10,
                 decoration: BoxDecoration(
-                  color: _setColor(p, i),
+                  color: _setColor(p, widget.payload.markerIndexOf(set)),
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),
               const SizedBox(width: HwSpace.s1 + 2),
               Text(
-                'Set ${widget.payload.displayIndexOf(sets[i])}',
+                'Set ${widget.payload.displayIndexOf(set)}',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w700,
@@ -1072,7 +1072,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   Widget _setNote(RefPalette p, PadSet set) {
-    final i = _data.sets.indexOf(set);
+    final i = widget.payload.markerIndexOf(set);
     final sun = _data.padOf(i, 'sun');
     final moon = _data.padOf(i, 'moon');
     final offView = [sun, moon]

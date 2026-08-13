@@ -8,10 +8,30 @@ import '../../../../core/utils/logger.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../domain/active_session_model.dart';
 import '../../services/background_session_runtime.dart';
+import '../../services/session_engine.dart';
 
 final activeSessionsProvider =
     StateNotifierProvider<ActiveSessionsNotifier, List<ActiveSession>>((ref) {
   return ActiveSessionsNotifier(ref.read(sharedPreferencesProvider));
+});
+
+/// Device ids belonging to a local session whose engine has gone terminal but
+/// the backend stop hasn't been confirmed yet (see
+/// [SessionEngineState.backendStopUnresolved]). The devices list screen must
+/// not silently free these into "available" — they need their own tri-state
+/// (available / in-use / pending-stop) so the practitioner can see the stop
+/// hasn't actually landed and go finish it from the session screen.
+final pendingBackendStopDeviceIdsProvider = Provider<Set<String>>((ref) {
+  final sessions = ref.watch(activeSessionsProvider);
+  final ids = <String>{};
+  for (final session in sessions) {
+    final unresolved = ref.watch(
+      sessionEngineFamilyProvider(session.id)
+          .select((s) => s.backendStopUnresolved),
+    );
+    if (unresolved) ids.addAll(session.deviceIds);
+  }
+  return ids;
 });
 
 class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {

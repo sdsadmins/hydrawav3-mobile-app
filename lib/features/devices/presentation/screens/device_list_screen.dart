@@ -253,6 +253,20 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     }
   }
 
+  /// "Stop pending" tap target: find the local session that owns [deviceId]
+  /// (its engine went terminal but the backend stop hasn't been confirmed —
+  /// see `pendingBackendStopDeviceIdsProvider`) and open it against its own
+  /// engine, where Stop / Stop All already work. No stop logic here — this
+  /// screen just surfaces the problem and hands off to the session screen.
+  void _openPendingStopSession(String deviceId) {
+    for (final session in ref.read(activeSessionsProvider)) {
+      if (session.deviceIds.contains(deviceId)) {
+        openOwnLocalSession(context, session);
+        return;
+      }
+    }
+  }
+
   Future<void> _handleDeviceDisconnect({
     required String deviceId,
     required Future<void> Function() disconnect,
@@ -1594,10 +1608,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required List<String> currentRunIds,
     required Map<String, String> currentLabelsById,
     required Set<String> busyDeviceIds,
+    Set<String> pendingStopDeviceIds = const {},
     bool refDesign = false,
   }) {
     final isIncluded = _runDeviceIds.contains(data.id);
     final isBusy = busyDeviceIds.contains(data.id);
+    // Left the busy set already (engine went terminal), but the backend
+    // hasn't confirmed the stop yet — mutually exclusive with isBusy.
+    final isPendingStop = !isBusy && pendingStopDeviceIds.contains(data.id);
     final selectedProtocol = _selectedProtocolByDeviceId[data.id];
     final settings = _settingsByDeviceId[data.id];
     final showAdvanced = _showAdvancedByDeviceId[data.id] ?? false;
@@ -1628,6 +1646,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       subtitle: data.subtitle,
       inUse: isIncluded,
       isRunning: isBusy,
+      isPendingStop: isPendingStop,
+      onRetryStop:
+          isPendingStop ? () => _openPendingStopSession(data.id) : null,
       protocolTitle:
           isBusy ? '' : (selectedProtocol?.templateName ?? 'Select protocol'),
       protocolSubtitle: protocolMeta,
@@ -1760,6 +1781,15 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       ...liveInUseDeviceIds,
       ...bleBusyDeviceIds.where(shouldTreatAsBusy),
     };
+
+    // Devices whose LOCAL engine already went terminal, but the backend
+    // hasn't confirmed the stop (a failed/retrying POST — see
+    // `SessionEngineState.backendStopUnresolved`). Deliberately NOT merged
+    // into `inUseDeviceIds`: a device here has already left `busyDeviceIds`,
+    // so it needs its own "pending stop" state rather than being folded back
+    // into the fully-locked "in use" bucket.
+    final pendingBackendStopDeviceIds =
+        ref.watch(pendingBackendStopDeviceIdsProvider);
 
     // Auto-select + default-protocol seeding apply only to devices that are NOT
     // busy. Seeding a busy device would give it a protocol we immediately clear
@@ -1971,6 +2001,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     currentRunIds: runIds,
                                     currentLabelsById: currentLabelsById,
                                     busyDeviceIds: inUseDeviceIds,
+                                    pendingStopDeviceIds:
+                                        pendingBackendStopDeviceIds,
                                     refDesign: true,
                                   ),
                                 ));
@@ -1998,6 +2030,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     currentRunIds: runIds,
                                     currentLabelsById: currentLabelsById,
                                     busyDeviceIds: inUseDeviceIds,
+                                    pendingStopDeviceIds:
+                                        pendingBackendStopDeviceIds,
                                     refDesign: true,
                                   ),
                                 ));
@@ -2417,6 +2451,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     currentRunIds: runIds,
                                     currentLabelsById: currentLabelsById,
                                     busyDeviceIds: inUseDeviceIds,
+                                    pendingStopDeviceIds:
+                                        pendingBackendStopDeviceIds,
                                   ),
                                 ),
                               );
@@ -2501,7 +2537,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                               // shows the badge (not a still-selectable "Selected").
                               final inUse =
                                   inUseDeviceIds.contains(device.macAddress);
+                              final pendingStop = !inUse &&
+                                  pendingBackendStopDeviceIds
+                                      .contains(device.macAddress);
                               final selected = !inUse &&
+                                  !pendingStop &&
                                   target.filteredDeviceIds
                                       .contains(device.macAddress);
                               return AnimatedEntrance(
@@ -2515,7 +2555,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     buttonLabel:
                                         selected ? 'Selected' : 'Select',
                                     isInUse: inUse,
-                                    onTap: inUse
+                                    isPendingStop: pendingStop,
+                                    onTap: pendingStop
+                                        ? () => _openPendingStopSession(
+                                            device.macAddress)
+                                        : inUse
                                         ? null
                                         : () {
                                             // Enforce the plan's concurrent-device
@@ -2620,6 +2664,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       currentRunIds: runIds,
                                       currentLabelsById: currentLabelsById,
                                       busyDeviceIds: inUseDeviceIds,
+                                    pendingStopDeviceIds:
+                                        pendingBackendStopDeviceIds,
                                     ),
                                   ),
                                 );
@@ -3157,10 +3203,16 @@ class _RefDeviceCard {
                 Expanded(
                   // A device already running (backend feed or its own BLE
                   // telemetry rs=Play/Pause) can't be selected for a new run —
-                  // the Use toggle is replaced by a static "In use" chip.
+                  // the Use toggle is replaced by a static "In use" chip. A
+                  // device whose local engine went terminal but the backend
+                  // stop isn't confirmed gets a TAPPABLE "Stop pending" chip
+                  // instead, so it can be finished from the session screen.
                   child: w.isRunning
                       ? _inUseChip(p)
-                      : _useBtn(p, w.inUse, () => w.onToggleInUse(!w.inUse)),
+                      : w.isPendingStop
+                          ? _pendingStopChip(p, onTap: w.onRetryStop)
+                          : _useBtn(
+                              p, w.inUse, () => w.onToggleInUse(!w.inUse)),
                 ),
               ],
             ),
@@ -3286,6 +3338,43 @@ class _RefDeviceCard {
         ),
       );
 
+  /// Tappable chip shown in place of the Use toggle for a device whose local
+  /// engine went terminal but the backend hasn't confirmed the stop —
+  /// lightly adapted from [_inUseChip]: same pill shape, but tappable (opens
+  /// the session screen to finish the stop) with a refresh icon instead of
+  /// the lock, so it reads as actionable rather than locked.
+  Widget _pendingStopChip(RefPalette p, {required VoidCallback? onTap}) =>
+      Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              color: p.copper.withValues(alpha: 0.14),
+              border: Border.all(color: p.copper, width: 1.5),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.refresh_rounded, size: 13, color: p.copperInk),
+                const SizedBox(width: 5),
+                Text(
+                  'Stop pending',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: p.copperInk,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
   Widget _useBtn(RefPalette p, bool on, VoidCallback onTap) => Material(
         color: p.card,
         borderRadius: BorderRadius.circular(999),
@@ -3351,6 +3440,15 @@ class _SessionDeviceSetupCard extends StatelessWidget {
   /// This device is in a LIVE session — grey the whole card (protocol, Use,
   /// Advanced are locked) and keep only Disconnect active, glowing.
   final bool isRunning;
+
+  /// This device's local engine already went terminal, but the backend
+  /// hasn't confirmed the stop (see `pendingBackendStopDeviceIdsProvider`).
+  /// Mutually exclusive with [isRunning]. Unlike a running card, this one
+  /// stays fully opaque and offers a tappable "Stop pending" chip instead of
+  /// the Use toggle — tapping it opens the session screen so the
+  /// practitioner can finish the stop from there.
+  final bool isPendingStop;
+  final VoidCallback? onRetryStop;
   final String protocolTitle;
   final String protocolSubtitle;
   final bool showAdvanced;
@@ -3372,6 +3470,8 @@ class _SessionDeviceSetupCard extends StatelessWidget {
     required this.subtitle,
     required this.inUse,
     this.isRunning = false,
+    this.isPendingStop = false,
+    this.onRetryStop,
     required this.protocolTitle,
     required this.protocolSubtitle,
     required this.showAdvanced,
@@ -3578,7 +3678,51 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                               ],
                             ),
                           )
-                        : Container(
+                        : isPendingStop
+                            ? Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(999),
+                                  onTap: onRetryStop,
+                                  child: Container(
+                                    height: 34,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10),
+                                    decoration: BoxDecoration(
+                                      color: ThemeConstants.accent
+                                          .withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(999),
+                                      border: Border.all(
+                                        color: ThemeConstants.accent
+                                            .withValues(alpha: 0.4),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.refresh_rounded,
+                                            size: 15,
+                                            color: ThemeConstants.accent),
+                                        const SizedBox(width: 5),
+                                        Flexible(
+                                          child: Text(
+                                            'Stop pending',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                              color: ThemeConstants.accent,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Container(
                             height: 34,
                             padding: const EdgeInsets.only(left: 8, right: 2),
                             decoration: BoxDecoration(
@@ -4371,6 +4515,13 @@ class _AvailableDeviceRow extends StatelessWidget {
   /// Device is already running in a live session (this phone / web / another
   /// phone). Selection is blocked and an "In use" badge replaces the button.
   final bool isInUse;
+
+  /// The LOCAL engine already went terminal for this device, but the backend
+  /// hasn't confirmed the stop yet (see `backendStopUnresolved`). Mutually
+  /// exclusive with [isInUse] — this device has already left the busy set.
+  /// Unlike "In use", this stays fully opaque and tappable: tapping opens the
+  /// session screen so the practitioner can finish the stop from there.
+  final bool isPendingStop;
   final VoidCallback? onTap;
 
   const _AvailableDeviceRow({
@@ -4380,6 +4531,7 @@ class _AvailableDeviceRow extends StatelessWidget {
     required this.buttonLabel,
     this.isLoading = false,
     this.isInUse = false,
+    this.isPendingStop = false,
     required this.onTap,
   });
 
@@ -4460,6 +4612,36 @@ class _AvailableDeviceRow extends StatelessWidget {
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
                     color: ThemeConstants.error,
+                  ),
+                ),
+              )
+            else if (isPendingStop)
+              GestureDetector(
+                onTap: onTap,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: ThemeConstants.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: ThemeConstants.accent.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.refresh_rounded,
+                          size: 14, color: ThemeConstants.accent),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Stop pending',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: ThemeConstants.accent,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               )
