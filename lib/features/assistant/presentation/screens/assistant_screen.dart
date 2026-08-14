@@ -1062,6 +1062,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoveryAspect = a;
           _askSide();
         }),
+      // Web parity: `aspect` is a plain optional select (`RecoveryEngineFlow.jsx`
+      // — starts `""`, sent only `...(aspect ? {aspect} : {})`, not in the
+      // Resolve gate) — same "not stated is fine" shape as side.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryAspect = null;
+        _askSide();
+      }),
     ]);
   }
 
@@ -1086,6 +1094,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoverySide = s.$1;
           _afterSide();
         }),
+      // Web parity: `side` starts (and can stay) empty — "not stated" — the
+      // Resolve button is gated on `region` alone, never on side
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`). The movement
+      // test and referral steps already have their own skip path ("Too
+      // painful — skip the test", "No — just there"); this was the one step
+      // in between with no way through except picking one.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoverySide = null;
+        _afterSide();
+      }),
     ]);
   }
 
@@ -1124,12 +1143,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       // skipped and the point selected directly. "I ran this one" and "I could
       // not run any" are different answers, so skipping clears the chosen test.
       _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
-          _skipRom),
+          () => _skipRom('Too painful — skip the test')),
+      // A plain skip, separate from the clinical "too painful" signal above —
+      // sometimes the practitioner just doesn't want to run it, not that it
+      // hurts. Same outcome (no test recorded), different chat transcript.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () => _skipRom('Skip')),
     ]);
   }
 
-  Future<void> _skipRom() async {
-    _me('Too painful — skip the test');
+  Future<void> _skipRom(String spoken) async {
+    _me(spoken);
     _recoveryTestSkipped = true;
     _recoveryMovementTest = null;
     _answers['movementTest'] = 'skipped';
@@ -1224,6 +1247,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                       '${s.$1} with the main pads.');
           _askNerveReferral();
         }),
+      // Web parity: `referralSide` isn't in the Resolve gate either
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`) — it's
+      // defaulted for convenience there, not forced.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryReferralSide = null;
+        _askNerveReferral();
+      }),
     ]);
   }
 

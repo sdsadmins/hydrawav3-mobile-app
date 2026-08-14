@@ -387,12 +387,16 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   /// A deferred set has real pads, just not drawn this session. Tapping it
-  /// shows the full placement so the practitioner can see what's next in the
-  /// chain without it being on the model now.
+  /// focuses the 3D view on it too — same as an applied set's chip
+  /// (`_focus`) — so the practitioner can actually SEE what's next in the
+  /// chain, not just read its cue text.
   Widget _deferredChip(RefPalette p, PadSet set) {
     return HwPress(
       scale: 0.92,
-      onTap: () => _explainDeferred(set),
+      onTap: () {
+        _focus(widget.payload.markerIndexOf(set));
+        _explainDeferred(set);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -503,10 +507,12 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   /// A deferred set's own Sun/Moon, read straight off [PadSet] rather than
-  /// through [_data] — deferred sets aren't in `_data.sets` (that's
-  /// `appliedSets` only), so there is no resolved/view-aware pad to read here.
+  /// through [_data.padOf] — `_data.sets` is `appliedSets` only, and this
+  /// text should read the same whether or not the 3D resolver could place it
+  /// (`_data.deferredPads` backs the 3D focus triggered alongside this sheet,
+  /// but the cue text itself doesn't depend on that resolution succeeding).
   /// [Pad.cue] is used as-is: it's already "everything the practitioner needs
-  /// if 3D can't place it", which is exactly right for a set not drawn at all.
+  /// if 3D can't place it".
   void _explainDeferred(PadSet set) {
     final p = RefPalette.of(context);
     showModalBottomSheet<void>(
