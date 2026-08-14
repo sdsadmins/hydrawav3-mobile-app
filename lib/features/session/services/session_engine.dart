@@ -603,28 +603,46 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     return current > Duration.zero ? done + current : done;
   }
 
-  /// Track break entry/exit and bank the elapsed break time on exit. Runs at the
-  /// top of every tick so the hold is fresh before completion is evaluated.
+  /// Track STUCK entry/exit and bank the elapsed stuck time on exit. Runs at
+  /// the top of every tick so the hold is fresh before completion is evaluated.
   ///
-  /// The break condition mirrors [_computeBreakState]: past the current
-  /// segment's end, not on the final sub-protocol (nothing follows it), and the
-  /// device still nominally running. Exit happens when
-  /// [applyProtocolPlusSwitch] re-bases the segment end, which pushes
-  /// `devElapsed` back below it.
+  /// "Stuck" — not just "on break" — mirrors exactly the condition that
+  /// freezes the display and fires the pause mirror below
+  /// (`awaitingReconnectByDevice` in [_syncDisplayedTimerFromStopwatch],
+  /// recomputed independently here since this runs earlier in the same tick):
+  /// break fully run out (past `segEnd + delay`, not just past `segEnd`) AND
+  /// the device disconnected. A device that stays connected through its break,
+  /// or reconnects before the break even runs out, is never "stuck" and never
+  /// banks anything — its countdown just drains normally like a connected
+  /// break always has.
+  ///
+  /// This used to bank the WHOLE break (from `segEnd` — the moment the
+  /// PREVIOUS protocol ended — regardless of connection), which over-gave: the
+  /// display froze at the value from BEFORE the break even started, instead of
+  /// the value at the moment it actually got stuck, and the freeze mirror call
+  /// below (fired only once the device is actually "awaiting reconnect") had
+  /// already told the backend to pause well AFTER hold-banking had started —
+  /// so a chunk of "given back" time was for a normal break span the backend
+  /// itself never stopped counting through. Banking only the stuck span keeps
+  /// this in lockstep with the backend's own pause/resume window.
   void _updatePlusBreakHold() {
     for (final id in _plusDeviceIds()) {
       final segEnd = _plusSegmentEndByDevice[id];
       final status = state.deviceStatuses[id];
-      final onBreak = segEnd != null &&
+      final delay = state.protocolPlusDelayByDevice[id] ?? 0;
+      final breakExhaustedAt =
+          segEnd == null ? null : segEnd + Duration(seconds: delay);
+      final stuck = breakExhaustedAt != null &&
           status == SessionStatus.running &&
           !_isPlusDeviceOnFinalProtocol(id) &&
-          _deviceElapsed(id) >= segEnd;
+          _deviceElapsed(id) >= breakExhaustedAt &&
+          _plusDisconnectedIds.contains(id);
 
-      if (onBreak) {
-        // Bank the START at the predicted segment end, not at "now" — the tick
-        // that notices the break is up to 250ms late, and on a resumed app the
+      if (stuck) {
+        // Bank the START at the predicted exhaustion point, not at "now" — the
+        // tick that notices is up to 250ms late, and on a resumed app the
         // wall-clock reconcile can jump much further.
-        _plusBreakStartedAt.putIfAbsent(id, () => segEnd);
+        _plusBreakStartedAt.putIfAbsent(id, () => breakExhaustedAt);
       } else if (_plusBreakStartedAt.containsKey(id)) {
         final startedAt = _plusBreakStartedAt.remove(id)!;
         final spent = _deviceElapsed(id) - startedAt;
@@ -632,7 +650,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           _plusBreakHoldByDevice[id] =
               (_plusBreakHoldByDevice[id] ?? Duration.zero) + spent;
           appLogger.i(
-            'ProtocolPlus: $id break lasted ${spent.inSeconds}s — total break '
+            'ProtocolPlus: $id was stuck for ${spent.inSeconds}s — total break '
             'hold now ${_plusBreakHoldByDevice[id]!.inSeconds}s (countdown is '
             'extended by this so 00:00 matches the device)',
           );
@@ -1420,8 +1438,32 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.stop();
     }
     final overallStatus = _deriveOverallStatus(statuses);
+    // Snap THIS device's own timer to fully elapsed. The live card trusts the
+    // BACKEND clock right up until `deviceStatuses[id]` goes terminal
+    // (`useBackendTimer` gates on exactly that) — so a run that already hit
+    // 00:00 on the backend clock while the device kept physically running a
+    // few extra seconds (normal — the firmware's own finish isn't perfectly
+    // synced to the countdown) was displaying correctly right up to THIS
+    // moment. The instant `rs:stop` lands here, the card switches its source
+    // to this LOCAL `TimerState` — which, until now, was never actually
+    // finalized: whatever partial `elapsed` it happened to be sitting at (it
+    // isn't kept in lockstep second-by-second while the backend clock is the
+    // trusted source) is what got shown, e.g. a stale "00:49" flashing up
+    // right as the card hands off to the post-session sheet, instead of
+    // staying at 00:00 the way it had already been reading.
+    final deviceTimers = Map<String, TimerState>.from(state.deviceTimers);
+    final existingTimer = deviceTimers[deviceId];
+    if (existingTimer != null &&
+        existingTimer.elapsed < existingTimer.totalDuration) {
+      deviceTimers[deviceId] =
+          existingTimer.copyWith(elapsed: existingTimer.totalDuration);
+    }
     try {
-      state = state.copyWith(deviceStatuses: statuses, status: overallStatus);
+      state = state.copyWith(
+        deviceStatuses: statuses,
+        status: overallStatus,
+        deviceTimers: deviceTimers,
+      );
     } catch (_) {
       return; // notifier disposed
     }

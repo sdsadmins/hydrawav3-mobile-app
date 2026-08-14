@@ -1393,7 +1393,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     }
     if (templateId == null) return null;
-    final detail = ref.watch(protocolPlusDetailProvider(templateId)).asData?.value;
+    final detail =
+        ref.watch(protocolPlusDetailProvider(templateId)).asData?.value;
     if (detail == null || detail.protocols.length != sequence.length) {
       return null;
     }
@@ -2010,7 +2011,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           // read each sub-protocol's own duration from its detail (the exact
           // same source the launch flow uses), so a foreign Plus run gets the
           // same ring, not just the flat stage chips.
-          final resolved = _resolveForeignPlusDurations(plusName, deviceSequence);
+          final resolved =
+              _resolveForeignPlusDurations(plusName, deviceSequence);
           if (resolved != null) plusDurations = resolved;
         }
       }
@@ -3008,7 +3010,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         borderRadius: BorderRadius.circular(HwRadius.sm),
       ),
       child: Text(
-        '? Bluetooth link lost” the unit may keep running its current cycle '
+        '"Bluetooth link lost” the unit may keep running its current cycle '
         'on its own until it finishes or is powered off.',
         style: TextStyle(fontSize: 11, height: 1.45, color: pal.low),
       ),
@@ -3414,17 +3416,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // same way only flips true once a device is on break, disconnected, AND
     // its break-remaining has hit zero).
     final plusBreakExhausted = plusBreakRemaining <= 0;
-    final plusDisconnectedNotTerminal = plusOnBreak &&
-        plusBreakExhausted &&
-        !deviceTerminal &&
-        !bleConnected;
+    final plusDisconnectedNotTerminal =
+        plusOnBreak && plusBreakExhausted && !deviceTerminal && !bleConnected;
     // Drives only the VISUAL treatment (ring/label color + segment highlight);
     // identical to plusOnBreak in practice now, kept as a separate name so the
     // freeze-specific call sites below read clearly.
     final visualOnBreak = plusDisconnectedNotTerminal || plusOnBreak;
-    final effectiveBreakHoldSeconds = plusDisconnectedNotTerminal
-        ? plusBreakHoldSeconds
-        : 0;
+    final effectiveBreakHoldSeconds =
+        plusDisconnectedNotTerminal ? plusBreakHoldSeconds : 0;
     var displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds + effectiveBreakHoldSeconds)
         : timer.remaining;
@@ -3644,7 +3643,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         backendTotalSeconds > 0)
                     ? (1 -
                             liveRemaining.inSeconds /
-                                (backendTotalSeconds + effectiveBreakHoldSeconds))
+                                (backendTotalSeconds +
+                                    effectiveBreakHoldSeconds))
                         .clamp(0.0, 1.0)
                     : displayProgress;
                 final liveElapsed = displayTotal - liveRemaining;
@@ -3657,80 +3657,81 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 return Column(
                   children: [
                     SizedBox(
-                  // `.lc-ringwrap` is 190Ã—190.
-                  width: 190,
-                  height: 190,
-                  child: CustomPaint(
-                    painter: _TimerRing(
-                      progress: liveProgress,
-                      active: status == SessionStatus.running,
-                      trackColor: pal.ringTrack,
-                      accentColor: gc,
-                      // Drives the active arc's growth.
-                      elapsedSeconds:
-                          (displayTotal - liveRemaining).inSeconds.toDouble(),
-                      // A break knows its own progress exactly, from the engine's
-                      // countdown â€” more reliable than inferring it from the
-                      // whole-run clock, which a Plus run resets per sub-protocol.
-                      activeFill: (plusOnBreak &&
-                              plusDelaySeconds > 0 &&
-                              plusBreakRemaining >= 0)
-                          ? (1 - plusBreakRemaining / plusDelaySeconds)
-                              .clamp(0.0, 1.0)
-                          : null,
-                      segments: _plusRingSegments(
-                        plusSequence: plusSequence,
-                        plusDurations: plusDurations,
-                        breakSeconds: plusDelaySeconds,
-                      ),
-                      activeIndex: _plusRingActiveIndex(
-                        sequenceLength: plusSequence.length,
-                        plusIndex: plusIndex,
-                        onBreak: visualOnBreak,
-                      ),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // `.lc-time` â€” 50px/900, tabular, tight tracking. Paused
-                          // drops it to opacity .45 (app.js:1336); a disconnected
-                          // Plus device gets the same fade while it's frozen.
-                          Opacity(
-                            opacity: status == SessionStatus.paused ||
-                                    plusDisconnectedNotTerminal
-                                ? _TimerRing._pausedFade
-                                : 1,
-                            child: Text(
-                              liveRemaining.formatted,
-                              style: TextStyle(
-                                fontSize: 50,
-                                fontWeight: FontWeight.w900,
-                                height: 0.92,
-                                color: pal.ink,
-                                letterSpacing: -1.5,
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures()
-                                ],
-                              ),
-                            ),
+                      // `.lc-ringwrap` is 190Ã—190.
+                      width: 190,
+                      height: 190,
+                      child: CustomPaint(
+                        painter: _TimerRing(
+                          progress: liveProgress,
+                          active: status == SessionStatus.running,
+                          trackColor: pal.ringTrack,
+                          accentColor: gc,
+                          // Drives the active arc's growth.
+                          elapsedSeconds: (displayTotal - liveRemaining)
+                              .inSeconds
+                              .toDouble(),
+                          // A break knows its own progress exactly, from the engine's
+                          // countdown â€” more reliable than inferring it from the
+                          // whole-run clock, which a Plus run resets per sub-protocol.
+                          activeFill: (plusOnBreak &&
+                                  plusDelaySeconds > 0 &&
+                                  plusBreakRemaining >= 0)
+                              ? (1 - plusBreakRemaining / plusDelaySeconds)
+                                  .clamp(0.0, 1.0)
+                              : null,
+                          segments: _plusRingSegments(
+                            plusSequence: plusSequence,
+                            plusDurations: plusDurations,
+                            breakSeconds: plusDelaySeconds,
                           ),
-                          // `.lc-mod` â€” both pads 22px, 9px apart.
-                          const SizedBox(height: 8),
-                          Row(
+                          activeIndex: _plusRingActiveIndex(
+                            sequenceLength: plusSequence.length,
+                            plusIndex: plusIndex,
+                            onBreak: visualOnBreak,
+                          ),
+                        ),
+                        child: Center(
+                          child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.dark_mode_rounded,
-                                  size: 22, color: effectiveMoonColor),
-                              const SizedBox(width: 9),
-                              Icon(Icons.wb_sunny_rounded,
-                                  size: 22, color: effectiveSunColor),
+                              // `.lc-time` â€” 50px/900, tabular, tight tracking. Paused
+                              // drops it to opacity .45 (app.js:1336); a disconnected
+                              // Plus device gets the same fade while it's frozen.
+                              Opacity(
+                                opacity: status == SessionStatus.paused ||
+                                        plusDisconnectedNotTerminal
+                                    ? _TimerRing._pausedFade
+                                    : 1,
+                                child: Text(
+                                  liveRemaining.formatted,
+                                  style: TextStyle(
+                                    fontSize: 50,
+                                    fontWeight: FontWeight.w900,
+                                    height: 0.92,
+                                    color: pal.ink,
+                                    letterSpacing: -1.5,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures()
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              // `.lc-mod` â€” both pads 22px, 9px apart.
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.dark_mode_rounded,
+                                      size: 22, color: effectiveMoonColor),
+                                  const SizedBox(width: 9),
+                                  Icon(Icons.wb_sunny_rounded,
+                                      size: 22, color: effectiveSunColor),
+                                ],
+                              ),
                             ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
                     ),
                     // -- The UI handoff's `liveCard` block (app.js:1342-1352) --
                     // Active stage name, stage strip, progress bar,
