@@ -233,6 +233,10 @@ class ApiEndpoints {
   static String notificationsByUser(String userId) => 'notifications/$userId';
   static String notificationRead(String id) => 'notifications/read/$id';
 
+  // Warranty (Node) — per-device warranty status for the org. Relative (no
+  // leading slash) so it appends to the Node base URL.
+  static String warrantyByOrg(String orgId) => 'warranty/$orgId';
+
   // Clients
   static const String clients = '/clients';
   static String clientsByOrg(String orgId) => '/clients/$orgId';

@@ -20,6 +20,7 @@ import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../musics/presentation/providers/music_provider.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../../services/session_engine.dart';
+import '../widgets/smoothed_countdown.dart';
 import '../../services/protocol_plus_controller.dart';
 import '../../../protocols/presentation/providers/protocol_plus_detail_provider.dart';
 import '../../services/session_sync_service.dart';
@@ -3622,109 +3623,152 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             // No halo behind the ring either â€” this was a 26px blurred circle
             // shadow while running (the spec's `.lc-halo`). Removed together
             // with the arc glow so the ring reads as a clean, flat arc.
-            SizedBox(
-              // `.lc-ringwrap` is 190Ã—190.
-              width: 190,
-              height: 190,
-              child: CustomPaint(
-                painter: _TimerRing(
-                  progress: displayProgress,
-                  active: status == SessionStatus.running,
-                  trackColor: pal.ringTrack,
-                  accentColor: gc,
-                  // Drives the active arc's growth.
-                  elapsedSeconds:
-                      (displayTotal - displayRemaining).inSeconds.toDouble(),
-                  // A break knows its own progress exactly, from the engine's
-                  // countdown â€” more reliable than inferring it from the
-                  // whole-run clock, which a Plus run resets per sub-protocol.
-                  activeFill: (plusOnBreak &&
-                          plusDelaySeconds > 0 &&
-                          plusBreakRemaining >= 0)
-                      ? (1 - plusBreakRemaining / plusDelaySeconds)
-                          .clamp(0.0, 1.0)
-                      : null,
-                  segments: _plusRingSegments(
-                    plusSequence: plusSequence,
-                    plusDurations: plusDurations,
-                    breakSeconds: plusDelaySeconds,
-                  ),
-                  activeIndex: _plusRingActiveIndex(
-                    sequenceLength: plusSequence.length,
-                    plusIndex: plusIndex,
-                    onBreak: visualOnBreak,
-                  ),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // `.lc-time` â€” 50px/900, tabular, tight tracking. Paused
-                      // drops it to opacity .45 (app.js:1336); a disconnected
-                      // Plus device gets the same fade while it's frozen.
-                      Opacity(
-                        opacity: status == SessionStatus.paused ||
-                                plusDisconnectedNotTerminal
-                            ? _TimerRing._pausedFade
-                            : 1,
-                        child: Text(
-                          displayRemaining.formatted,
-                          style: TextStyle(
-                            fontSize: 50,
-                            fontWeight: FontWeight.w900,
-                            height: 0.92,
-                            color: pal.ink,
-                            letterSpacing: -1.5,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
+            //
+            // Wrapped in [SmoothedCountdown] so the ring + digits tick a
+            // steady 1s/s between backend polls instead of jumping by
+            // whatever the poll's own timing happens to land on. `frozen`
+            // covers every case where `displayRemaining` is ALREADY the
+            // right value to show as-is (paused, Plus break-hold, terminal,
+            // or the local-engine path, which is already smooth on its own)
+            // â€” none of those freeze mechanisms are touched here, this only
+            // decides whether to extrapolate BETWEEN the values they produce.
+            SmoothedCountdown(
+              remaining: displayRemaining,
+              frozen: deviceTerminal ||
+                  status == SessionStatus.paused ||
+                  plusDisconnectedNotTerminal ||
+                  !useBackendTimer,
+              builder: (context, liveRemaining) {
+                final liveProgress = (useBackendTimer &&
+                        backendTotalSeconds != null &&
+                        backendTotalSeconds > 0)
+                    ? (1 -
+                            liveRemaining.inSeconds /
+                                (backendTotalSeconds + effectiveBreakHoldSeconds))
+                        .clamp(0.0, 1.0)
+                    : displayProgress;
+                final liveElapsed = displayTotal - liveRemaining;
+                // No explicit crossAxisAlignment — Column defaults to center,
+                // matching the OUTER card Column this content used to sit
+                // directly inside (also unspecified/center). An earlier pass
+                // wrapped this block in its own Column and left it at
+                // `start`, which is what put the ring/bar/elapsed flush left
+                // instead of centered in the card.
+                return Column(
+                  children: [
+                    SizedBox(
+                  // `.lc-ringwrap` is 190Ã—190.
+                  width: 190,
+                  height: 190,
+                  child: CustomPaint(
+                    painter: _TimerRing(
+                      progress: liveProgress,
+                      active: status == SessionStatus.running,
+                      trackColor: pal.ringTrack,
+                      accentColor: gc,
+                      // Drives the active arc's growth.
+                      elapsedSeconds:
+                          (displayTotal - liveRemaining).inSeconds.toDouble(),
+                      // A break knows its own progress exactly, from the engine's
+                      // countdown â€” more reliable than inferring it from the
+                      // whole-run clock, which a Plus run resets per sub-protocol.
+                      activeFill: (plusOnBreak &&
+                              plusDelaySeconds > 0 &&
+                              plusBreakRemaining >= 0)
+                          ? (1 - plusBreakRemaining / plusDelaySeconds)
+                              .clamp(0.0, 1.0)
+                          : null,
+                      segments: _plusRingSegments(
+                        plusSequence: plusSequence,
+                        plusDurations: plusDurations,
+                        breakSeconds: plusDelaySeconds,
                       ),
-                      // `.lc-mod` â€” both pads 22px, 9px apart.
-                      const SizedBox(height: 8),
-                      Row(
+                      activeIndex: _plusRingActiveIndex(
+                        sequenceLength: plusSequence.length,
+                        plusIndex: plusIndex,
+                        onBreak: visualOnBreak,
+                      ),
+                    ),
+                    child: Center(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.dark_mode_rounded,
-                              size: 22, color: effectiveMoonColor),
-                          const SizedBox(width: 9),
-                          Icon(Icons.wb_sunny_rounded,
-                              size: 22, color: effectiveSunColor),
+                          // `.lc-time` â€” 50px/900, tabular, tight tracking. Paused
+                          // drops it to opacity .45 (app.js:1336); a disconnected
+                          // Plus device gets the same fade while it's frozen.
+                          Opacity(
+                            opacity: status == SessionStatus.paused ||
+                                    plusDisconnectedNotTerminal
+                                ? _TimerRing._pausedFade
+                                : 1,
+                            child: Text(
+                              liveRemaining.formatted,
+                              style: TextStyle(
+                                fontSize: 50,
+                                fontWeight: FontWeight.w900,
+                                height: 0.92,
+                                color: pal.ink,
+                                letterSpacing: -1.5,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
+                              ),
+                            ),
+                          ),
+                          // `.lc-mod` â€” both pads 22px, 9px apart.
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.dark_mode_rounded,
+                                  size: 22, color: effectiveMoonColor),
+                              const SizedBox(width: 9),
+                              Icon(Icons.wb_sunny_rounded,
+                                  size: 22, color: effectiveSunColor),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-            ),
-            // -- The UI handoff's `liveCard` block (app.js:1342-1352) ----------
-            // Active stage name, stage strip, progress bar, elapsed/total.
-            const SizedBox(height: 10),
-            _lcActiveName(
-              plusSequence: plusSequence,
-              plusIndex: plusIndex,
-              plusOnBreak: visualOnBreak,
-              protocolName: protocolName,
-              gc: gc,
-            ),
-            if (plusSequence.length > 1) ...[
-              const SizedBox(height: 8),
-              _lcSteps(
-                plusSequence: plusSequence,
-                plusDurations: plusDurations,
-                breakSeconds: plusDelaySeconds,
-                plusIndex: plusIndex,
-                plusOnBreak: visualOnBreak,
-                gc: gc,
-              ),
-              const SizedBox(height: 8),
-              _lcLegend(gc),
-            ],
-            const SizedBox(height: 10),
-            _lcBar(displayProgress, gc),
-            const SizedBox(height: 8),
-            _lcElapsed(
-              elapsed: displayTotal - displayRemaining,
-              total: displayTotal,
+                    ),
+                    // -- The UI handoff's `liveCard` block (app.js:1342-1352) --
+                    // Active stage name, stage strip, progress bar,
+                    // elapsed/total â€” all inside the same smoothed-value
+                    // scope as the ring/digits above, so the bar and the
+                    // "elapsed of total" text tick in lockstep with them
+                    // instead of only refreshing on the next backend poll.
+                    const SizedBox(height: 10),
+                    _lcActiveName(
+                      plusSequence: plusSequence,
+                      plusIndex: plusIndex,
+                      plusOnBreak: visualOnBreak,
+                      protocolName: protocolName,
+                      gc: gc,
+                    ),
+                    if (plusSequence.length > 1) ...[
+                      const SizedBox(height: 8),
+                      _lcSteps(
+                        plusSequence: plusSequence,
+                        plusDurations: plusDurations,
+                        breakSeconds: plusDelaySeconds,
+                        plusIndex: plusIndex,
+                        plusOnBreak: visualOnBreak,
+                        gc: gc,
+                      ),
+                      const SizedBox(height: 8),
+                      _lcLegend(gc),
+                    ],
+                    const SizedBox(height: 10),
+                    _lcBar(liveProgress, gc),
+                    const SizedBox(height: 8),
+                    _lcElapsed(
+                      elapsed: liveElapsed,
+                      total: displayTotal,
+                    ),
+                  ],
+                );
+              },
             ),
             if (totalCycles > 0 && padCycleIdx >= 0) ...[
               const SizedBox(height: 6),
