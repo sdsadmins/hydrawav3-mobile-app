@@ -93,9 +93,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   // chain reads identically in both clients.
 
   /// Muscle Mode: the target muscle IS the indicator — painted red (Sun) / blue (Moon) with NO disc
-  /// and NO badge on the body — and the un-targeted skin goes solid. Web parity:
-  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults ON, matching the web view.
-  bool _muscleMode = true;
+  /// and NO badge on the body — and the un-targeted skin goes solid.
+  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults OFF (mobile-only choice, not
+  /// web parity): the body opens transparent/x-ray so the pads read against the skeleton first.
+  bool _muscleMode = false;
 
   /// Off = the focused set only. On = the whole chain at once.
   bool _showAllSets = false;
@@ -787,13 +788,46 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   ///     changed colour depending on which set was selected and Sun/Moon stopped
   ///     being readable at a glance. Role colour (Sun red / Moon blue) is the
   ///     one thing on this model that must never move.
-  Widget _stage() {
-    final p = RefPalette.of(context);
+  /// The single source of truth for what the stage shows — markers, style and
+  /// every view flag. Both [_stage] (inline) and [_openFullscreen] (edge to
+  /// edge) build their `AnatomySceneView` from THIS, rather than each keeping
+  /// its own copy of the same field list — two copies is exactly how they drifted
+  /// before (the fullscreen one kept `padStyle: _muscleMode ? 'muscle' : 'badge'`
+  /// after the inline stage moved to always-`'muscle'`, so expanding with Muscle
+  /// Mode off silently swapped every pad from muscle-colour to badge style).
+  /// Only `key`, `controller`, `backgroundCss` and the callbacks vary per call
+  /// site — those stay as constructor arguments on top of this.
+  ({
+    List<Map<String, dynamic>> markers,
+    List<String> setRoles,
+    String padStyle,
+    bool transparentBody,
+    int? focusSetIndex,
+    bool dimUnselected,
+    List<Map<String, dynamic>> activeMarkers,
+    List<String> highlightMuscles,
+  }) _stageOptions() {
     final markers = _data.markers(
       focusSetIndex: _visibleSetIndex,
       mirrored: _mirrored,
       bilateral: _bilateral,
     );
+    return (
+      markers: markers,
+      setRoles: _data.sets.map((s) => s.role).toList(),
+      // Always the muscle-coloured style — the Muscle Mode toggle only flips
+      // transparentBody below now, not which style draws.
+      padStyle: 'muscle',
+      transparentBody: !_muscleMode,
+      focusSetIndex: _visibleSetIndex,
+      dimUnselected: !_showAllSets,
+      activeMarkers: _activeMarkers(markers),
+      highlightMuscles: _highlightMuscles,
+    );
+  }
+
+  Widget _stage() {
+    final p = RefPalette.of(context);
 
     void handleUnmapped(Set<String> keys) {
       if (!mounted || keys.isEmpty) return;
@@ -801,6 +835,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     }
 
     if (!kUseAnatomyScenePerformance) {
+      final markers = _data.markers(
+        focusSetIndex: _visibleSetIndex,
+        mirrored: _mirrored,
+        bilateral: _bilateral,
+      );
       return PadAnatomyView(
         markers: markers,
         view: _view,
@@ -813,23 +852,22 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       );
     }
 
+    final o = _stageOptions();
     return AnatomySceneView(
-      markers: markers,
+      markers: o.markers,
       source: MarkerSource.performance,
       // Drives the "Set N · Role" text on each arc.
-      setRoles: _data.sets.map((s) => s.role).toList(),
+      setRoles: o.setRoles,
       view: _view,
       showLabels: _showLabels,
-      // Always the muscle-coloured style — the Muscle Mode toggle only flips
-      // transparentBody below now, not which style draws.
-      padStyle: 'muscle',
-      transparentBody: !_muscleMode,
+      padStyle: o.padStyle,
+      transparentBody: o.transparentBody,
       colorBySet: false,
       showSetLinks: true,
-      focusSetIndex: _visibleSetIndex,
-      dimUnselected: !_showAllSets,
-      activeMarkers: _activeMarkers(markers),
-      highlightMuscles: _highlightMuscles,
+      focusSetIndex: o.focusSetIndex,
+      dimUnselected: o.dimUnselected,
+      activeMarkers: o.activeMarkers,
+      highlightMuscles: o.highlightMuscles,
       // Matching the card behind it rather than staying transparent lets the
       // WebView composite opaquely, which is a measurable win while orbiting.
       backgroundCss: _cssOf(p.card2),
@@ -868,36 +906,27 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   void _openFullscreen() {
-    final sets = _data.sets;
+    // Built from the exact same [_stageOptions] the inline stage just rendered
+    // from — not a second, hand-copied field list — so expanding can never show
+    // anything the collapsed stage didn't already show.
+    final o = _stageOptions();
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AnatomySceneFullscreenScreen(
-          markers: _data.markers(
-            focusSetIndex: _visibleSetIndex,
-            mirrored: _mirrored,
-            bilateral: _bilateral,
-          ),
+          markers: o.markers,
           source: MarkerSource.performance,
-          setRoles: sets.map((s) => s.role).toList(),
+          setRoles: o.setRoles,
           title: 'Pad placements',
           initialView: _view,
           initialShowLabels: _showLabels,
-          padStyle: _muscleMode ? 'muscle' : 'badge',
-          transparentBody: !_muscleMode,
+          padStyle: o.padStyle,
+          transparentBody: o.transparentBody,
           colorBySet: false,
           showSetLinks: true,
-          focusSetIndex: _visibleSetIndex,
-          dimUnselected: !_showAllSets,
-          // Same rule as the inline stage — full screen has to colour the pads
-          // the same way, or expanding one changes what it shows.
-          activeMarkers: _activeMarkers(
-            _data.markers(
-              focusSetIndex: _visibleSetIndex,
-              mirrored: _mirrored,
-              bilateral: _bilateral,
-            ),
-          ),
-          highlightMuscles: _highlightMuscles,
+          focusSetIndex: o.focusSetIndex,
+          dimUnselected: o.dimUnselected,
+          activeMarkers: o.activeMarkers,
+          highlightMuscles: o.highlightMuscles,
         ),
       ),
     );

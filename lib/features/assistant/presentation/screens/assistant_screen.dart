@@ -1143,19 +1143,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       // skipped and the point selected directly. "I ran this one" and "I could
       // not run any" are different answers, so skipping clears the chosen test.
       _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
-          () => _skipRom('Too painful — skip the test')),
-      // A plain skip, separate from the clinical "too painful" signal above —
-      // sometimes the practitioner just doesn't want to run it, not that it
-      // hurts. Same outcome (no test recorded), different chat transcript.
+          () => _skipRom('Too painful — skip the test', confirmed: true)),
+      // A plain skip is NOT the same signal as "too painful" — web parity:
+      // `RecoveryEngineFlow.jsx` only sends `movementTestSkipped` from a
+      // dedicated "I can't run a test" checkbox; simply moving past the chips
+      // without picking one leaves the field unsent, so the engine reads it
+      // as "untested" rather than "confirmed skipped". This chip used to send
+      // the same `movementTestSkipped: true` as "Too painful", which resolved
+      // a materially different (direct_select) placement than web showed for
+      // the same "didn't answer" journey.
       _ChipAction(Icons.arrow_forward_rounded, 'Skip', () => _skipRom('Skip')),
     ]);
   }
 
-  Future<void> _skipRom(String spoken) async {
+  Future<void> _skipRom(String spoken, {bool confirmed = false}) async {
     _me(spoken);
-    _recoveryTestSkipped = true;
+    _recoveryTestSkipped = confirmed;
     _recoveryMovementTest = null;
-    _answers['movementTest'] = 'skipped';
+    _answers['movementTest'] = confirmed ? 'skipped' : 'not answered';
     await _askReferral();
   }
 
