@@ -73,6 +73,12 @@ export const MAPPING = {
   vmo: { both: ["Vastus medialis muscle"] },
   "left vmo": { left: ["Vastus medialis muscle"] },
   "right vmo": { right: ["Vastus medialis muscle"] },
+  // The 4th quad part had no standalone key — only reachable via the
+  // `quadriceps` bundle below, unlike its three siblings above. Added so a pad
+  // naming it specifically resolves to just this mesh instead of the bundle.
+  "vastus intermedius": { both: ["Vastus intermedius muscle"] },
+  "left vastus intermedius": { left: ["Vastus intermedius muscle"] },
+  "right vastus intermedius": { right: ["Vastus intermedius muscle"] },
   quadriceps: {
     both: [
       "Rectus femoris muscle",
@@ -312,6 +318,17 @@ export const MAPPING = {
       "Clavicular part of deltoid muscle",
       "Scapular spinal part of deltoid muscle",
     ],
+  },
+  // Anterior/posterior deltoid, split from the shared "deltoid" entry above so
+  // a Sun-anterior + Moon-posterior pad pair resolve to DIFFERENT meshes
+  // instead of both claiming all 3 deltoid parts (Sun claiming first left
+  // nothing for Moon to highlight). Mesh names match Hydrawave3's
+  // AnatomyScene.jsx, which already keeps this split.
+  "anterior deltoid": {
+    both: ["Clavicular part of deltoid muscle"],
+  },
+  "posterior deltoid": {
+    both: ["Scapular spinal part of deltoid muscle"],
   },
   "rotator cuff": {
     both: [

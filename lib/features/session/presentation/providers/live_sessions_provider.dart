@@ -114,6 +114,16 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
   /// foreign-BLE). Survives refetches.
   final Set<String> _ownedSessionIds = <String>{};
 
+  /// `sessionId|deviceId` pairs we've already asked the backend to stop
+  /// because their countdown ran past zero without anyone closing them out.
+  /// ANY phone watching the org feed does this sweep — not just the one that
+  /// started the run — so a device doesn't stay locked "In use" forever when
+  /// the originating phone's app died, backgrounded, or dropped BLE before it
+  /// could post its own stop. One attempt per pair per poll cycle is plenty;
+  /// entries for sessions no longer in the feed are pruned each fetch so this
+  /// can't grow unbounded across a long-lived app session.
+  final Set<String> _overrunStopAttempted = <String>{};
+
   LiveSessionsNotifier(this._ref) : super(const []);
 
   /// Begin tracking live sessions for [orgId]: initial fetch + socket + poll.
@@ -227,6 +237,7 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
               !mapped.any((m) => m.id == s.id))
             s.id,
       ];
+      _sweepOverrunDevices(mapped);
       // Avoid needless rebuilds (nav badge / History list / timer screen all
       // watch this): when there's nothing live and nothing changed, don't emit.
       if (mapped.isEmpty && state.isEmpty && goneOwned.isEmpty) return;
@@ -248,6 +259,52 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       }
     }
     _retryUnresolvedOwnBackendStops();
+  }
+
+  /// Backend countdowns don't stop themselves: a device whose countdown hit
+  /// zero stays `running`/`paused` in the feed until some client explicitly
+  /// posts a stop for it. Normally that's the phone whose local engine drove
+  /// the run — but if that phone's app died, backgrounded, or dropped BLE
+  /// before the terminal transition fired, nobody ever does it, and the
+  /// device is locked "In use" forever with nothing else able to release it
+  /// (there's no local engine anywhere to retry the stop, unlike
+  /// [_retryUnresolvedOwnBackendStops] above, which only covers OWNED runs).
+  ///
+  /// So ANY phone watching the org feed posts the stop once it sees a device
+  /// run past zero — self-healing across phones, not reliant on the
+  /// originating one surviving. One attempt per `sessionId|deviceId` pair per
+  /// app session is enough; if the POST fails the next poll's still-overrun
+  /// device tries again next cycle since the key is pruned once the session
+  /// leaves the feed (below), not once the stop is attempted.
+  void _sweepOverrunDevices(List<ActiveSession> sessions) {
+    final stillLive = <String>{};
+    for (final session in sessions) {
+      for (final dev in session.liveDevices) {
+        final live = dev.status == SessionStatus.running ||
+            dev.status == SessionStatus.paused;
+        if (!live) continue;
+        final key = '${session.id}|${dev.deviceId}';
+        stillLive.add(key);
+        // `totalDurationSeconds > 0` guards a device whose timing just hasn't
+        // been populated yet (a fresh join reports 0/0 for a beat) from being
+        // read as "ran past zero" the instant it appears.
+        final overran = dev.totalDurationSeconds > 0 && dev.remainingSeconds <= 0;
+        if (!overran || !_overrunStopAttempted.add(key)) continue;
+        appLogger.w(
+          'LiveSessions: ${dev.deviceId} on ${session.id} ran past zero '
+          'without stopping — posting stop to release it',
+        );
+        unawaited(_ref
+            .read(sessionSyncServiceProvider)
+            .stopServerSessionDeviceByIdentity(
+              session.id,
+              dev.deviceId,
+              slotId: dev.slotId,
+              deviceName: dev.deviceName,
+            ));
+      }
+    }
+    _overrunStopAttempted.removeWhere((k) => !stillLive.contains(k));
   }
 
   /// Self-healing sweep for the "one failed backend-stop POST orphans the
