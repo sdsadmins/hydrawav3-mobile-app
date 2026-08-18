@@ -740,7 +740,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// [_plusSegmentEndByDevice] is our ESTIMATE of the firmware's runtime and the
   /// device stopwatch can drift across a suspend, so a unit that finishes a few
   /// seconds "early" by our clock must not be mistaken for a user stop.
-  static const Duration _plusBreakPreGrace = Duration(seconds: 15);
+  ///
+  /// Some cycle-based protocols (e.g. `cycle1`/`cycle5` edge cycles with short
+  /// per-rep durations) finish noticeably earlier than [Protocol.totalDurationSeconds]
+  /// predicts — observed ~24s early and reproducible — so this needs more
+  /// headroom than ordinary clock drift alone would require.
+  static const Duration _plusBreakPreGrace = Duration(minutes: 2);
 
   // There is deliberately NO post-break grace any more. It used to be 30s, after
   // which an idle device was called a user stop — see [_isInsidePlusBreakWindow]
