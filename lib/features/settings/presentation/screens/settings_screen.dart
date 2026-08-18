@@ -1116,13 +1116,12 @@ class _SupportSection extends ConsumerWidget {
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
           ),
-          // _MoreRow(
-          //   icon: HwIcons.note,
-          //   title: 'Share diagnostic logs',
-          //   subtitle: 'Coming soon',
-          //   trailing: const HwComingSoonBanner(compact: true),
-          //   onTap: null,
-          // ),
+          _MoreRow(
+            icon: HwIcons.note,
+            title: 'Export diagnostic logs',
+            subtitle: 'Share the on-device log file',
+            onTap: () => _shareDiagnosticLogs(context),
+          ),
         ]),
       ],
     );

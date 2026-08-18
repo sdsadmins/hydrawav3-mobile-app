@@ -423,6 +423,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             continue;
           }
           unawaited(_handleBleDisconnect(deviceId));
+          _notifyBriefDisconnect(deviceId);
           _armOutOfRangeWarning(deviceId);
         }
       },
@@ -1635,6 +1636,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     await ref
         .read(sessionEngineFamilyProvider(_engineKey).notifier)
         .handleBleDisconnect(deviceId);
+  }
+
+  /// Immediate, lightweight signal that a device just dropped — fires on
+  /// EVERY disconnect, however brief, unlike [_armOutOfRangeWarning]'s dialog
+  /// which only shows after [_kOutOfRangeGrace] and gets silently cancelled
+  /// the instant the device reconnects. A device that drops and reconnects
+  /// within that grace window (e.g. a different device's reconnect handshake
+  /// briefly disturbing this one's link, not a real walk-out-of-range) never
+  /// triggered the dialog at all, so the user had no idea anything happened —
+  /// right up until they noticed the device silently stopped treating. This
+  /// doesn't replace that dialog for a genuinely prolonged drop; it just
+  /// makes sure a short one is never completely silent.
+  void _notifyBriefDisconnect(String deviceId) {
+    if (!mounted || widget.transport != 'ble') return;
+    final ble = ref.read(bleRepositoryProvider);
+    if (ble.isReconnectSuppressed(deviceId)) return; // deliberate, not a fault
+    if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${_deviceLabel(deviceId)} lost connection — reconnecting…'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   /// Start the countdown to telling the user this unit is out of range. The

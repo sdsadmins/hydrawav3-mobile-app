@@ -20,6 +20,7 @@ import '../../../payments/presentation/widgets/token_balance_badge.dart';
 import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/pending_outcomes_provider.dart';
+import '../../../session/presentation/widgets/live_sessions_banner.dart';
 import '../../../session/presentation/widgets/smoothed_countdown.dart';
 import '../providers/hub_prefs_provider.dart';
 import '../providers/hub_stats_provider.dart';
@@ -463,7 +464,7 @@ class _ActiveDevicesCard extends StatelessWidget {
           title: s.protocolName,
           subtitle: s.deviceNames.values.join(', '),
           remaining: s.totalDurationSeconds - s.elapsedSeconds,
-          sessionId: s.id,
+          session: s,
           frozen: s.status == SessionStatus.paused,
         ));
         continue;
@@ -475,7 +476,7 @@ class _ActiveDevicesCard extends StatelessWidget {
               .where((e) => e != null && e.isNotEmpty)
               .join(' · '),
           remaining: d.remainingSeconds,
-          sessionId: s.id,
+          session: s,
           frozen: d.status == SessionStatus.paused,
         ));
       }
@@ -497,11 +498,11 @@ class _ActiveDevicesCard extends StatelessWidget {
   }
 }
 
-class _DeviceRow extends StatelessWidget {
+class _DeviceRow extends ConsumerWidget {
   final String title;
   final String subtitle;
   final int remaining;
-  final String sessionId;
+  final ActiveSession session;
 
   /// True while this device's session is paused — [SmoothedCountdown] shows
   /// [remaining] exactly as given rather than ticking it down locally, so a
@@ -512,12 +513,12 @@ class _DeviceRow extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.remaining,
-    required this.sessionId,
+    required this.session,
     required this.frozen,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     return HwRow(
       leading: Container(
@@ -542,7 +543,13 @@ class _DeviceRow extends StatelessWidget {
           tabular: true,
         ),
       ),
-      onTap: () => context.go(RoutePaths.devices),
+      // Straight into the live session (own engine if this phone owns it, the
+      // remote view otherwise) rather than the devices list — this row is a
+      // live run, and the fastest way to a manual Stop is to open it directly.
+      // Matters most for a run that outlived its timer (see the overrun
+      // watchdog in live_sessions_provider.dart): that self-heals on its own,
+      // but if it hasn't caught up yet this is the manual way out.
+      onTap: () => openLiveSession(context, ref, session),
     );
   }
 }

@@ -183,7 +183,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     if (_muscleMode) return const [];
     if (!_showMuscles) return const [];
     return _data
-        .padsFor(_visibleSetIndex)
+        .padsFor(_visibleSetIndex, includeDeferred: _showAllSets)
         .expand((p) => p.pad.targetMuscles)
         .toSet()
         .toList();
@@ -291,7 +291,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// step with the model. Notes describing a set that is not drawn is the mismatch this avoids.
   List<PadSet> _shownSets(List<PadSet> sets) {
     final index = _visibleSetIndex;
-    if (index == null) return sets;
+    if (index == null) {
+      return _showAllSets
+          ? [...sets, ...widget.payload.deferredSets]
+          : sets;
+    }
     return index >= 0 && index < sets.length ? [sets[index]] : sets;
   }
 
@@ -811,6 +815,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       focusSetIndex: _visibleSetIndex,
       mirrored: _mirrored,
       bilateral: _bilateral,
+      includeDeferred: _showAllSets,
     );
     return (
       markers: markers,
@@ -839,6 +844,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         focusSetIndex: _visibleSetIndex,
         mirrored: _mirrored,
         bilateral: _bilateral,
+        includeDeferred: _showAllSets,
       );
       return PadAnatomyView(
         markers: markers,

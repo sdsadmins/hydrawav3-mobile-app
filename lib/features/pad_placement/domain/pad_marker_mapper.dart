@@ -351,11 +351,15 @@ class PadPlacementViewData {
   /// [deferredPads] — the only way a deferred set's "later session" chip has
   /// anything to show when tapped, since deferred sets are excluded from the
   /// default (unfocused) view entirely.
-  List<ResolvedPad> padsFor(int? setIndex) {
-    if (setIndex == null) return pads;
+  List<ResolvedPad> padsFor(int? setIndex, {bool includeDeferred = false}) {
+    if (setIndex == null) {
+      return includeDeferred ? [...pads, ...deferredPads] : pads;
+    }
     final applied = pads.where((p) => p.setIndex == setIndex).toList();
     if (applied.isNotEmpty) return applied;
-    return deferredPads.where((p) => p.setIndex == setIndex).toList();
+    final deferred = deferredPads.where((p) => p.setIndex == setIndex).toList();
+    if (deferred.isNotEmpty) return deferred;
+    return const [];
   }
 
   /// Markers to hand to `window.renderPadPlacement`. Tier-3 pads are omitted on
@@ -371,9 +375,10 @@ class PadPlacementViewData {
     int? focusSetIndex,
     bool mirrored = false,
     bool bilateral = false,
+    bool includeDeferred = false,
   }) {
     final out = <Map<String, dynamic>>[];
-    for (final pad in padsFor(focusSetIndex)) {
+    for (final pad in padsFor(focusSetIndex, includeDeferred: includeDeferred)) {
       if (pad.isUnmapped) continue;
       final base = _effectiveSide(pad, bilateral ? false : mirrored);
       final sides = bilateral

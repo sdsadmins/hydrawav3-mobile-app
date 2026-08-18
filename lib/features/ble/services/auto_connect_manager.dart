@@ -38,8 +38,13 @@ class AutoConnectManager {
   StreamSubscription<Map<String, BleConnectionStatus>>? _connSub;
   Timer? _watchdog;
 
-  /// Cap simultaneous connects to avoid BLE radio thrash on some Android stacks.
-  static const int _maxConcurrent = 3;
+  /// Cap simultaneous connects to avoid BLE radio thrash on some Android
+  /// stacks. Serialized to 1: the phone has exactly one shared BLE radio, and
+  /// each reconnect's connect+MTU+priority+discovery burst can already starve
+  /// an unrelated already-connected device of its own radio time (see
+  /// [BleConnector.requestConnectionPriority]'s guard against this) — running
+  /// several of those bursts in parallel only compounds that risk.
+  static const int _maxConcurrent = 1;
 
   /// Connects we kicked off and are awaiting.
   final Set<String> _inFlight = <String>{};

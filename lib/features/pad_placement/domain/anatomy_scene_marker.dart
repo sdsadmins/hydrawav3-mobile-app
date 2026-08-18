@@ -48,7 +48,17 @@ List<Map<String, dynamic>> toAnatomySceneMarkers(
 }) {
   final out = <Map<String, dynamic>>[];
   for (var i = 0; i < markers.length; i++) {
-    out.add(_adapt(markers[i], i, source, setRoles));
+    final raw = markers[i];
+    final sides = _sidesFor(raw, source: source);
+    if (sides.length > 1) {
+      for (final side in sides) {
+        out.add(_adapt(raw, i, source, setRoles, sideOverride: side));
+      }
+      continue;
+    }
+    out.add(
+      _adapt(raw, i, source, setRoles, sideOverride: sides.isEmpty ? null : sides.first),
+    );
   }
   return out;
 }
@@ -57,14 +67,15 @@ Map<String, dynamic> _adapt(
   Map<String, dynamic> raw,
   int index,
   MarkerSource source,
-  List<String>? setRoles,
-) {
+  List<String>? setRoles, {
+  String? sideOverride,
+}) {
   // Start from a copy so anything we don't know about survives the trip.
   final m = Map<String, dynamic>.of(raw);
 
   final role = (raw['role']?.toString().toLowerCase() == 'moon') ? 'moon' : 'sun';
-  final setIndex = _asInt(raw['setIndex']) ?? 0;
-  final side = _sideOf(raw['side']);
+  final setIndex = _asInt(raw['setIndex'] ?? raw['set_index']) ?? 0;
+  final side = sideOverride ?? _sideOf(raw['side']);
   final muscles = _stringList(raw['targetMuscles'] ?? raw['muscles']);
   final cue = raw['label']?.toString() ?? raw['cue']?.toString() ?? '';
 
@@ -82,6 +93,14 @@ Map<String, dynamic> _adapt(
     m.remove('sideStrict');
   }
 
+  final sideZone = raw['zone']?.toString();
+  if (side != null &&
+      _isBilateralRequest(raw, source) &&
+      sideZone != null &&
+      sideZone.isNotEmpty) {
+    m['zone'] = '$sideZone-$side';
+  }
+
   // The written cue always lands on `cue`, never on `label` — see the note above.
   if (cue.isNotEmpty) m['cue'] = cue;
 
@@ -97,6 +116,25 @@ Map<String, dynamic> _adapt(
     m.remove('targetMuscles');
     _applyExactPlacement(m, raw, muscles);
     m['__mobileIndex'] = index;
+
+    // Bilateral recovery markers need a distinct zone per side so the viewer's
+    // markerIdentity (which includes zone) differentiates them. If the server
+    // provided a zone, append the side. If not (common case), create one.
+    // Without this, bilateral pads with the same role on the same plane collide
+    // as identical and the viewer's "first marker wins" mesh claiming produces
+    // all one color. Web parity: buildRecoveryMarkers.js line 373.
+    if (side != null && _isBilateralRequest(raw, source)) {
+      final serverZone = raw['zone']?.toString();
+      final padLabel = role == 'moon' ? 'moon' : 'sun';
+      if (serverZone != null && serverZone.isNotEmpty) {
+        // Server provided a zone — append side suffix to it (original behaviour).
+        m['zone'] = '$serverZone-$side';
+      } else {
+        // No server zone — create one like the web app does.
+        m['zone'] = 'recovery-$padLabel-$setIndex-$side';
+      }
+    }
+
     return m;
   }
 
@@ -107,9 +145,9 @@ Map<String, dynamic> _adapt(
   // `zone` to be the per-pad identity (it keys clustering and highlight
   // identity), so the landmark key moves to `landmarkZone` and `zone` becomes
   // the same synthetic key the web builds.
-  final rawZone = raw['zone']?.toString();
-  final stripped = _stripSideSuffix(rawZone);
-  final isBilateral = rawZone != null && stripped.suffix != null;
+  final baseZone = raw['zone']?.toString();
+  final stripped = _stripSideSuffix(baseZone);
+  final isBilateral = baseZone != null && stripped.suffix != null;
 
   if (stripped.key != null && stripped.key!.isNotEmpty) {
     m['landmarkZone'] = stripped.key;
@@ -199,6 +237,30 @@ String? _sideOf(Object? value) {
   if (s == 'left' || s == 'right') return s;
   return null;
 }
+
+List<String> _sidesFor(
+  Map<String, dynamic> raw, {
+  required MarkerSource source,
+}) {
+  final bool bilateral = source == MarkerSource.recovery &&
+      (raw['render_both_sides'] == true ||
+          const ['both', 'bilateral'].contains(
+            raw['side']?.toString().toLowerCase()));
+  final side = _sideOf(raw['side']);
+  if (bilateral) {
+    final base = side ?? 'right';
+    final opposite = base == 'right' ? 'left' : 'right';
+    return [base, opposite];
+  }
+  if (side != null) return [side];
+  return const [];
+}
+
+bool _isBilateralRequest(Map<String, dynamic> raw, MarkerSource source) =>
+    source == MarkerSource.recovery &&
+    (raw['render_both_sides'] == true ||
+        const ['both', 'bilateral'].contains(
+          raw['side']?.toString().toLowerCase()));
 
 int? _asInt(Object? value) {
   if (value is int) return value;

@@ -179,6 +179,57 @@ void main() {
       expect(data.viewFor(1), 'back');
       expect(data.viewFor(0), 'front');
     });
+
+    test('show all sets also includes deferred later-session pads', () {
+      final payload = PadSetPayload.fromJson({
+        'discipline': 'tennis',
+        'display_name': 'Tennis',
+        'role': 'Singles Player',
+        'chain': {'chain_id': 'c1', 'name': 'Serve chain'},
+        'sets': [
+          {
+            'set_index': 1,
+            'role': 'generator',
+            'sun': _pad(anchor: 'anterior_deltoid'),
+          },
+          {
+            'set_index': 2,
+            'role': 'transfer',
+            'sun': _pad(anchor: 'hamstring_origin'),
+            'deferred': true,
+          },
+        ],
+      });
+
+      final data = PadPlacementViewData.from(payload);
+      expect(payload.appliedSets, hasLength(1));
+      expect(payload.deferredSets, hasLength(1));
+      expect(data.markers(includeDeferred: true), hasLength(2));
+    });
+  });
+
+  group('helper utilities', () {
+    test('all-view data includes deferred pads when requested', () {
+      final payload = PadSetPayload.fromJson({
+        'discipline': 'tennis',
+        'display_name': 'Tennis',
+        'role': 'Singles Player',
+        'chain': {'chain_id': 'c1', 'name': 'Serve chain'},
+        'sets': [
+          {'set_index': 1, 'role': 'generator', 'sun': _pad(anchor: 'lat')},
+          {
+            'set_index': 2,
+            'role': 'transfer',
+            'sun': _pad(anchor: 'hamstring_origin'),
+            'deferred': true,
+          },
+        ],
+      });
+
+      final data = PadPlacementViewData.from(payload);
+      expect(data.padsFor(null), hasLength(1));
+      expect(data.padsFor(null, includeDeferred: true), hasLength(2));
+    });
   });
 
   group('catalogue parsing', () {

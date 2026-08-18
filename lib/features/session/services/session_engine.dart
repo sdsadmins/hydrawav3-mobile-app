@@ -475,8 +475,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             (name: plusName, durationSeconds: plusDuration);
         // Ordered sub-protocol names drive one question section each.
         final seq = state.protocolPlusSequenceByDevice[deviceId];
-        protocolNamesByDeviceId[deviceId] =
-            (seq != null && seq.isNotEmpty) ? List<String>.from(seq) : [plusName];
+        protocolNamesByDeviceId[deviceId] = (seq != null && seq.isNotEmpty)
+            ? List<String>.from(seq)
+            : [plusName];
       } else {
         final name = proto?.templateName ?? state.protocol!.templateName;
         final devTimer = state.deviceTimers[deviceId];
@@ -508,8 +509,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       deviceIds: List<String>.from(state.deviceIds),
       protocolByDeviceId: protocolByDeviceId,
       protocolNamesByDeviceId: protocolNamesByDeviceId,
-      questionsByProtocolName:
-          Map<String, List<ProtocolQuestion>>.from(state.questionsByProtocolName),
+      questionsByProtocolName: Map<String, List<ProtocolQuestion>>.from(
+          state.questionsByProtocolName),
       clientType: resolvedClientType,
       clientId: _clientId,
       discomfortBefore: null,
@@ -873,13 +874,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _backendStopInFlight = true;
     try {
       final ok = await _runWithBoundedRetry(
-        () => _ref.read(sessionSyncServiceProvider).stopServerSession(backendId),
+        () =>
+            _ref.read(sessionSyncServiceProvider).stopServerSession(backendId),
         'backend stop for $backendId',
       );
       if (ok) {
         _backendSessionEnded = true;
         _setBackendStopUnresolved(false);
-        appLogger.i('Session: backend session $backendId stopped (run terminal)');
+        appLogger
+            .i('Session: backend session $backendId stopped (run terminal)');
       } else {
         // Every bounded attempt failed — flag it instead of pretending the
         // backend was told. A later manual retry or the sweep can still succeed.
@@ -1239,11 +1242,28 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// streak; any play/pause frame breaks it.
   void _recordPlusRunState(String id, String normalized) {
     if (normalized == 'stop') {
+      final isNewStreak = !_plusStopSince.containsKey(id);
       _plusStopSince.putIfAbsent(id, DateTime.now);
+      if (isNewStreak) {
+        // DIAG-PLUS-LOG: everything the break-vs-user-stop classifier will use
+        // to judge this streak, captured at the moment it STARTS — so a
+        // misclassification a few seconds/minutes later (see
+        // `_evaluatePlusDeviceStops`) can be traced back to what the engine
+        // actually believed at t=0, not just the final verdict.
+        appLogger.i(
+          'ProtocolPlus: $id reported rs=stop — starting stop streak '
+          '(elapsed=${_deviceElapsed(id)}, segEnd=${_plusSegmentEndByDevice[id]}, '
+          'onFinal=${_isPlusDeviceOnFinalProtocol(id)}, '
+          'insideBreakWindowNow=${_isInsidePlusBreakWindow(id)}, '
+          'switchInFlight=${_plusSwitchInFlight.contains(id)}, '
+          'switchPendingExternal=${_plusSwitchPendingExternal.contains(id)}, '
+          'deviceStatus=${state.deviceStatuses[id]}, sessionStatus=${state.status})',
+        );
+      }
     } else if (normalized == 'play' || normalized == 'pause') {
       if (_plusStopSince.remove(id) != null) {
-        appLogger.i(
-            'ProtocolPlus: $id reported $normalized — stop streak cleared');
+        appLogger
+            .i('ProtocolPlus: $id reported $normalized — stop streak cleared');
       }
     }
   }
@@ -2207,7 +2227,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     Protocol newProtocol,
     int protocolIndex,
   ) async {
-
     // Reflect the new protocol per-device + advance the sequence indicator so
     // the live session screen highlights the now-active protocol chip.
     final updatedByDevice = Map<String, Protocol>.from(state.protocolByDevice)
@@ -3399,7 +3418,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         // Discounting it here is what stops the countdown draining across a
         // break (especially one stretched by a BLE outage) and reaching 00:00
         // while the unit still has protocols left to run.
-        final breakHold = _isPlusDevice(id) ? _plusBreakHold(id) : Duration.zero;
+        final breakHold =
+            _isPlusDevice(id) ? _plusBreakHold(id) : Duration.zero;
         final devElapsed = rawElapsed - breakHold;
         if (devElapsed >= timerState.totalDuration) {
           // Protocol Plus: a MID-sequence protocol finishing is NOT the end of

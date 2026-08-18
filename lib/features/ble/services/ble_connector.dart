@@ -307,13 +307,32 @@ class BleConnector {
       // (LINK_SUPERVISION_TIMEOUT), which blanks out telemetry until reconnect.
       // High priority keeps the link active so frames arrive reliably. Android
       // only; no-op / harmless on iOS.
-      try {
-        await device.requestConnectionPriority(
-          connectionPriorityRequest: ConnectionPriority.high,
+      //
+      // BUT: this is the single biggest radio-time grab in the whole connect
+      // sequence — it tells the OS to service THIS link far more often, on a
+      // phone with exactly one shared BLE radio. Requesting it while OTHER
+      // devices already hold a live connection can starve them of their own
+      // scheduled radio time past their supervision timeout, disconnecting a
+      // device that never actually left range — collateral damage from this
+      // device's reconnect, not a fault of its own. Only ask for HIGH when
+      // this is the only device around; otherwise stay at the OS default
+      // (balanced) so the radio has room to keep servicing everyone else.
+      final otherDevicesConnected =
+          _connectedDevices.keys.any((id) => id != deviceId);
+      if (!otherDevicesConnected) {
+        try {
+          await device.requestConnectionPriority(
+            connectionPriorityRequest: ConnectionPriority.high,
+          );
+          appLogger.i('BLE: requested HIGH connection priority for $deviceId');
+        } catch (e) {
+          appLogger.w('BLE: requestConnectionPriority failed for $deviceId: $e');
+        }
+      } else {
+        appLogger.i(
+          'BLE: skipping HIGH connection priority for $deviceId — other '
+          'devices are already connected, avoid starving their radio time',
         );
-        appLogger.i('BLE: requested HIGH connection priority for $deviceId');
-      } catch (e) {
-        appLogger.w('BLE: requestConnectionPriority failed for $deviceId: $e');
       }
 
       // Discover services

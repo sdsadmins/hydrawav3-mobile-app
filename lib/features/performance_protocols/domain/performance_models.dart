@@ -320,6 +320,10 @@ class PadSet {
             : null,
         padGeometry:
             (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
+        withheld: _bool(json['withheld'], false),
+        withheldReason: (json['withheld_reason'] ?? json['withheldReason'] ?? '')
+            .toString(),
+        deferred: _bool(json['deferred'], false),
         sessionPriority:
             _int(json['session_priority'] ?? json['sessionPriority'], 0),
       );
@@ -650,6 +654,15 @@ List<String> _strings(dynamic raw) {
 String? _blankToNull(dynamic v) {
   final s = v?.toString().trim();
   return (s == null || s.isEmpty || s == 'null') ? null : s;
+}
+
+bool _bool(dynamic v, bool fallback) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v?.toString().trim().toLowerCase();
+  if (s == 'true') return true;
+  if (s == 'false') return false;
+  return fallback;
 }
 
 int _int(dynamic v, int fallback) =>
