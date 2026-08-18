@@ -3390,22 +3390,30 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         ? true
         : ref.watch(bleDeviceStatusProvider(id)) ==
             BleConnectionStatus.connected;
-    // Freeze/tint ONLY applies once this Plus device is ACTUALLY on a break
-    // and disconnected â€” a mid-protocol drop must NOT freeze anything, since
+    // Freeze/tint ONLY applies once this Plus device is ACTUALLY on a break,
+    // disconnected, AND that break has fully counted down to its own end â€”
+    // a mid-protocol drop, or a disconnect that lands mid-break, must NOT
+    // freeze anything yet: the break countdown keeps running/visible all the
+    // way to 00:00 exactly as it would if the device were connected, since
     // the firmware keeps running its current sub-protocol on its own
-    // regardless of the app's BLE link (mirrors
-    // SessionEngine.protocolPlusAwaitingReconnectByDevice, which the same way
-    // only flips true once a device is on break AND disconnected).
-    final plusDisconnectedNotTerminal =
-        plusOnBreak && !deviceTerminal && !bleConnected;
+    // regardless of the app's BLE link. Only once the break itself is
+    // exhausted â€” the moment the next protocol would be sent but can't be
+    // while the device is out of range â€” does everything freeze/pause
+    // (mirrors SessionEngine.protocolPlusAwaitingReconnectByDevice, which the
+    // same way only flips true once a device is on break, disconnected, AND
+    // its break-remaining has hit zero).
+    final plusBreakExhausted = plusBreakRemaining <= 0;
+    final plusDisconnectedNotTerminal = plusOnBreak &&
+        plusBreakExhausted &&
+        !deviceTerminal &&
+        !bleConnected;
     // Drives only the VISUAL treatment (ring/label color + segment highlight);
     // identical to plusOnBreak in practice now, kept as a separate name so the
     // freeze-specific call sites below read clearly.
     final visualOnBreak = plusDisconnectedNotTerminal || plusOnBreak;
-    final effectiveBreakHoldSeconds =
-        plusOnBreak && !deviceTerminal && !bleConnected
-            ? plusBreakHoldSeconds
-            : 0;
+    final effectiveBreakHoldSeconds = plusDisconnectedNotTerminal
+        ? plusBreakHoldSeconds
+        : 0;
     var displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds + effectiveBreakHoldSeconds)
         : timer.remaining;

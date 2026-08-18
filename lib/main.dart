@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
+import 'core/services/local_notification_service.dart';
 import 'core/storage/preferences.dart';
 import 'core/utils/logger.dart'; // TEMP-LOG-EXPORT
 import 'features/auth/presentation/providers/auth_provider.dart';
@@ -26,6 +27,7 @@ void main() async {
   }
 
   await initFileLogging(); // TEMP-LOG-EXPORT: persist logs to a file for field debugging
+  await LocalNotificationService.instance.initialize();
 
   // Initialize SharedPreferences
   final sharedPrefs = await SharedPreferences.getInstance();

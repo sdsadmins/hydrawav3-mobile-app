@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/api_endpoints.dart';
+import '../../../core/services/local_notification_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/constants/ble_constants.dart';
@@ -99,10 +100,10 @@ class DeviceTelemetry {
     // version (parses numeric), medium, run state, user mode, and the p1/p2 pad
     // objects (surfaced via sun/moon instead).
     'fw', 'm', 'rs', 'lm', 'p1', 'p2', 'pe', 'pw', 'l', 'v',
-    // Hidden readout chips (per product): temperature (tp), current (c),
-    // voltage (av), and the unidentified td/tl — excluded so they don't render
-    // on the device card.
-    'tp', 'c', 'av', 'td', 'tl',
+    // tp (temperature), c (current), and av (voltage) are surfaced — web
+    // parity — via sensorReadouts below. Only the unidentified td/tl stay
+    // hidden from the generic readout row.
+    'td', 'tl',
   };
 
   /// Numeric "extra" readings (temperature/voltage/current/cycle progress/…)
@@ -1327,6 +1328,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   static const Set<String> _telemetryKeys = {
+    // The web displays these live device metrics. A metrics-only frame is still
+    // telemetry and must update the mobile session card.
+    'tp',
+    'c',
+    'av',
+    // Per-pad frames can arrive without a warning/fault/state field.
+    'p1',
+    'p2',
     'sun',
     'moon',
     'pad',
@@ -3321,12 +3330,17 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         _computeBreakState(updatedStatuses);
     final breakHoldByDevice = _breakHoldSecondsByDevice();
     // A Plus device is "awaiting reconnect" only once it's ACTUALLY sitting on
-    // a break AND disconnected — not for a mid-protocol drop, which the
-    // firmware rides out on its own. This is what freezes the card's display
+    // a break, disconnected, AND the break itself has fully counted down (i.e.
+    // we're at the moment the next protocol would be sent but can't be) — not
+    // for a mid-protocol drop, which the firmware rides out on its own, and
+    // not for the start of a break, which must be allowed to run to its own
+    // end before anything freezes. This is what freezes the card's display
     // and drives the global reconnect nag; see handleBleDisconnect.
     final awaitingReconnectByDevice = <String, bool>{
       for (final id in onBreakByDevice.keys)
-        if (onBreakByDevice[id] == true && _plusDisconnectedIds.contains(id))
+        if (onBreakByDevice[id] == true &&
+            _plusDisconnectedIds.contains(id) &&
+            (breakRemainingByDevice[id] ?? 0) <= 0)
           id: true,
     };
     _publishAwaitingReconnectIds(awaitingReconnectByDevice.keys.toSet());
@@ -3345,6 +3359,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final isAwaiting = awaitingReconnectByDevice[id] == true;
       if (isAwaiting && !wasAwaiting) {
         unawaited(_mirrorDeviceLifecycleToBackend(id, 'pause'));
+        // The break has fully run out and the device is still out of range —
+        // this is the exact moment the next protocol in the stack would be
+        // sent but can't be. Chime the phone once per disconnect episode so
+        // the user knows to bring the device back in range.
+        unawaited(_ref
+            .read(localNotificationServiceProvider)
+            .notifyDeviceOutOfRangeBeforeNextProtocol());
       } else if (!isAwaiting && wasAwaiting) {
         unawaited(_mirrorDeviceLifecycleToBackend(id, 'resume'));
       }

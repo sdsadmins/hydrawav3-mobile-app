@@ -5,8 +5,8 @@ import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../domain/performance_models.dart';
 
 /// The in-chat placement card — the UI spec's `.placecard` from
-/// `perfFlowPlacements()`: one coloured swatch per set with its placement label,
-/// the Sun/Moon side reminder, then **3D pad map** / **Go to Session**.
+/// `perfFlowPlacements()`: one coloured swatch per set with its placement
+/// label, then **3D pad map** / **Go to Session**.
 ///
 /// Both ways in render this same card: the catalogue chips and a chat turn whose
 /// `results` carried pads.
@@ -80,24 +80,9 @@ class PlacementCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (payload.sets[i].role.trim().isNotEmpty)
-                      Text(
-                        payload.sets[i].role.toLowerCase(),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.2,
-                          color: p.ink3,
-                        ),
-                      ),
                   ],
                 ),
               ),
-            const SizedBox(height: 2),
-            Text(
-              '☀ Sun = right · ☾ Moon = left',
-              style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
-            ),
             const SizedBox(height: HwSpace.s3),
             Row(
               children: [

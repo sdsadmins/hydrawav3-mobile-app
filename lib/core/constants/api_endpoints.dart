@@ -38,6 +38,12 @@ class ApiEndpoints {
   static const String proxyCreateUserUrl =
       'https://hydrawav3.app/proxy_create_user.php';
   static const String practitionerOnboarding = '/practitioners/onboarding';
+  // Subscription purchase happens on the web app only — Stripe isn't
+  // embedded in the mobile app (App Store/Play Store reject in-app purchase
+  // flows that route around their own IAP), so "Upgrade Now" opens this in
+  // an in-app browser instead (see subscription_screen.dart).
+  static const String practitionerSubscriptionUrl =
+      'https://hydrawav3.app/practitioner/subscription';
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -2726,6 +2727,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                               const SizedBox(height: 8),
                               TextFormField(
                                 controller: _serialCtrl,
+                                inputFormatters: [_MacInputFormatter()],
                                 style: TextStyle(
                                     color: ThemeConstants.textPrimary),
                                 decoration: InputDecoration(
@@ -3170,6 +3172,33 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Auto-inserts a `:` after every 2 hex digits while typing a MAC address,
+/// so the manual-entry field reads `AA:BB:...` without the user typing the
+/// separators themselves. Strips anything non-hex, uppercases, and caps at
+/// 12 hex digits (the 6 octets XX:XX:XX:XX:XX:XX).
+class _MacInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final stripped = newValue.text.toUpperCase().replaceAll(RegExp(r'[^0-9A-F]'), '');
+    final hex = stripped.substring(0, stripped.length.clamp(0, 12));
+
+    final buffer = StringBuffer();
+    for (var i = 0; i < hex.length; i++) {
+      if (i > 0 && i % 2 == 0) buffer.write(':');
+      buffer.write(hex[i]);
+    }
+    final formatted = buffer.toString();
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }

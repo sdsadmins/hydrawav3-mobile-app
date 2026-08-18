@@ -493,18 +493,42 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     await _ai('What are we prepping for?');
-    _showChips([
-      for (final d in disciplines.take(8))
-        _ChipAction(Icons.sports_rounded, d.label, () {
-          _me(d.label);
-          _perfDiscipline = d.discipline;
-          _perfDisciplineLabel = d.label;
-          _perfStartRole();
-        }, hot: _matchesClientSport(d)),
-      if (disciplines.length > 8)
-        _ChipAction(Icons.grid_view_rounded, 'Browse all disciplines…',
-            () => _showDisciplineSheet(disciplines)),
-    ]);
+    _showChips(_disciplineChipsFrom(disciplines));
+  }
+
+  /// The tap-flow's discipline picker (ballet, cricket, …), built once so a
+  /// typed message that the chat can't resolve to a sport gets the exact same
+  /// chip row instead of falling back to the generic home chips.
+  List<_ChipAction> _disciplineChipsFrom(List<Discipline> disciplines) => [
+        for (final d in disciplines.take(8))
+          _ChipAction(Icons.sports_rounded, d.label, () {
+            _me(d.label);
+            _pickDiscipline(d);
+          }, hot: _matchesClientSport(d)),
+        if (disciplines.length > 8)
+          _ChipAction(Icons.grid_view_rounded, 'Browse all disciplines…',
+              () => _showDisciplineSheet(disciplines)),
+      ];
+
+  /// Commit a discipline choice and start the position step. A role/subtype
+  /// picked under a PREVIOUS discipline (e.g. tapping "Pick another
+  /// discipline" after already reaching the chains step, or browsing the full
+  /// sheet) must not survive the switch — a stale role/subtype from the old
+  /// sport riding along in `_slots` is exactly what made the service answer
+  /// with an unresolved "which sport" reply instead of the new sport's chains.
+  void _pickDiscipline(Discipline d) {
+    _perfDiscipline = d.discipline;
+    _perfDisciplineLabel = d.label;
+    _perfRole = null;
+    _perfSubtype = null;
+    _slots = {
+      ..._slots,
+      'discipline': d.discipline,
+      'role': null,
+      'subtype': null,
+      'chainId': null,
+    };
+    _perfStartRole();
   }
 
   Future<void> _perfStartRole() async {
@@ -744,9 +768,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         onPick: (d) {
           Navigator.of(context).pop();
           _me(d.label);
-          _perfDiscipline = d.discipline;
-          _perfDisciplineLabel = d.label;
-          _perfStartRole();
+          _pickDiscipline(d);
         },
       ),
     );
@@ -1218,58 +1240,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// A nerve-referral pattern ALONE blocks nothing — it is a selection signal.
   /// Only the combination with weakness or a bladder/bowel change is the
   /// refer-out.
+  /// No longer asked — always defaults to No (no nerve-referral pattern, no
+  /// motor weakness, no bladder/bowel change) and moves straight to the
+  /// resolve, instead of prompting the user for it.
   Future<void> _askNerveReferral() async {
-    await _ai('Last one — is there a true nerve-referral pattern (shooting or '
-        'electric down the limb)?');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.check_circle_outline, 'No', () {
-        _me('No');
-        _nerveReferral = false;
-        _finishAssessment();
-      }, hot: true),
-      _ChipAction(Icons.bolt_outlined, 'Yes', () {
-        _me('Yes');
-        _nerveReferral = true;
-        _askRadicularDetail();
-      }),
-    ]);
-  }
-
-  Future<void> _askRadicularDetail() async {
-    await _ai('With any motor weakness, or a bladder or bowel change?');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.check_circle_outline, 'Neither', () {
-        _me('Neither');
-        _motorWeakness = false;
-        _bladderBowelChange = false;
-        _finishAssessment();
-      }, hot: true),
-      _ChipAction(Icons.warning_amber_rounded, 'Motor weakness', () {
-        _me('Motor weakness');
-        _motorWeakness = true;
-        _radicularBlock();
-      }),
-      _ChipAction(Icons.warning_amber_rounded, 'Bladder or bowel change', () {
-        _me('Bladder or bowel change');
-        _bladderBowelChange = true;
-        _radicularBlock();
-      }),
-    ]);
-  }
-
-  /// The client-side half of the radicular gate. The engine refuses this
-  /// combination too; stopping here means not asking it to.
-  Future<void> _radicularBlock() async {
-    await _ai('A nerve-referral pattern with weakness or a bladder or bowel '
-        'change needs professional assessment before any pad placement. No '
-        'placement is available for this session.');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.home_rounded, 'Start over', _startOver),
-      _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
-    ]);
+    _nerveReferral = false;
+    _motorWeakness = false;
+    _bladderBowelChange = false;
+    await _finishAssessment();
   }
 
   // ── The resolve ────────────────────────────────────────────────────────────
@@ -1576,7 +1554,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 
     setState(() {
       _typing = false;
-      if (reply.slots.isNotEmpty) _slots = reply.slots;
+      // MERGE, don't replace. When the typed text doesn't match anything the
+      // service resets ITS OWN session slots to null rather than echoing back
+      // what was already picked — blindly assigning `_slots = reply.slots` in
+      // that case wiped the discipline/role we already had (and the NEXT
+      // typed turn would then carry that emptied map to the service, making
+      // the loss stick). Keep every existing value; only overwrite a key when
+      // the reply actually resolved something non-empty for it, so an
+      // unmatched message is a no-op for state instead of a silent restart.
+      if (reply.slots.isNotEmpty) {
+        final merged = Map<String, dynamic>.from(_slots);
+        for (final entry in reply.slots.entries) {
+          final value = entry.value;
+          final isEmpty =
+              value == null || (value is String && value.trim().isEmpty);
+          if (!isEmpty) merged[entry.key] = value;
+        }
+        _slots = merged;
+      }
     });
     _adoptSlots(reply.slots);
 
@@ -1609,6 +1604,45 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       _perfSubtype = null;
       _slots = {..._slots, 'role': null, 'subtype': null, 'chainId': null};
       return _perfStartRole();
+    }
+
+    // The service couldn't resolve the typed text to a sport it has chains
+    // for. Its own reply text at this point tends to just echo/name the
+    // unmatched sport back in prose — not tappable, and redundant once the
+    // chip picker below repeats the same names as actual buttons — so skip
+    // printing it and ask the tap flow's own question instead, followed by
+    // the exact same discipline chips (ballet, cricket, …) rather than the
+    // generic home chips.
+    //
+    // The service can also fail to resolve mid-conversation, once a
+    // discipline (and maybe a role) is already picked — its own prose at that
+    // point (e.g. "…I have documented protocol for: Ballet, Basketball, …")
+    // reads as a reset back to square one. It isn't: we already know where
+    // the conversation left off, so re-show THAT step instead of printing the
+    // service's reply. Not gated on the reply's wording — any unresolved
+    // message mid-flow should return to the current step, since the wording
+    // the backend uses for "didn't understand that" isn't a stable contract.
+    // A role was already picked → the chains for it, unchanged (not the
+    // discipline picker); a discipline only → the position picker.
+    if (!reply.hasPads && reply.options.isEmpty) {
+      if (_perfRole != null) {
+        return _perfPickRole(_perfRole!);
+      }
+      if (_perfDiscipline != null) {
+        return _perfStartRole();
+      }
+    }
+    if (!reply.hasPads && reply.options.isEmpty && _perfDiscipline == null) {
+      try {
+        final disciplines = await ref.read(disciplinesProvider.future);
+        if (mounted && disciplines.isNotEmpty) {
+          await _ai('What are we prepping for?');
+          _showChips(_disciplineChipsFrom(disciplines));
+          return;
+        }
+      } catch (_) {
+        // Fall through to the service's own reply/home chips below.
+      }
     }
 
     if (reply.reply.trim().isNotEmpty) {
