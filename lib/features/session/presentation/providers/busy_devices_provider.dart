@@ -8,7 +8,7 @@ import 'live_sessions_provider.dart';
 /// ±1 from the registered hardware MAC, and the backend stores the firmware id
 /// while local device selection uses the advertised id — so a device is "busy"
 /// if any of these variants is in use.
-Iterable<String> _macVariants(String mac) {
+Iterable<String> macAddressVariants(String mac) {
   final norm = mac.trim().toUpperCase();
   final variants = <String>{norm};
   final parts = norm.split(':');
@@ -28,8 +28,16 @@ Iterable<String> _macVariants(String mac) {
   return variants;
 }
 
-/// Devices currently in use by any RUNNING/PAUSED session in the org-wide live
-/// feed (the backend is the source of truth — mirrors the web's busy logic).
+/// Devices currently in use by any RUNNING/PAUSED/COMPLETED session in the
+/// org-wide live feed (the backend is the source of truth — mirrors the
+/// web's busy logic).
+///
+/// `completed` counts as busy too, matching the Hub and Devices List screens
+/// (`_isVisibleStatus` in live_sessions_provider.dart / the parity fix in
+/// device_list_screen.dart): the backend session lingers until someone hits
+/// Stop All, so a device whose run just finished is NOT actually free yet.
+/// Excluding it here (as this provider used to) let a NEW session start on a
+/// device the other two screens were still showing as locked.
 ///
 /// Runs THIS phone has already finished are excluded: the engine POSTs the stop
 /// the instant a run goes terminal, but the feed is a 1s poll, so without this a
@@ -42,9 +50,10 @@ final busyDevicesProvider = Provider<Set<String>>((ref) {
   for (final session in liveSessions) {
     if (finished.contains(session.id)) continue;
     if (session.status == SessionStatus.running ||
-        session.status == SessionStatus.paused) {
+        session.status == SessionStatus.paused ||
+        session.status == SessionStatus.completed) {
       for (final id in session.deviceIds) {
-        busyDevices.addAll(_macVariants(id));
+        busyDevices.addAll(macAddressVariants(id));
       }
     }
   }
@@ -54,7 +63,7 @@ final busyDevicesProvider = Provider<Set<String>>((ref) {
 /// Whether a specific device (by local id) is busy in any live session.
 final isDeviceBusyProvider = Provider.family<bool, String>((ref, deviceId) {
   final busyDevices = ref.watch(busyDevicesProvider);
-  return _macVariants(deviceId).any(busyDevices.contains);
+  return macAddressVariants(deviceId).any(busyDevices.contains);
 });
 
 /// How many physical devices are running org-wide right now — the number the
@@ -75,7 +84,7 @@ final liveDeviceCountProvider = Provider<int>((ref) {
   final counted = <String>[];
 
   bool alreadyCounted(String norm) =>
-      counted.any((seen) => _macVariants(seen).contains(norm));
+      counted.any((seen) => macAddressVariants(seen).contains(norm));
 
   void add(String id) {
     final norm = id.trim().toUpperCase();
@@ -83,8 +92,11 @@ final liveDeviceCountProvider = Provider<int>((ref) {
     counted.add(norm);
   }
 
+  // `completed` counts too — see the note on [busyDevicesProvider] above.
   bool isLive(SessionStatus s) =>
-      s == SessionStatus.running || s == SessionStatus.paused;
+      s == SessionStatus.running ||
+      s == SessionStatus.paused ||
+      s == SessionStatus.completed;
 
   // The org-wide backend feed is the source of truth and already covers this
   // phone's own registered runs. Runs we've already finished don't occupy a

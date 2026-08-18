@@ -9,6 +9,42 @@ import '../../services/session_sync_service.dart';
 import '../providers/active_sessions_provider.dart';
 import '../providers/live_sessions_provider.dart';
 
+/// Open [local]'s live screen against its own engine (full control: Pause,
+/// Resume, per-device Stop, Stop All). [local] must come from
+/// [activeSessionsProvider] — a run this phone owns and still has an engine
+/// for. Split out of [openLiveSession] so a caller that already HAS the local
+/// session object (e.g. the devices list screen's "Stop pending" card) can
+/// jump straight here without going through the backend-feed session lookup.
+void openOwnLocalSession(BuildContext context, ActiveSession local) {
+  context.pushNamed(
+    RouteNames.session,
+    extra: {
+      'sessionId': local.id,
+      'protocolId': local.protocolId,
+      'deviceIds': local.deviceIds,
+      'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
+      'advancedSettings': {},
+      'advancedSettingsByDevice': {},
+      'delayedDeviceId': null,
+      'protocolByDeviceId': {},
+      'skipEngineBootstrap': false,
+      'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
+      // Restore Protocol Plus wiring so Stop cancels the server schedule.
+      //
+      // `protocolPlusId` is only meaningful when every bound device is running
+      // the SAME stack. Two Plus devices can run different templates, and
+      // taking `first` then labelled the whole run with one of them — so send
+      // it only when the bindings agree, and let the per-device state carry it
+      // otherwise. The bindings themselves are always passed in full; they are
+      // what Stop uses to cancel the right server schedule.
+      if (local.protocolPlusBindings.isNotEmpty) ...{
+        'protocolPlusBindings': local.protocolPlusBindings,
+        'protocolPlusId': _sharedPlusId(local.protocolPlusBindings),
+      },
+    },
+  );
+}
+
 /// Open [session]'s live screen. An OWN run whose local engine is still alive
 /// opens against that engine (full control); everything else — foreign WiFi,
 /// foreign BLE, or an own run whose engine is gone — opens the remote view,
@@ -27,33 +63,7 @@ void openLiveSession(BuildContext context, WidgetRef ref, ActiveSession session)
   }
 
   if (session.isOwn && isVisibleActiveSession(session) && local != null) {
-    context.pushNamed(
-      RouteNames.session,
-      extra: {
-        'sessionId': local.id,
-        'protocolId': local.protocolId,
-        'deviceIds': local.deviceIds,
-        'transport': local.transport == 'wifi' ? 'wifi' : 'ble',
-        'advancedSettings': {},
-        'advancedSettingsByDevice': {},
-        'delayedDeviceId': null,
-        'protocolByDeviceId': {},
-        'skipEngineBootstrap': false,
-        'sessionClockAnchorMs': local.createdAt.millisecondsSinceEpoch,
-        // Restore Protocol Plus wiring so Stop cancels the server schedule.
-        //
-        // `protocolPlusId` is only meaningful when every bound device is running
-        // the SAME stack. Two Plus devices can run different templates, and
-        // taking `first` then labelled the whole run with one of them — so send
-        // it only when the bindings agree, and let the per-device state carry it
-        // otherwise. The bindings themselves are always passed in full; they are
-        // what Stop uses to cancel the right server schedule.
-        if (local.protocolPlusBindings.isNotEmpty) ...{
-          'protocolPlusBindings': local.protocolPlusBindings,
-          'protocolPlusId': _sharedPlusId(local.protocolPlusBindings),
-        },
-      },
-    );
+    openOwnLocalSession(context, local);
     return;
   }
 

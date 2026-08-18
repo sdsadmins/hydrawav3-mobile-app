@@ -93,9 +93,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   // chain reads identically in both clients.
 
   /// Muscle Mode: the target muscle IS the indicator — painted red (Sun) / blue (Moon) with NO disc
-  /// and NO badge on the body — and the un-targeted skin goes solid. Web parity:
-  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults ON, matching the web view.
-  bool _muscleMode = true;
+  /// and NO badge on the body — and the un-targeted skin goes solid.
+  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults OFF (mobile-only choice, not
+  /// web parity): the body opens transparent/x-ray so the pads read against the skeleton first.
+  bool _muscleMode = false;
 
   /// Off = the focused set only. On = the whole chain at once.
   bool _showAllSets = false;
@@ -182,7 +183,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     if (_muscleMode) return const [];
     if (!_showMuscles) return const [];
     return _data
-        .padsFor(_visibleSetIndex)
+        .padsFor(_visibleSetIndex, includeDeferred: _showAllSets)
         .expand((p) => p.pad.targetMuscles)
         .toSet()
         .toList();
@@ -289,7 +290,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// step with the model. Notes describing a set that is not drawn is the mismatch this avoids.
   List<PadSet> _shownSets(List<PadSet> sets) {
     final index = _visibleSetIndex;
-    if (index == null) return sets;
+    if (index == null) {
+      return _showAllSets
+          ? [...sets, ...widget.payload.deferredSets]
+          : sets;
+    }
     return index >= 0 && index < sets.length ? [sets[index]] : sets;
   }
 
@@ -361,9 +366,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             selected: _focusSet == null,
             onTap: () => _focus(null),
           ),
-          for (var i = 0; i < sets.length; i++) ...[
+          for (final set in sets) ...[
             const SizedBox(width: HwSpace.s2),
-            _setChip(p, i, sets[i]),
+            _setChip(p, widget.payload.markerIndexOf(set), set),
           ],
           // Sets authored WITH pads but sequenced into a later session — the
           // role applies, it just isn't applied yet. Sits before the
@@ -386,12 +391,16 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   /// A deferred set has real pads, just not drawn this session. Tapping it
-  /// shows the full placement so the practitioner can see what's next in the
-  /// chain without it being on the model now.
+  /// focuses the 3D view on it too — same as an applied set's chip
+  /// (`_focus`) — so the practitioner can actually SEE what's next in the
+  /// chain, not just read its cue text.
   Widget _deferredChip(RefPalette p, PadSet set) {
     return HwPress(
       scale: 0.92,
-      onTap: () => _explainDeferred(set),
+      onTap: () {
+        _focus(widget.payload.markerIndexOf(set));
+        _explainDeferred(set);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -502,10 +511,12 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   /// A deferred set's own Sun/Moon, read straight off [PadSet] rather than
-  /// through [_data] — deferred sets aren't in `_data.sets` (that's
-  /// `appliedSets` only), so there is no resolved/view-aware pad to read here.
+  /// through [_data.padOf] — `_data.sets` is `appliedSets` only, and this
+  /// text should read the same whether or not the 3D resolver could place it
+  /// (`_data.deferredPads` backs the 3D focus triggered alongside this sheet,
+  /// but the cue text itself doesn't depend on that resolution succeeding).
   /// [Pad.cue] is used as-is: it's already "everything the practitioner needs
-  /// if 3D can't place it", which is exactly right for a set not drawn at all.
+  /// if 3D can't place it".
   void _explainDeferred(PadSet set) {
     final p = RefPalette.of(context);
     showModalBottomSheet<void>(
@@ -780,13 +791,47 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   ///     changed colour depending on which set was selected and Sun/Moon stopped
   ///     being readable at a glance. Role colour (Sun red / Moon blue) is the
   ///     one thing on this model that must never move.
-  Widget _stage() {
-    final p = RefPalette.of(context);
+  /// The single source of truth for what the stage shows — markers, style and
+  /// every view flag. Both [_stage] (inline) and [_openFullscreen] (edge to
+  /// edge) build their `AnatomySceneView` from THIS, rather than each keeping
+  /// its own copy of the same field list — two copies is exactly how they drifted
+  /// before (the fullscreen one kept `padStyle: _muscleMode ? 'muscle' : 'badge'`
+  /// after the inline stage moved to always-`'muscle'`, so expanding with Muscle
+  /// Mode off silently swapped every pad from muscle-colour to badge style).
+  /// Only `key`, `controller`, `backgroundCss` and the callbacks vary per call
+  /// site — those stay as constructor arguments on top of this.
+  ({
+    List<Map<String, dynamic>> markers,
+    List<String> setRoles,
+    String padStyle,
+    bool transparentBody,
+    int? focusSetIndex,
+    bool dimUnselected,
+    List<Map<String, dynamic>> activeMarkers,
+    List<String> highlightMuscles,
+  }) _stageOptions() {
     final markers = _data.markers(
       focusSetIndex: _visibleSetIndex,
       mirrored: _mirrored,
       bilateral: _bilateral,
+      includeDeferred: _showAllSets,
     );
+    return (
+      markers: markers,
+      setRoles: _data.sets.map((s) => s.role).toList(),
+      // Always the muscle-coloured style — the Muscle Mode toggle only flips
+      // transparentBody below now, not which style draws.
+      padStyle: 'muscle',
+      transparentBody: !_muscleMode,
+      focusSetIndex: _visibleSetIndex,
+      dimUnselected: !_showAllSets,
+      activeMarkers: _activeMarkers(markers),
+      highlightMuscles: _highlightMuscles,
+    );
+  }
+
+  Widget _stage() {
+    final p = RefPalette.of(context);
 
     void handleUnmapped(Set<String> keys) {
       if (!mounted || keys.isEmpty) return;
@@ -794,6 +839,12 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     }
 
     if (!kUseAnatomyScenePerformance) {
+      final markers = _data.markers(
+        focusSetIndex: _visibleSetIndex,
+        mirrored: _mirrored,
+        bilateral: _bilateral,
+        includeDeferred: _showAllSets,
+      );
       return PadAnatomyView(
         markers: markers,
         view: _view,
@@ -806,23 +857,22 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       );
     }
 
+    final o = _stageOptions();
     return AnatomySceneView(
-      markers: markers,
+      markers: o.markers,
       source: MarkerSource.performance,
       // Drives the "Set N · Role" text on each arc.
-      setRoles: _data.sets.map((s) => s.role).toList(),
+      setRoles: o.setRoles,
       view: _view,
       showLabels: _showLabels,
-      // Always the muscle-coloured style — the Muscle Mode toggle only flips
-      // transparentBody below now, not which style draws.
-      padStyle: 'muscle',
-      transparentBody: !_muscleMode,
+      padStyle: o.padStyle,
+      transparentBody: o.transparentBody,
       colorBySet: false,
       showSetLinks: true,
-      focusSetIndex: _visibleSetIndex,
-      dimUnselected: !_showAllSets,
-      activeMarkers: _activeMarkers(markers),
-      highlightMuscles: _highlightMuscles,
+      focusSetIndex: o.focusSetIndex,
+      dimUnselected: o.dimUnselected,
+      activeMarkers: o.activeMarkers,
+      highlightMuscles: o.highlightMuscles,
       // Matching the card behind it rather than staying transparent lets the
       // WebView composite opaquely, which is a measurable win while orbiting.
       backgroundCss: _cssOf(p.card2),
@@ -861,36 +911,27 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   void _openFullscreen() {
-    final sets = _data.sets;
+    // Built from the exact same [_stageOptions] the inline stage just rendered
+    // from — not a second, hand-copied field list — so expanding can never show
+    // anything the collapsed stage didn't already show.
+    final o = _stageOptions();
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AnatomySceneFullscreenScreen(
-          markers: _data.markers(
-            focusSetIndex: _visibleSetIndex,
-            mirrored: _mirrored,
-            bilateral: _bilateral,
-          ),
+          markers: o.markers,
           source: MarkerSource.performance,
-          setRoles: sets.map((s) => s.role).toList(),
+          setRoles: o.setRoles,
           title: 'Pad placements',
           initialView: _view,
           initialShowLabels: _showLabels,
-          padStyle: _muscleMode ? 'muscle' : 'badge',
-          transparentBody: !_muscleMode,
+          padStyle: o.padStyle,
+          transparentBody: o.transparentBody,
           colorBySet: false,
           showSetLinks: true,
-          focusSetIndex: _visibleSetIndex,
-          dimUnselected: !_showAllSets,
-          // Same rule as the inline stage — full screen has to colour the pads
-          // the same way, or expanding one changes what it shows.
-          activeMarkers: _activeMarkers(
-            _data.markers(
-              focusSetIndex: _visibleSetIndex,
-              mirrored: _mirrored,
-              bilateral: _bilateral,
-            ),
-          ),
-          highlightMuscles: _highlightMuscles,
+          focusSetIndex: o.focusSetIndex,
+          dimUnselected: o.dimUnselected,
+          activeMarkers: o.activeMarkers,
+          highlightMuscles: o.highlightMuscles,
         ),
       ),
     );
@@ -1043,7 +1084,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       spacing: HwSpace.s4,
       runSpacing: HwSpace.s1,
       children: [
-        for (var i = 0; i < sets.length; i++)
+        for (final set in sets)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1051,13 +1092,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 width: 10,
                 height: 10,
                 decoration: BoxDecoration(
-                  color: _setColor(p, i),
+                  color: _setColor(p, widget.payload.markerIndexOf(set)),
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),
               const SizedBox(width: HwSpace.s1 + 2),
               Text(
-                'Set ${widget.payload.displayIndexOf(sets[i])}',
+                'Set ${widget.payload.displayIndexOf(set)}',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w700,
@@ -1071,7 +1112,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   Widget _setNote(RefPalette p, PadSet set) {
-    final i = _data.sets.indexOf(set);
+    final i = widget.payload.markerIndexOf(set);
     final sun = _data.padOf(i, 'sun');
     final moon = _data.padOf(i, 'moon');
     final offView = [sun, moon]

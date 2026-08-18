@@ -70,12 +70,28 @@ class BleRunStateMonitor extends StateNotifier<Set<String>> {
   /// The device is running (play or paused) and its report is still fresh.
   bool isBusy(String deviceId) => state.contains(deviceId);
 
+  /// User-forced overrides from the "In use" chip's force-release action, for
+  /// a device whose firmware keeps reporting `rs: Play` (a stuck/stale run
+  /// state, e.g. after an abnormal stop) with no backend session behind it to
+  /// close out instead. Only entries STRICTLY OLDER than the override are
+  /// suppressed — a genuinely new Play frame after this moment still re-locks
+  /// the device, so this can't blind the app to a real future run, only the
+  /// stale one being cleared right now.
+  final Map<String, DateTime> _forceClearedAt = {};
+
+  void forceClear(String deviceId) {
+    _forceClearedAt[deviceId] = DateTime.now();
+    _recompute();
+  }
+
   void _recompute() {
     final now = DateTime.now();
     final busy = <String>{};
     // Drop stale entries as we go so the map doesn't grow unbounded.
     _byDevice.removeWhere((_, e) => now.difference(e.at) > _freshness);
     for (final entry in _byDevice.entries) {
+      final clearedAt = _forceClearedAt[entry.key];
+      if (clearedAt != null && !entry.value.at.isAfter(clearedAt)) continue;
       if (entry.value.state == BleRunState.play ||
           entry.value.state == BleRunState.pause) {
         busy.add(entry.key);

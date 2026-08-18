@@ -57,6 +57,7 @@ class RouteNames {
   static const String subscription = 'subscription';
   static const String notifications = 'notifications';
   static const String legal = 'legal';
+  static const String warranty = 'warranty';
 
   // Paid features
   static const String presets = 'presets';
@@ -113,6 +114,7 @@ class RoutePaths {
   static const String subscription = '/settings/subscription';
   static const String notifications = '/notifications';
   static const String legal = '/legal';
+  static const String warranty = '/warranty';
   static const String presets = '/presets';
   static const String chat = '/chat';
   static const String assistant = '/assistant';

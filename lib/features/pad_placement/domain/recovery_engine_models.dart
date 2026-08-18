@@ -861,6 +861,11 @@ class RecoveryPlacement {
 
     final finding = (assessment['finding'] ?? '').toString();
     final driverDescription = (driver['description'] ?? '').toString();
+    final referralTargetReported = _firstNonEmpty([
+          assessment['referral_target_reported'],
+          assessment['referral_target'],
+        ]) ??
+        '';
 
     return RecoveryPlacement(
       recoveryId: (point['recovery_id'] ?? '').toString(),
@@ -901,11 +906,7 @@ class RecoveryPlacement {
           (_map(data['presentation'])['aspect'] ?? '').toString(),
       tissueType: (driver['tissue_type'] ?? '').toString(),
       lymphaticRegion: (driver['lymphatic_region'] ?? '').toString(),
-      referralTargetReported: _firstNonEmpty([
-            assessment['referral_target_reported'],
-            assessment['referral_target'],
-          ]) ??
-          '',
+      referralTargetReported: referralTargetReported,
       thermalRecommendationOnly: thermal['recommendation_only'] == true,
       thermalAlternatives:
           _strings(thermal['alternatives']).map(_humanize).toList(),
@@ -952,6 +953,7 @@ class RecoveryPlacement {
         movementTest: _movementTestOf(assessment),
         thermalMode: (thermal['mode'] ?? '').toString(),
         mechanism: (intent['mechanism_rationale'] ?? '').toString(),
+        referralLabel: _humanize(referralTargetReported),
       ),
       raw: data,
     );
@@ -974,6 +976,7 @@ class RecoveryPlacement {
     required String movementTest,
     required String thermalMode,
     required String mechanism,
+    String referralLabel = '',
   }) {
     final chain = _map(data['chain']);
     final sets = <PadSet>[];
@@ -991,6 +994,7 @@ class RecoveryPlacement {
         final set = _setFrom(
           Map<String, dynamic>.from(row),
           regionLabel: regionLabel,
+          referralLabel: referralLabel,
           mechanism: mechanism,
           fallbackIndex: sets.length + 1,
         );
@@ -1010,6 +1014,7 @@ class RecoveryPlacement {
         final set = _setFrom(
           map,
           regionLabel: regionLabel,
+          referralLabel: referralLabel,
           mechanism: mechanism,
           fallbackIndex: sets.length + 1,
           deferred: true,
@@ -1029,11 +1034,15 @@ class RecoveryPlacement {
       if (sets.any((s) => s.setIndex == index)) {
         continue; // applied or deferred — not withheld
       }
+      final role = (row['set_role'] ?? '').toString();
       final note = (row['note'] ?? '').toString().trim();
+      final fallback = _isReferralRole(role) && referralLabel.isNotEmpty
+          ? referralLabel
+          : regionLabel;
       sets.add(PadSet(
         setIndex: index,
-        role: _humanize((row['set_role'] ?? '').toString()).toLowerCase(),
-        placementLabel: note.isEmpty ? regionLabel : note,
+        role: _humanize(role).toLowerCase(),
+        placementLabel: note.isEmpty ? fallback : note,
         withheld: true,
         withheldReason: (row['reason'] ?? '').toString().trim(),
       ));
@@ -1081,6 +1090,7 @@ class RecoveryPlacement {
     required String regionLabel,
     required String mechanism,
     required int fallbackIndex,
+    String referralLabel = '',
     bool deferred = false,
   }) {
     final pads = set['pads'];
@@ -1100,12 +1110,22 @@ class RecoveryPlacement {
     if (sun == null && moon == null) return null;
 
     final note = (set['note'] ?? '').toString().trim();
+    final setRole = (set['set_role'] ?? '').toString();
+    // A referral-link set is physically on a DIFFERENT area than the
+    // complaint (e.g. complaint "Low back", referral set on "Calf"). When the
+    // point authors no per-set `note` for it, falling back to the complaint's
+    // own [regionLabel] mislabels it — every set in the placement reads as
+    // "Low back" even though the drawn pads are correctly on the calf. Fall
+    // back to the referral's own target region instead, when known.
+    final fallbackLabel = _isReferralRole(setRole) && referralLabel.isNotEmpty
+        ? referralLabel
+        : regionLabel;
     return PadSet(
       setIndex: _int(set['set_index'], fallbackIndex),
       // `primary_site` → `primary site`, so the pad map's role line reads as
       // words. It uppercases whatever it is handed.
-      role: _humanize((set['set_role'] ?? '').toString()).toLowerCase(),
-      placementLabel: note.isEmpty ? regionLabel : note,
+      role: _humanize(setRole).toLowerCase(),
+      placementLabel: note.isEmpty ? fallbackLabel : note,
       // The authored reasoning, which is what the card's "Why this
       // placement" expander is for. Set-level note first when there is one:
       // it is about THIS set, where the mechanism is about the whole point.
@@ -1117,6 +1137,13 @@ class RecoveryPlacement {
       sessionPriority: _int(set['session_priority'], 0),
     );
   }
+
+  /// `referral_link` (and any authored variant containing "referral") is a set
+  /// physically located at the referral TARGET, not the complaint site — the
+  /// one role whose label should fall back to the target region, not the
+  /// region the whole placement is keyed under.
+  static bool _isReferralRole(String setRole) =>
+      setRole.toLowerCase().contains('referral');
 
   static Map<String, dynamic> _normalisePad(Map<String, dynamic> pad) => {
         ...pad,

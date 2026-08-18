@@ -1229,6 +1229,13 @@ function setMeshMaterialHighlight(mesh, active, marker, opts, strong) {
     // Set identity is carried by the labelled arc, the chips and the legend —
     // three places that are free to use the palette because none of them is the
     // body. `colorBySet` and `perfSetColor` remain live for the arcs.
+    //
+    // Exactly two colours, never a third: a mesh belongs to whichever role
+    // claimed it first (see `setActiveAnatomyMeshHighlight`) — no blending.
+    // A mesh a chain's Sun and Moon both name (a shared-muscle "sandwich" pad
+    // geometry) is a DATA/mapping question — see `mapping.js`'s
+    // "lateral/medial head of gastrocnemius" entries — not something this
+    // renderer should paper over with a mixed colour.
     color = marker?.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
     emissive = marker?.role === "sun" ? PERF_SUN_EMISSIVE : PERF_MOON_EMISSIVE;
     intensity = strong ? 0.72 : 0.5;
@@ -1275,6 +1282,13 @@ let dimmedMeshCount = 0;
 function setActiveAnatomyMeshHighlight(markerList, opts, strong, dim) {
   if (!bodyRoot) return;
   const list = Array.isArray(markerList) ? markerList.filter(Boolean) : [];
+  // First marker in list order to name a mesh owns it — exactly web's
+  // algorithm (`AnatomyScene.jsx`'s `setActiveAnatomyMeshHighlight`), no
+  // special-casing. A mesh two markers of the same set both name (a
+  // shared-muscle "sandwich" pad geometry, e.g. calf) is a mapping/data
+  // question — see `mapping.js`'s "lateral/medial head of gastrocnemius"
+  // entries, which give each pad its OWN single mesh so this collision
+  // shouldn't arise for a properly-authored pair in the first place.
   const meshToMarker = new Map();
   for (const marker of list) {
     for (const mesh of targetMuscleMeshes(marker).slice(0, 6)) {

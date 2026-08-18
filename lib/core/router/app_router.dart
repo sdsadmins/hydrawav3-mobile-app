@@ -33,6 +33,7 @@ import '../../features/session/presentation/screens/session_after_screen.dart';
 import '../../features/session/presentation/screens/session_setup_screen.dart';
 import '../../features/ai_hub/presentation/screens/ai_hub_screen.dart';
 import '../../features/notifications/presentation/screens/notifications_screen.dart';
+import '../../features/warranty/presentation/screens/warranty_screen.dart';
 import '../../features/settings/presentation/screens/legal_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/settings/presentation/screens/subscription_screen.dart';
@@ -377,6 +378,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: RoutePaths.legal,
           name: RouteNames.legal,
           builder: (c, s) => const LegalScreen()),
+      GoRoute(
+          path: RoutePaths.warranty,
+          name: RouteNames.warranty,
+          builder: (c, s) => const WarrantyScreen()),
       GoRoute(
           path: RoutePaths.presets,
           name: RouteNames.presets,

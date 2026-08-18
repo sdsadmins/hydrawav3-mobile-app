@@ -20,6 +20,8 @@ import '../../../payments/presentation/widgets/token_balance_badge.dart';
 import '../../../session/domain/active_session_model.dart';
 import '../../../session/presentation/providers/live_sessions_provider.dart';
 import '../../../session/presentation/providers/pending_outcomes_provider.dart';
+import '../../../session/presentation/widgets/live_sessions_banner.dart';
+import '../../../session/presentation/widgets/smoothed_countdown.dart';
 import '../providers/hub_prefs_provider.dart';
 import '../providers/hub_stats_provider.dart';
 import '../widgets/hub_modules.dart';
@@ -462,7 +464,8 @@ class _ActiveDevicesCard extends StatelessWidget {
           title: s.protocolName,
           subtitle: s.deviceNames.values.join(', '),
           remaining: s.totalDurationSeconds - s.elapsedSeconds,
-          sessionId: s.id,
+          session: s,
+          frozen: s.status == SessionStatus.paused,
         ));
         continue;
       }
@@ -473,7 +476,8 @@ class _ActiveDevicesCard extends StatelessWidget {
               .where((e) => e != null && e.isNotEmpty)
               .join(' · '),
           remaining: d.remainingSeconds,
-          sessionId: s.id,
+          session: s,
+          frozen: d.status == SessionStatus.paused,
         ));
       }
     }
@@ -494,52 +498,27 @@ class _ActiveDevicesCard extends StatelessWidget {
   }
 }
 
-class _DeviceRow extends StatefulWidget {
+class _DeviceRow extends ConsumerWidget {
   final String title;
   final String subtitle;
   final int remaining;
-  final String sessionId;
+  final ActiveSession session;
+
+  /// True while this device's session is paused — [SmoothedCountdown] shows
+  /// [remaining] exactly as given rather than ticking it down locally, so a
+  /// paused row's countdown doesn't keep advancing on this screen either.
+  final bool frozen;
 
   const _DeviceRow({
     required this.title,
     required this.subtitle,
     required this.remaining,
-    required this.sessionId,
+    required this.session,
+    required this.frozen,
   });
 
   @override
-  State<_DeviceRow> createState() => _DeviceRowState();
-}
-
-class _DeviceRowState extends State<_DeviceRow> {
-  late int _remaining = widget.remaining;
-  Timer? _tick;
-
-  @override
-  void initState() {
-    super.initState();
-    // The backend feed refreshes on its own cadence; ticking locally in
-    // between keeps the countdown continuous rather than jumping in steps.
-    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      if (_remaining > 0) setState(() => _remaining--);
-    });
-  }
-
-  @override
-  void didUpdateWidget(_DeviceRow old) {
-    super.didUpdateWidget(old);
-    if (old.remaining != widget.remaining) _remaining = widget.remaining;
-  }
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     return HwRow(
       leading: Container(
@@ -553,14 +532,24 @@ class _DeviceRowState extends State<_DeviceRow> {
           child: Text('〰', style: TextStyle(color: Colors.white)),
         ),
       ),
-      title: widget.title,
-      subtitle: widget.subtitle.isEmpty ? null : widget.subtitle,
-      trailing: HwPill(
-        _ActiveDevicesCard._mmss(_remaining),
-        tone: HwPillTone.copper,
-        tabular: true,
+      title: title,
+      subtitle: subtitle.isEmpty ? null : subtitle,
+      trailing: SmoothedCountdown(
+        remaining: Duration(seconds: remaining < 0 ? 0 : remaining),
+        frozen: frozen,
+        builder: (context, liveRemaining) => HwPill(
+          _ActiveDevicesCard._mmss(liveRemaining.inSeconds),
+          tone: HwPillTone.copper,
+          tabular: true,
+        ),
       ),
-      onTap: () => context.go(RoutePaths.devices),
+      // Straight into the live session (own engine if this phone owns it, the
+      // remote view otherwise) rather than the devices list — this row is a
+      // live run, and the fastest way to a manual Stop is to open it directly.
+      // Matters most for a run that outlived its timer (see the overrun
+      // watchdog in live_sessions_provider.dart): that self-heals on its own,
+      // but if it hasn't caught up yet this is the manual way out.
+      onTap: () => openLiveSession(context, ref, session),
     );
   }
 }

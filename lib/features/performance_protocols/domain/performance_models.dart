@@ -320,6 +320,10 @@ class PadSet {
             : null,
         padGeometry:
             (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
+        withheld: _bool(json['withheld'], false),
+        withheldReason: (json['withheld_reason'] ?? json['withheldReason'] ?? '')
+            .toString(),
+        deferred: _bool(json['deferred'], false),
         sessionPriority:
             _int(json['session_priority'] ?? json['sessionPriority'], 0),
       );
@@ -451,6 +455,15 @@ class PadSetPayload {
   /// stay 0-based everywhere except the label.
   int displayIndexOf(PadSet set) =>
       isRecovery ? set.setIndex : set.setIndex + 1;
+
+  /// The 0-based index [set]'s MARKERS use — the same number that keys the
+  /// palette (`setColorFor`), the 3D stage's per-set focus/arcs, and the pad
+  /// lookup (`PadPlacementViewData.padOf`). Same normalization as
+  /// [displayIndexOf], minus the +1 for the label. Callers that need to name
+  /// or focus a set by its own identity (not its position in a filtered
+  /// list — some sets can be withheld/deferred) should use this instead of a
+  /// loop index, or the set's number and its markers/colour disagree.
+  int markerIndexOf(PadSet set) => isRecovery ? set.setIndex - 1 : set.setIndex;
 
   /// [PadSet.title] with the printable set number.
   String titleOf(PadSet set) => set.placementLabel.trim().isEmpty
@@ -641,6 +654,15 @@ List<String> _strings(dynamic raw) {
 String? _blankToNull(dynamic v) {
   final s = v?.toString().trim();
   return (s == null || s.isEmpty || s == 'null') ? null : s;
+}
+
+bool _bool(dynamic v, bool fallback) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v?.toString().trim().toLowerCase();
+  if (s == 'true') return true;
+  if (s == 'false') return false;
+  return fallback;
 }
 
 int _int(dynamic v, int fallback) =>

@@ -281,9 +281,50 @@ class PadPlacementViewData {
   final PadSetPayload payload;
   final List<ResolvedPad> pads;
 
-  const PadPlacementViewData({required this.payload, required this.pads});
+  /// Sets authored WITH real pad geometry but sequenced into a LATER session
+  /// (`PadSet.deferred`) — resolved the same way as [pads], just kept
+  /// separate so they don't show up in the default "All areas" view. Only
+  /// surfaced when a practitioner explicitly focuses one (the "later
+  /// session" chip), via [padsFor]'s fallback below.
+  final List<ResolvedPad> deferredPads;
 
-  /// APPLIED sets only.
+  const PadPlacementViewData({
+    required this.payload,
+    required this.pads,
+    this.deferredPads = const [],
+  });
+
+  /// Resolves [sets] into [ResolvedPad]s the same way regardless of which
+  /// bucket (applied vs. deferred) they came from — the geometry resolution
+  /// doesn't care why a set isn't drawn by default, only [padsFor] does.
+  static List<ResolvedPad> _resolve(PadSetPayload payload, List<PadSet> sets) {
+    final pads = <ResolvedPad>[];
+    for (final set in sets) {
+      // The set's OWN index, not its position in this (possibly filtered,
+      // e.g. sets 2-3 withheld/deferred) list — see
+      // `PadSetPayload.markerIndexOf`. Using loop position here instead used
+      // to relabel "Set 4" as "Set 2" whenever an earlier set was filtered
+      // out, since the SAME number drives the marker's arc label, its
+      // palette colour, and the viewer's set-focus — all wrong together, not
+      // just the label.
+      final markerSetIndex = payload.markerIndexOf(set);
+      for (final entry in [('sun', set.sun), ('moon', set.moon)]) {
+        final pad = entry.$2;
+        if (pad == null) continue;
+        pads.add(ResolvedPad(
+          pad: pad,
+          role: entry.$1,
+          setIndex: markerSetIndex,
+          setTitle: set.title,
+          zone: resolveZone(pad),
+          side: pad.sideKey ?? _sideFromPlane(pad.plane),
+        ));
+      }
+    }
+    return pads;
+  }
+
+  /// APPLIED sets drive [pads] (what the default "All areas" view draws).
   ///
   /// A recovery payload also carries the sets the engine authored but held back
   /// this session (`chain.conditional.withheld_sets`). Those have no pads by
@@ -291,34 +332,35 @@ class PadPlacementViewData {
   /// `setIndex` — which is what the markers, the set colours and the focus chips
   /// all key off — and put a pad-less entry in the legend. The pad map lists
   /// them separately, from `payload.withheldSets`.
+  ///
+  /// Deferred sets (`payload.deferredSets`) DO carry real pad geometry — just
+  /// not applied this session — so they're resolved too, into [deferredPads],
+  /// so the "later session" chip has something to focus on the 3D view.
   factory PadPlacementViewData.from(PadSetPayload payload) {
-    final applied = payload.appliedSets;
-    final pads = <ResolvedPad>[];
-    for (var i = 0; i < applied.length; i++) {
-      final set = applied[i];
-      for (final entry in [('sun', set.sun), ('moon', set.moon)]) {
-        final pad = entry.$2;
-        if (pad == null) continue;
-        pads.add(ResolvedPad(
-          pad: pad,
-          role: entry.$1,
-          setIndex: i,
-          setTitle: set.title,
-          zone: resolveZone(pad),
-          side: pad.sideKey ?? _sideFromPlane(pad.plane),
-        ));
-      }
-    }
-    return PadPlacementViewData(payload: payload, pads: pads);
+    return PadPlacementViewData(
+      payload: payload,
+      pads: _resolve(payload, payload.appliedSets),
+      deferredPads: _resolve(payload, payload.deferredSets),
+    );
   }
 
   List<PadSet> get sets => payload.appliedSets;
 
   /// Pads for one set, or all of them when [setIndex] is null (the reference's
-  /// "All areas" chip).
-  List<ResolvedPad> padsFor(int? setIndex) => setIndex == null
-      ? pads
-      : pads.where((p) => p.setIndex == setIndex).toList();
+  /// "All areas" chip). A focused index with no APPLIED match falls back to
+  /// [deferredPads] — the only way a deferred set's "later session" chip has
+  /// anything to show when tapped, since deferred sets are excluded from the
+  /// default (unfocused) view entirely.
+  List<ResolvedPad> padsFor(int? setIndex, {bool includeDeferred = false}) {
+    if (setIndex == null) {
+      return includeDeferred ? [...pads, ...deferredPads] : pads;
+    }
+    final applied = pads.where((p) => p.setIndex == setIndex).toList();
+    if (applied.isNotEmpty) return applied;
+    final deferred = deferredPads.where((p) => p.setIndex == setIndex).toList();
+    if (deferred.isNotEmpty) return deferred;
+    return const [];
+  }
 
   /// Markers to hand to `window.renderPadPlacement`. Tier-3 pads are omitted on
   /// purpose — better a missing disc than a confident wrong one.
@@ -333,9 +375,10 @@ class PadPlacementViewData {
     int? focusSetIndex,
     bool mirrored = false,
     bool bilateral = false,
+    bool includeDeferred = false,
   }) {
     final out = <Map<String, dynamic>>[];
-    for (final pad in padsFor(focusSetIndex)) {
+    for (final pad in padsFor(focusSetIndex, includeDeferred: includeDeferred)) {
       if (pad.isUnmapped) continue;
       final base = _effectiveSide(pad, bilateral ? false : mirrored);
       final sides = bilateral

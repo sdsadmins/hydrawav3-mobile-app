@@ -1062,6 +1062,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoveryAspect = a;
           _askSide();
         }),
+      // Web parity: `aspect` is a plain optional select (`RecoveryEngineFlow.jsx`
+      // — starts `""`, sent only `...(aspect ? {aspect} : {})`, not in the
+      // Resolve gate) — same "not stated is fine" shape as side.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryAspect = null;
+        _askSide();
+      }),
     ]);
   }
 
@@ -1086,6 +1094,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoverySide = s.$1;
           _afterSide();
         }),
+      // Web parity: `side` starts (and can stay) empty — "not stated" — the
+      // Resolve button is gated on `region` alone, never on side
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`). The movement
+      // test and referral steps already have their own skip path ("Too
+      // painful — skip the test", "No — just there"); this was the one step
+      // in between with no way through except picking one.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoverySide = null;
+        _afterSide();
+      }),
     ]);
   }
 
@@ -1124,15 +1143,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       // skipped and the point selected directly. "I ran this one" and "I could
       // not run any" are different answers, so skipping clears the chosen test.
       _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
-          _skipRom),
+          () => _skipRom('Too painful — skip the test', confirmed: true)),
+      // A plain skip is NOT the same signal as "too painful" — web parity:
+      // `RecoveryEngineFlow.jsx` only sends `movementTestSkipped` from a
+      // dedicated "I can't run a test" checkbox; simply moving past the chips
+      // without picking one leaves the field unsent, so the engine reads it
+      // as "untested" rather than "confirmed skipped". This chip used to send
+      // the same `movementTestSkipped: true` as "Too painful", which resolved
+      // a materially different (direct_select) placement than web showed for
+      // the same "didn't answer" journey.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () => _skipRom('Skip')),
     ]);
   }
 
-  Future<void> _skipRom() async {
-    _me('Too painful — skip the test');
-    _recoveryTestSkipped = true;
+  Future<void> _skipRom(String spoken, {bool confirmed = false}) async {
+    _me(spoken);
+    _recoveryTestSkipped = confirmed;
     _recoveryMovementTest = null;
-    _answers['movementTest'] = 'skipped';
+    _answers['movementTest'] = confirmed ? 'skipped' : 'not answered';
     await _askReferral();
   }
 
@@ -1224,6 +1252,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                       '${s.$1} with the main pads.');
           _askNerveReferral();
         }),
+      // Web parity: `referralSide` isn't in the Resolve gate either
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`) — it's
+      // defaulted for convenience there, not forced.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryReferralSide = null;
+        _askNerveReferral();
+      }),
     ]);
   }
 
@@ -1666,6 +1702,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               _me(r.payload.chain?.name ?? 'Another match');
               setState(() => _messages.add(_Msg.card(r.payload)));
               _scrollToEnd();
+              // Open the body for THIS chain immediately, same as tapping the
+              // card's own "3D pad map" button — otherwise picking a later
+              // match just adds another card and the 3D view (if already
+              // open from the first match) keeps showing the old one.
+              _openPadMap(r.payload);
             },
           ),
         _ChipAction(

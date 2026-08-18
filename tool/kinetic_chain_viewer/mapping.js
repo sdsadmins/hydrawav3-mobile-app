@@ -73,6 +73,12 @@ export const MAPPING = {
   vmo: { both: ["Vastus medialis muscle"] },
   "left vmo": { left: ["Vastus medialis muscle"] },
   "right vmo": { right: ["Vastus medialis muscle"] },
+  // The 4th quad part had no standalone key — only reachable via the
+  // `quadriceps` bundle below, unlike its three siblings above. Added so a pad
+  // naming it specifically resolves to just this mesh instead of the bundle.
+  "vastus intermedius": { both: ["Vastus intermedius muscle"] },
+  "left vastus intermedius": { left: ["Vastus intermedius muscle"] },
+  "right vastus intermedius": { right: ["Vastus intermedius muscle"] },
   quadriceps: {
     both: [
       "Rectus femoris muscle",
@@ -167,6 +173,17 @@ export const MAPPING = {
   },
   "left gastrocnemius": { left: ["Lateral head of gastrocnemius", "Medial head of gastrocnemius"] },
   "right gastrocnemius": { right: ["Lateral head of gastrocnemius", "Medial head of gastrocnemius"] },
+  // Lateral/medial HEAD, not left/right body side — a pad authored against just
+  // one head (e.g. a lymphatic "over-node" placement naming "lateral"/"medial"
+  // explicitly) used to fall back to the combined `gastrocnemius` entry above
+  // and resolve to BOTH heads regardless, which is what put Sun and Moon on
+  // the exact same two meshes for a calf chain meaning to keep them apart.
+  "lateral head of gastrocnemius": { both: ["Lateral head of gastrocnemius"] },
+  "medial head of gastrocnemius": { both: ["Medial head of gastrocnemius"] },
+  "gastrocnemius lateral head": { both: ["Lateral head of gastrocnemius"] },
+  "gastrocnemius medial head": { both: ["Medial head of gastrocnemius"] },
+  "lateral gastrocnemius": { both: ["Lateral head of gastrocnemius"] },
+  "medial gastrocnemius": { both: ["Medial head of gastrocnemius"] },
   "left soleus": { left: ["Soleus muscle"] },
   "right soleus": { right: ["Soleus muscle"] },
   "tibialis anterior": { both: ["Tibialis anterior muscle"] },
@@ -301,6 +318,17 @@ export const MAPPING = {
       "Clavicular part of deltoid muscle",
       "Scapular spinal part of deltoid muscle",
     ],
+  },
+  // Anterior/posterior deltoid, split from the shared "deltoid" entry above so
+  // a Sun-anterior + Moon-posterior pad pair resolve to DIFFERENT meshes
+  // instead of both claiming all 3 deltoid parts (Sun claiming first left
+  // nothing for Moon to highlight). Mesh names match Hydrawave3's
+  // AnatomyScene.jsx, which already keeps this split.
+  "anterior deltoid": {
+    both: ["Clavicular part of deltoid muscle"],
+  },
+  "posterior deltoid": {
+    both: ["Scapular spinal part of deltoid muscle"],
   },
   "rotator cuff": {
     both: [

@@ -192,6 +192,24 @@ void main() {
 
       expect(m.containsKey('padLabelStyle'), isFalse);
     });
+
+    test('a bilateral recovery marker is duplicated for both left and right and keeps the side suffix in the zone', () {
+      final out = toAnatomySceneMarkers(
+        [
+          {
+            ...recoveryMarker(),
+            'side': 'both',
+            'zone': 'anterior_deltoid',
+          }
+        ],
+        source: MarkerSource.recovery,
+      );
+
+      expect(out, hasLength(2));
+      expect(out.map((m) => m['side']).toList(), ['right', 'left']);
+      expect(out.map((m) => m['zone']).toList(), ['anterior_deltoid-right', 'anterior_deltoid-left']);
+      expect(out.every((m) => m['role'] == 'moon'), isTrue);
+    });
   });
 
   group('shared behaviour', () {

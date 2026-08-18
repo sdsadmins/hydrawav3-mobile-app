@@ -1101,6 +1101,12 @@ class _SupportSection extends ConsumerWidget {
                 : HwIcon(HwIcons.chev, size: 18, color: p.ink3),
             onTap: () => context.push(RoutePaths.notifications),
           ),
+          _MoreRow(
+            icon: HwIcons.doc,
+            title: 'Warranty',
+            subtitle: 'Coverage status for your devices',
+            onTap: () => context.push(RoutePaths.warranty),
+          ),
           // The spec keeps privacy, help centre and credits behind one row —
           // now its own screen, since the wellness statement and the
           // Z-Anatomy attribution are obligations, not a menu.
@@ -1110,13 +1116,12 @@ class _SupportSection extends ConsumerWidget {
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
           ),
-          // _MoreRow(
-          //   icon: HwIcons.note,
-          //   title: 'Share diagnostic logs',
-          //   subtitle: 'Coming soon',
-          //   trailing: const HwComingSoonBanner(compact: true),
-          //   onTap: null,
-          // ),
+          _MoreRow(
+            icon: HwIcons.note,
+            title: 'Export diagnostic logs',
+            subtitle: 'Share the on-device log file',
+            onTap: () => _shareDiagnosticLogs(context),
+          ),
         ]),
       ],
     );

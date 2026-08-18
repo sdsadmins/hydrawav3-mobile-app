@@ -68,11 +68,32 @@ class LocalNotificationService {
   /// switch to its next protocol, not on every BLE blip.
   Future<void> notifyDeviceOutOfRangeBeforeNextProtocol({
     String deviceLabel = 'Your Hydrawave device',
-  }) async {
+  }) =>
+      _showOutOfRange(
+        '$deviceLabel is out of Bluetooth range, so the next protocol in '
+        'the stack is on hold. Bring it back in range to continue.',
+      );
+
+  /// The general "your device disconnected mid-session" alert — shown for any
+  /// device, not just a Protocol Plus one waiting on its next stack switch.
+  /// A real system notification (not the in-app dialog `session_screen.dart`
+  /// shows on the same grace-timer edge): that dialog is a `Navigator` push
+  /// and only renders while the screen is actually on-screen, so it never
+  /// appeared while the app was backgrounded. This does, as long as the
+  /// engine's own tick loop (a Riverpod provider, not tied to the screen's
+  /// widget lifecycle) is still alive — which the foreground service keeps
+  /// true even with the screen off.
+  Future<void> notifyDeviceOutOfRange({
+    String deviceLabel = 'Your Hydrawave device',
+  }) =>
+      _showOutOfRange(
+        '$deviceLabel lost its Bluetooth connection. Move it closer to '
+        'your phone — it will reconnect automatically and your session '
+        'keeps running.',
+      );
+
+  Future<void> _showOutOfRange(String body) async {
     if (!_initialized || kIsWeb) return;
-    final body = '$deviceLabel is out of Bluetooth range, so the next '
-        'protocol in the stack is on hold. Bring it back in range to '
-        'continue.';
     // Plain AndroidNotificationDetails collapses the body to ~2 lines with no
     // way to see the rest — BigTextStyleInformation is what makes the system
     // notification expandable (swipe/tap open) to show the full text, then
@@ -94,6 +115,8 @@ class LocalNotificationService {
       presentBadge: true,
       presentSound: true,
     );
+    // Shared id: only one out-of-range notification is ever showing at a
+    // time, whichever device/case triggered it most recently.
     await _plugin.show(
       id: _outOfRangeNotificationId,
       title: 'Device out of range',
