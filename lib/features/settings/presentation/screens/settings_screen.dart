@@ -704,9 +704,8 @@ void _showTextSizeSheet(BuildContext context, WidgetRef ref) {
                       max: kMaxTextScale,
                       divisions: 11,
                       label: '${(textScale * 100).round()}%',
-                      onChanged: (v) => sheetRef
-                          .read(textScaleProvider.notifier)
-                          .setScale(v),
+                      onChanged: (v) =>
+                          sheetRef.read(textScaleProvider.notifier).setScale(v),
                     ),
                   ),
                 ),
@@ -934,7 +933,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
             title: 'Default protocol',
             subtitle: 'Auto-selected on Quick Start & body-part pick — '
                 'yours to change',
-            trailing: HwPill(protocolName, tone: HwPillTone.copper),
+            belowSubtitle: HwPill(protocolName, tone: HwPillTone.copper),
             onTap: () => _showDefaultProtocolSheet(context, ref),
           ),
           _MoreRow(
@@ -1116,12 +1115,12 @@ class _SupportSection extends ConsumerWidget {
             subtitle: 'Privacy, help center, credits',
             onTap: () => context.push(RoutePaths.legal),
           ),
-          _MoreRow(
-            icon: HwIcons.note,
-            title: 'Export diagnostic logs',
-            subtitle: 'Share the on-device log file',
-            onTap: () => _shareDiagnosticLogs(context),
-          ),
+          // _MoreRow(
+          //   icon: HwIcons.note,
+          //   title: 'Export diagnostic logs',
+          //   subtitle: 'Share the on-device log file',
+          //   onTap: () => _shareDiagnosticLogs(context),
+          // ),
         ]),
       ],
     );
@@ -1253,6 +1252,7 @@ class _MoreRow extends StatelessWidget {
   final String icon;
   final String title;
   final String? subtitle;
+  final Widget? belowSubtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
 
@@ -1263,6 +1263,7 @@ class _MoreRow extends StatelessWidget {
     required this.icon,
     required this.title,
     this.subtitle,
+    this.belowSubtitle,
     this.trailing,
     this.onTap,
     this.tintIcon = true,
@@ -1275,6 +1276,7 @@ class _MoreRow extends StatelessWidget {
       leading: HwIcon(icon, size: 19, color: tintIcon ? p.copperInk : null),
       title: title,
       subtitle: subtitle,
+      belowSubtitle: belowSubtitle,
       trailing: trailing ??
           (onTap == null
               ? null

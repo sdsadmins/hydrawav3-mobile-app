@@ -418,6 +418,8 @@ class HwRow extends StatelessWidget {
   final Widget? leading;
   final String title;
   final String? subtitle;
+  /// Optional content displayed below the subtitle in the row's text column.
+  final Widget? belowSubtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
 
@@ -426,6 +428,7 @@ class HwRow extends StatelessWidget {
     this.leading,
     required this.title,
     this.subtitle,
+    this.belowSubtitle,
     this.trailing,
     this.onTap,
   });
@@ -464,6 +467,10 @@ class HwRow extends StatelessWidget {
                       color: p.ink2,
                     ),
                   ),
+                ],
+                if (belowSubtitle != null) ...[
+                  const SizedBox(height: HwSpace.s2),
+                  belowSubtitle!,
                 ],
               ],
             ),
