@@ -197,7 +197,6 @@ class ApiEndpoints {
   /// The universal red-flag screen (questions + the authored client disclaimer).
   static const String recoveryScreen = 'recovery-engine-v3/screen';
 
-
   /// Builds `path?a=b&c=d`, dropping null/blank values and encoding the rest.
   static String _perfUri(String path, Map<String, String?> params) {
     final q = params.entries
@@ -275,7 +274,8 @@ class ApiEndpoints {
 
   // Intake / Sessions
   static const String intake = '/intake';
-  static const String intakeAll = '/intake/all';
+  static String intakeAll(String organizationId) =>
+      '/intake/allByorg/$organizationId';
   static String intakeByClient(String clientId) => '/intake/client/$clientId';
   static String intakeDashboard(String orgId) => '/intake/dashboard/$orgId';
 

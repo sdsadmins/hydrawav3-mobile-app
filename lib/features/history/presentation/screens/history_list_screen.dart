@@ -34,6 +34,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
   /// Null = the "All" chip; otherwise a client id.
   String? _clientId;
   bool _outcomesSheetOpen = false;
+  final _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -42,6 +43,24 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
       // Retry any answered-but-unsynced outcome POSTs (best-effort).
       ref.read(pendingOutcomesProvider.notifier).drainSyncPending();
     });
+    // Fire loadMore a bit before the physical bottom so the next page is
+    // usually ready before the user actually reaches the end of the list.
+    _scrollController.addListener(() {
+      if (!_scrollController.hasClients) return;
+      // A specific client's history arrives complete in one call — nothing
+      // to page through, so scroll-triggered loading only applies to "All".
+      if (_clientId != null) return;
+      final position = _scrollController.position;
+      if (position.pixels >= position.maxScrollExtent - 300) {
+        ref.read(historyPagingProvider.notifier).loadMore();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -56,13 +75,24 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    final sessionsAsync = ref.watch(allSessionsProvider);
+    final pageState = ref.watch(historyPagingProvider);
     final clients = ref.watch(clientListProvider).valueOrNull ?? const [];
-    final all = sessionsAsync.valueOrNull ?? const <SessionHistoryItem>[];
 
-    final filtered = (_clientId == null
-        ? [...all]
-        : all.where((s) => s.clientId == _clientId).toList())
+    // "All" chip: the scroll-paginated org-wide list. A specific client chip:
+    // that client's own endpoint (GET /intake/client/:clientId) — fast (one
+    // client's sessions, not the whole org) and complete on the first call,
+    // so it must NOT be answered by filtering whatever's currently loaded
+    // from the "All" pages, which used to silently show nothing for a client
+    // whose sessions hadn't been scrolled into view yet.
+    final isAllMode = _clientId == null;
+    final clientAsync =
+        isAllMode ? null : ref.watch(clientHistoryProvider(_clientId!));
+
+    final rows = isAllMode ? pageState.items : (clientAsync!.valueOrNull ?? const []);
+    final rowsLoading = isAllMode ? pageState.isLoading : (clientAsync!.isLoading);
+    final rowsError = isAllMode ? pageState.error : clientAsync!.error;
+
+    final filtered = [...rows]
       ..sort((a, b) {
         final ad = a.createdAt;
         final bd = b.createdAt;
@@ -72,13 +102,15 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
         return bd.compareTo(ad);
       });
 
-    // Chips for whoever actually appears in history — not the whole roster.
-    final seen = <String>{
-      for (final s in all)
-        if (!s.isGuest && s.clientId != null) s.clientId!,
-    };
-    final chipClients =
-        clients.where((c) => seen.contains(c.id)).toList(growable: false);
+    // The whole roster from [clientListProvider], not filtered to "clients
+    // who already have history" — that used to require [allSessionsProvider]
+    // (the full org-wide session list) to load first, which is the slow,
+    // multi-page fetch. clientListProvider is a single fast org-scoped call,
+    // so the chip row now renders immediately regardless of session-list
+    // load time. A client with no sessions yet just shows "No sessions yet"
+    // when tapped, which is a fine, honest state.
+    final chipClients = [...clients]
+      ..sort((a, b) => a.displayName.compareTo(b.displayName));
 
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -122,8 +154,11 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
           child: RefreshIndicator(
             color: p.copper,
             backgroundColor: p.card,
-            onRefresh: () => ref.refresh(allSessionsProvider.future),
+            onRefresh: () => isAllMode
+                ? ref.read(historyPagingProvider.notifier).refresh()
+                : ref.refresh(clientHistoryProvider(_clientId!).future),
             child: ListView(
+              controller: _scrollController,
               physics: const AlwaysScrollableScrollPhysics(),
               padding: EdgeInsets.only(bottom: widget.embedded ? 16 : 108),
               children: [
@@ -135,19 +170,51 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                       onTap: () => _reviewOutcomes(entry),
                     ),
                   ),
-                if (sessionsAsync.isLoading && all.isEmpty)
+                if (rowsLoading && rows.isEmpty)
                   const _HistorySkeleton()
-                else if (sessionsAsync.hasError && all.isEmpty)
+                else if (rowsError != null && rows.isEmpty)
                   _Message(
                     "Couldn't load history.",
-                    onRetry: () => ref.invalidate(allSessionsProvider),
+                    onRetry: () => isAllMode
+                        ? ref.read(historyPagingProvider.notifier).loadFirstPage()
+                        : ref.invalidate(clientHistoryProvider(_clientId!)),
                   )
                 else if (filtered.isEmpty)
                   const _Message(
                     'No sessions yet — completed sessions land here.',
                   )
-                else
+                else ...[
                   _SessionList(sessions: filtered, clients: clients),
+                  // Bottom-of-list state — "All" mode only: a spinner while
+                  // the next page loads, or a small inline retry if the last
+                  // loadMore() failed (existing rows stay on screen either
+                  // way). A single client's history arrives complete in one
+                  // call, so there's no "more" to page through here.
+                  if (isAllMode && pageState.isLoadingMore)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: HwSpace.s3),
+                      child: Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    )
+                  else if (isAllMode &&
+                      pageState.error != null &&
+                      rows.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: HwSpace.s2),
+                      child: Center(
+                        child: TextButton(
+                          onPressed: () =>
+                              ref.read(historyPagingProvider.notifier).loadMore(),
+                          child: const Text('Couldn\'t load more — tap to retry'),
+                        ),
+                      ),
+                    ),
+                ],
               ],
             ),
           ),
