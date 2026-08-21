@@ -1752,6 +1752,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               applyStartDelay: _shouldApplyStartDelay(
                 transportId: id,
                 advancedSettings: deviceSettings,
+                selectedDelayedDeviceId: delayedDeviceId,
+                candidateDeviceIds: selectedDeviceIds,
               ),
             );
           }).reduce((a, b) => a > b ? a : b);
@@ -1780,6 +1782,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               applyStartDelay: _shouldApplyStartDelay(
                 transportId: id,
                 advancedSettings: settingsByDevice[id] ?? advancedSettings,
+                selectedDelayedDeviceId: delayedDeviceId,
+                candidateDeviceIds: selectedDeviceIds,
               ),
             ),
           ),
@@ -2723,6 +2727,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final applyDelay = _shouldApplyStartDelay(
       transportId: transportId,
       advancedSettings: advancedSettings,
+      selectedDelayedDeviceId: state.delayedDeviceId,
+      candidateDeviceIds: state.deviceIds,
     );
     return _protocolToRs35Payload(
       p,
@@ -2845,7 +2851,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     };
   }
 
-  int _computeFirmwareTotalDurationSeconds(
+  static int _computeFirmwareTotalDurationSeconds(
     Protocol p,
     AdvancedSettings advancedSettings, {
     bool applyStartDelay = false,
@@ -2891,13 +2897,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     return total;
   }
 
+  /// [selectedDelayedDeviceId] and [candidateDeviceIds] are explicit
+  /// parameters — NOT read from `state` here — because [loadSession] calls
+  /// this to compute the very state (durations/timers) it hasn't assigned
+  /// yet. Reading `state.delayedDeviceId` at that point would see whatever
+  /// the PREVIOUS session left behind, not the new one just passed in — the
+  /// bug that made a start delay silently apply to no device at all when a
+  /// prior run's stale delayedDeviceId didn't match any device in the new
+  /// run.
   bool _shouldApplyStartDelay({
     required String transportId,
     required AdvancedSettings advancedSettings,
+    required String? selectedDelayedDeviceId,
+    required List<String> candidateDeviceIds,
   }) {
-    final selectedDelayedDeviceId = state.delayedDeviceId;
     final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
-        state.deviceIds.contains(selectedDelayedDeviceId);
+        candidateDeviceIds.contains(selectedDelayedDeviceId);
     return advancedSettings.startDelay > 0 &&
         (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
   }
@@ -2914,7 +2929,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     );
   }
 
-  int _effectiveEdgeCycleDurationSeconds(
+  static int _effectiveEdgeCycleDurationSeconds(
     Protocol p,
     AdvancedSettings advancedSettings,
   ) {
@@ -2922,6 +2937,28 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             advancedSettings.cycle5Completion)
         ? 9
         : p.edgecycleduration.toInt();
+  }
+
+  /// PUBLIC entry point for the exact same duration formula used for the BLE
+  /// firmware payload — for callers outside this class (e.g.
+  /// [protocol_plus_controller.dart]'s backend session registration) that
+  /// need to report the delay/cycle1/cycle5-ADJUSTED duration rather than the
+  /// protocol's plain [Protocol.totalDurationSeconds]. Without this, the
+  /// backend session record (which the live session screen treats as the
+  /// timer's single source of truth) is told a shorter duration than what the
+  /// device actually received, so the on-screen countdown runs out before the
+  /// physical unit finishes — looking like the delay/edge cycles "aren't
+  /// happening" even though the device got them correctly.
+  static int computeEffectiveTotalDurationSeconds(
+    Protocol p,
+    AdvancedSettings advancedSettings, {
+    required bool applyStartDelay,
+  }) {
+    return _computeFirmwareTotalDurationSeconds(
+      p,
+      advancedSettings,
+      applyStartDelay: applyStartDelay,
+    );
   }
 
   Future<void> pause() async {

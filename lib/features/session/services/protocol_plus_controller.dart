@@ -1637,13 +1637,29 @@ Future<void> launchSession(
     // pause/resume/stop (and so the terminal stop reliably deducts tokens).
     if (normalSelections.isNotEmpty) {
       final specs = normalSelections
-          .map((s) => NormalDeviceSpec(
-                localMac: s.deviceId,
-                protocolId: s.protocol.id,
-                protocolName: s.protocol.templateName,
-                advancedSettings: s.advanced.toJson(),
-                totalDurationSeconds: s.protocol.totalDurationSeconds,
-              ))
+          .map((s) {
+            // Same delay-gating rule as SessionEngine's own: a start delay
+            // only applies to every device when no specific device was
+            // singled out, or to just that one device when it was.
+            final applyStartDelay = s.advanced.startDelay > 0 &&
+                (effectiveDelayedDeviceId == null ||
+                    effectiveDelayedDeviceId == s.deviceId);
+            return NormalDeviceSpec(
+              localMac: s.deviceId,
+              protocolId: s.protocol.id,
+              protocolName: s.protocol.templateName,
+              advancedSettings: s.advanced.toJson(),
+              // The delay/cycle1/cycle5-ADJUSTED duration — not the
+              // protocol's plain totalDurationSeconds — so the backend
+              // session record (the live screen's timer source of truth)
+              // matches what was actually sent to the device over BLE.
+              totalDurationSeconds: SessionEngine.computeEffectiveTotalDurationSeconds(
+                s.protocol,
+                s.advanced,
+                applyStartDelay: applyStartDelay,
+              ),
+            );
+          })
           .toList();
       final backendId = await ref
           .read(sessionSyncServiceProvider)

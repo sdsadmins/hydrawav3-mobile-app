@@ -27,17 +27,25 @@ class SessionDetailScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     if (item != null) return _Detail(session: item!);
 
-    final sessionsAsync = ref.watch(allSessionsProvider);
-    return sessionsAsync.when(
-      loading: () => const _Status('Loading session…'),
-      error: (_, __) => const _Status("Couldn't load this session."),
-      data: (sessions) {
-        for (final s in sessions) {
-          if (s.id == sessionId) return _Detail(session: s);
-        }
-        return const _Status('Session not found.');
-      },
-    );
+    // Deep-link/cold-start fallback only — the list screen normally hands the
+    // item over directly via `extra`. History is scroll-paginated now, so a
+    // session outside the pages already loaded isn't visible yet; keep
+    // pulling more pages until it turns up or the list is exhausted.
+    final pageState = ref.watch(historyPagingProvider);
+    for (final s in pageState.items) {
+      if (s.id == sessionId) return _Detail(session: s);
+    }
+    if (pageState.error != null) {
+      return const _Status("Couldn't load this session.");
+    }
+    if (pageState.hasMore && !pageState.isLoading && !pageState.isLoadingMore) {
+      Future.microtask(
+          () => ref.read(historyPagingProvider.notifier).loadMore());
+    }
+    if (!pageState.hasMore) {
+      return const _Status('Session not found.');
+    }
+    return const _Status('Loading session…');
   }
 }
 
