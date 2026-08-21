@@ -3807,10 +3807,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             ],
             // Live sensor readouts (temperature/voltage/current/Ã¢â‚¬Â¦) when the
             // firmware/backend includes them in the telemetry frame.
-            if (telemetry != null && telemetry.sensorReadouts.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              _buildSensorReadouts(telemetry.sensorReadouts),
-            ],
+            // Commented out per request — diagnostic values not shown on the
+            // session screen.
+            // if (telemetry != null && telemetry.sensorReadouts.isNotEmpty) ...[
+            //   const SizedBox(height: 10),
+            //   _buildSensorReadouts(telemetry.sensorReadouts),
+            // ],
             const SizedBox(height: 16),
             _buildPerDeviceControls(id, status, ctrl,
                 isProtocolPlusDevice: isProtocolPlusDevice,

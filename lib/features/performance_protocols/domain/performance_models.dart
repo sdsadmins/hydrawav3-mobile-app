@@ -204,6 +204,12 @@ class Pad {
   final List<String> targetMuscles;
   final String? proxyFor;
 
+  /// The engine's own flag that the user asked for this pad on BOTH sides
+  /// ("Both" at intake) — web parity: `recoveryPadMarkers.js`'s `padSides()`
+  /// ORs this into the side list regardless of any manual bilateral toggle,
+  /// "so a bilateral REQUEST draws bilaterally on its own."
+  final bool renderBothSides;
+
   const Pad({
     this.padLabel = '',
     this.side = '',
@@ -213,6 +219,7 @@ class Pad {
     this.stackPosition = '',
     this.targetMuscles = const [],
     this.proxyFor,
+    this.renderBothSides = false,
   });
 
   factory Pad.fromJson(Map<String, dynamic> json) => Pad(
@@ -230,6 +237,8 @@ class Pad {
         targetMuscles:
             _strings(json['target_muscles'] ?? json['targetMuscles']),
         proxyFor: _blankToNull(json['proxy_for'] ?? json['proxyFor']),
+        renderBothSides:
+            json['render_both_sides'] == true || json['renderBothSides'] == true,
       );
 
   /// "left" / "right" normalised for the 3D viewer, or null when unsided.

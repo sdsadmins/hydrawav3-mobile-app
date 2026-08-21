@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -220,6 +221,39 @@ class ProtocolPlusController {
   /// retrying every connected device's pending switch until it succeeds, which
   /// is what makes the run converge instead of freezing on a flaky stack.
   Timer? _pendingSwitchReconciler;
+
+  /// iOS-only: serializes the BLE write for each device's protocol switch.
+  /// CoreBluetooth queues central-role operations across peripherals more
+  /// strictly than Android — when two devices' breaks end close together,
+  /// concurrent START_PROTOCOL writes to both can head-of-line-block each
+  /// other and hit the write timeout, which then makes a device that never
+  /// actually lost its link look like it "went out of range." Android's BLE
+  /// stack tolerates the concurrent writes fine, so this is iOS-only.
+  Future<void> _iosSwitchQueue = Future.value();
+
+  /// Apply one device's protocol switch — on iOS, queued behind any switch
+  /// already in flight for another device (see [_iosSwitchQueue]); on other
+  /// platforms, applied immediately as before.
+  Future<bool> _applyDeviceSwitch(
+    SessionEngine engine,
+    String localMac,
+    Protocol protocol,
+    int index,
+  ) {
+    if (!Platform.isIOS) {
+      return engine.applyProtocolPlusSwitch(localMac, protocol, index);
+    }
+    final completer = Completer<bool>();
+    _iosSwitchQueue = _iosSwitchQueue.then((_) async {
+      try {
+        final ok = await engine.applyProtocolPlusSwitch(localMac, protocol, index);
+        completer.complete(ok);
+      } catch (e) {
+        completer.completeError(e);
+      }
+    });
+    return completer.future;
+  }
 
   ProtocolPlusController(this._ref);
 
@@ -927,7 +961,8 @@ class ProtocolPlusController {
         // Write to the device using our LOCAL id (BLE remoteId / Wi-Fi mac).
         // The event's `bluetoothId` is the firmware id, which is NOT what the
         // BLE connector uses to address the device — so we must not write to it.
-        final ok = await engine.applyProtocolPlusSwitch(
+        final ok = await _applyDeviceSwitch(
+          engine,
           binding.localMac,
           protocol,
           index,
