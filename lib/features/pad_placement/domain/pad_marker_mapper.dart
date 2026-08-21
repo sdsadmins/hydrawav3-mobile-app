@@ -380,8 +380,14 @@ class PadPlacementViewData {
     final out = <Map<String, dynamic>>[];
     for (final pad in padsFor(focusSetIndex, includeDeferred: includeDeferred)) {
       if (pad.isUnmapped) continue;
-      final base = _effectiveSide(pad, bilateral ? false : mirrored);
-      final sides = bilateral
+      // The engine's own `render_both_sides` — set when the user asked for
+      // "Both" at intake — is honoured here in addition to the manual toggle,
+      // web parity: recoveryPadMarkers.js's padSides(), "so a bilateral
+      // REQUEST draws bilaterally on its own" rather than only when someone
+      // finds and taps the toggle.
+      final padBoth = bilateral || pad.pad.renderBothSides;
+      final base = _effectiveSide(pad, padBoth ? false : mirrored);
+      final sides = padBoth
           ? <String>[base, base == 'right' ? 'left' : 'right']
           : <String>[base];
       for (final side in sides) {
@@ -391,7 +397,7 @@ class PadPlacementViewData {
         // plain muscle and carries its side HERE, so without this flag both limbs light up and a
         // one-sided chain reads as bilateral.
         marker['sideStrict'] = true;
-        if (bilateral) {
+        if (padBoth) {
           marker['zone'] = '${marker['zone'] ?? 'perf'}-$side';
           marker['label'] = '${marker['label'] ?? ''} — $side side (bilateral)'.trim();
         }

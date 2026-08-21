@@ -117,11 +117,25 @@ class DeviceRepository {
     }
   }
 
-  Future<void> locateDevice(String macAddress, {bool beeping = true}) =>
-      _remoteSource.publishMqttPayload({
-        'mac': _normalizeMac(macAddress),
-        'beeping': beeping,
-      });
+  /// Locate: BLE JSON write `{"beeping": beeping}` to whichever of this
+  /// device's MAC candidates (see [_macCandidates]) is currently connected.
+  Future<void> locateDevice(String macAddress, {bool beeping = true}) async {
+    // MQTT path — commented out per request; kept in case BLE locate needs a
+    // fallback for a device that isn't currently BLE-connected.
+    // return _remoteSource.publishMqttPayload({
+    //   'mac': _normalizeMac(macAddress),
+    //   'beeping': beeping,
+    // });
+    for (final mac in _macCandidates(macAddress)) {
+      if (_bleRepository.isConnected(mac)) {
+        final ok =
+            await _bleRepository.writeJsonToDevice(mac, {'beeping': beeping});
+        if (!ok) throw Exception('BLE write failed for $macAddress');
+        return;
+      }
+    }
+    throw Exception('Device not connected over BLE');
+  }
 
   Future<void> runDiagnostics(String macAddress, {bool selfCheck = true}) =>
       _remoteSource.publishMqttPayload({

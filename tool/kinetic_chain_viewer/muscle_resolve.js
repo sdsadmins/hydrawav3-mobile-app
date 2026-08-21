@@ -12,6 +12,61 @@
 
 import * as THREE from "three";
 import { MAPPING } from "./mapping.js";
+import muscleNameMap from "./muscle_name_map.json" with { type: "json" };
+
+// ---------------------------------------------------------------------------
+// muscleNameMap.json resolution (ported from Hydrawave3's muscleNameResolver.js)
+//
+// PRIMARY tier as of the muscleNameMap.json migration: `MAPPING` (mapping.js,
+// generated from the older Hydrawav3-ai zAnatomyMapping.ts) is now a fallback
+// behind this. Web's AnatomyScene.jsx already resolves through
+// `resolveMuscleName` from @hydrawav3/placement-core; this is that same
+// exact-match + alias-map lookup, minus the full muscleMeshMatcher fuzzy
+// engine (left to the existing `fuzzyMatchMeshes` fallback below rather than
+// porting a second fuzzy scorer).
+//
+// Model names here are SIDE-AGNOSTIC (no .l/.r) — side is resolved by
+// `filterBySide`/`meshSideMap`, which this file already had for the fuzzy
+// tier, so no change was needed there.
+// ---------------------------------------------------------------------------
+
+function normKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const MODEL_MESH_NAMES = muscleNameMap.modelMeshNames || [];
+
+const EXACT_INDEX = new Map(); // normalized model name -> canonical model name
+for (const name of MODEL_MESH_NAMES) EXACT_INDEX.set(normKey(name), name);
+
+const ALIAS_INDEX = new Map(); // normalized alias key -> { modelMeshNames, confidence }
+for (const [key, entry] of Object.entries(muscleNameMap.aliases || {})) {
+  ALIAS_INDEX.set(normKey(key), entry);
+}
+
+/**
+ * Exact model-name / alias-map lookup against muscleNameMap.json's 244
+ * side-agnostic names. Returns [] (not a guess) when neither tier hits —
+ * callers fall through to the legacy MAPPING tier and then the fuzzy tier.
+ */
+function resolveFromMuscleNameMap(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return [];
+  const key = normKey(raw);
+
+  const exact = EXACT_INDEX.get(key);
+  if (exact) return [exact];
+
+  const alias = ALIAS_INDEX.get(key);
+  if (alias && Array.isArray(alias.modelMeshNames) && alias.modelMeshNames.length) {
+    return alias.modelMeshNames;
+  }
+
+  return [];
+}
 
 // Already re-exported at the bottom of this file. `mesh_anchors.js` imports it
 // so the 242 perf-mesh-anchor keys are indexed through the SAME normalizer the
@@ -325,18 +380,42 @@ export function resolveMuscleToMeshes(
 ) {
   // A side written into the name always wins — it is what the author actually asked for.
   const specifiedSide = extractSide(name) || preferredSide || null;
-  const staticMatches = getHighlightMeshNames([name]);
-  let matched = [];
-  for (const staticName of staticMatches) {
-    if (allMeshNames.includes(staticName)) {
-      matched.push(staticName);
-      continue;
+
+  // Expand a set of candidate mesh-name stems (side-agnostic OR pre-suffixed)
+  // against the mesh names this GLB actually has, via the normalized lookup.
+  const expandAgainstScene = (staticMatches) => {
+    const out = [];
+    for (const staticName of staticMatches) {
+      if (allMeshNames.includes(staticName)) {
+        out.push(staticName);
+        continue;
+      }
+      const actual = normalizedLookup.get(normalizeName(staticName));
+      if (actual) out.push(...actual);
     }
-    const actual = normalizedLookup.get(normalizeName(staticName));
-    if (actual) matched.push(...actual);
-  }
-  matched = filterBySide(matched, specifiedSide, meshSideMap);
+    return out;
+  };
+
+  // Tier 1: muscleNameMap.json exact/alias match — same source of truth the
+  // web resolves through (resolveMuscleName). Side-agnostic names; filterBySide
+  // (already geometry-aware) picks the right .l/.r mesh below.
+  let matched = filterBySide(
+    expandAgainstScene(resolveFromMuscleNameMap(name)),
+    specifiedSide,
+    meshSideMap,
+  );
   if (matched.length > 0) return matched;
+
+  // Tier 2: legacy static MAPPING (mapping.js) — kept as a fallback for
+  // anything muscleNameMap.json doesn't cover yet, rather than dropped.
+  matched = filterBySide(
+    expandAgainstScene(getHighlightMeshNames([name])),
+    specifiedSide,
+    meshSideMap,
+  );
+  if (matched.length > 0) return matched;
+
+  // Tier 3: fuzzy fallback, same as before the migration.
   let fuzzy = fuzzyMatchMeshes(name, allMeshNames);
   fuzzy = filterBySide(fuzzy, specifiedSide, meshSideMap);
   return fuzzy;

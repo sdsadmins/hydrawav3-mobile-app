@@ -660,27 +660,36 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                 ),
                                 const SizedBox(height: 8),
                                 // Compact horizontal strip of rounded "pill"
-                                // tags — name + time only (no description), so a
-                                // few recents fit at a glance.
+                                // tags — name only (no description/time), so a
+                                // few recents fit at a glance. Every pill
+                                // reserves the same two-line height (see
+                                // _recentProtocolCard) so they're all uniform.
                                 SizedBox(
-                                  height: 44,
+                                  height: 50,
                                   child: ListView.separated(
                                     scrollDirection: Axis.horizontal,
                                     itemCount: recentOptions.length,
                                     separatorBuilder: (_, __) =>
-                                        const SizedBox(width: 8),
+                                        const SizedBox(width: 10),
                                     itemBuilder: (_, i) {
                                       final protocol = recentOptions[i];
-                                      return _recentProtocolCard(
-                                        protocol,
-                                        selected: protocol.id == currentId,
-                                        onTap: () {
-                                          ref
-                                              .read(recentProtocolIdsProvider
-                                                  .notifier)
-                                              .recordUsed(protocol.id);
-                                          Navigator.of(ctx).pop(protocol.id);
-                                        },
+                                      // Center gives the pill LOOSE constraints
+                                      // so it sizes to its own text (1 or 2
+                                      // lines) instead of the ListView
+                                      // stretching its rounded background to
+                                      // the full strip height on every pill.
+                                      return Center(
+                                        child: _recentProtocolCard(
+                                          protocol,
+                                          selected: protocol.id == currentId,
+                                          onTap: () {
+                                            ref
+                                                .read(recentProtocolIdsProvider
+                                                    .notifier)
+                                                .recordUsed(protocol.id);
+                                            Navigator.of(ctx).pop(protocol.id);
+                                          },
+                                        ),
                                       );
                                     },
                                   ),
@@ -892,7 +901,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required VoidCallback onTap,
   }) {
     final locked = !protocol.active;
-    final time = protocol.totalDuration?.formatted;
 
     return Opacity(
       opacity: locked ? 0.55 : 1,
@@ -900,7 +908,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         borderRadius: BorderRadius.circular(999),
         onTap: locked ? null : onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
             color: selected
                 ? ThemeConstants.accent.withValues(alpha: 0.14)
@@ -910,53 +918,48 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
               color: selected ? ThemeConstants.accent : ThemeConstants.border,
             ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                locked
-                    ? Icons.lock_outline_rounded
-                    : selected
-                        ? Icons.check_circle_rounded
-                        : Icons.science_outlined,
-                size: 15,
-                color: selected
-                    ? ThemeConstants.accent
-                    : ThemeConstants.textTertiary,
+          // Icon is INLINE with the text (WidgetSpan, not a Row sibling) so it
+          // only occupies space on line 1 — line 2 gets the full pill width.
+          // Every pill reserves the SAME two-line height regardless of
+          // whether its name actually needs it — the SizedBox forces that
+          // height even for a short name, so pills stay a uniform size
+          // instead of short ones collapsing to one line next to wrapped ones.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: SizedBox(
+              height: 34,
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: Icon(
+                        locked
+                            ? Icons.lock_outline_rounded
+                            : selected
+                                ? Icons.check_circle_rounded
+                                : Icons.science_outlined,
+                        size: 15,
+                        color: selected
+                            ? ThemeConstants.accent
+                            : ThemeConstants.textTertiary,
+                      ),
+                    ),
+                    const WidgetSpan(child: SizedBox(width: 8)),
+                    TextSpan(
+                      text: protocol.templateName,
+                      style: TextStyle(
+                        color: ThemeConstants.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(width: 8),
-              // Cap the name so a long title doesn't make one pill huge.
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 160),
-                child: Text(
-                  protocol.templateName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: ThemeConstants.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              if (time != null) ...[
-                const SizedBox(width: 8),
-                Icon(
-                  Icons.timer_outlined,
-                  size: 13,
-                  color: ThemeConstants.textTertiary,
-                ),
-                const SizedBox(width: 3),
-                Text(
-                  time,
-                  style: TextStyle(
-                    color: ThemeConstants.textSecondary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -1593,8 +1596,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                 borderRadius: BorderRadius.circular(999),
                 onTap: () => _handleInUseTap(device.macAddress),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: p.tanSoft,
                     borderRadius: BorderRadius.circular(999),
@@ -2654,42 +2657,42 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         ? () => _openPendingStopSession(
                                             device.macAddress)
                                         : inUse
-                                        ? () => _handleInUseTap(
-                                            device.macAddress)
-                                        : () {
-                                            // Enforce the plan's concurrent-device
-                                            // limit when adding a device (deselect is
-                                            // always allowed).
-                                            if (!selected &&
-                                                deviceLimitReached) {
-                                              ScaffoldMessenger.of(context)
-                                                  .showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    'Your plan allows $deviceLimit device(s) at a time. '
-                                                    'Stop a running device or upgrade your plan to run more.',
-                                                  ),
-                                                ),
-                                              );
-                                              return;
-                                            }
-                                            ref
-                                                .read(sessionTargetProvider
-                                                    .notifier)
-                                                .toggleDevice(
-                                                    device.macAddress);
-                                            setState(() {
-                                              if (selected) {
-                                                _clearDeviceSessionState(
-                                                    device.macAddress);
-                                              } else {
-                                                _runDeviceIds
-                                                    .add(device.macAddress);
-                                                _excludedDeviceIds
-                                                    .remove(device.macAddress);
-                                              }
-                                            });
-                                          },
+                                            ? () => _handleInUseTap(
+                                                device.macAddress)
+                                            : () {
+                                                // Enforce the plan's concurrent-device
+                                                // limit when adding a device (deselect is
+                                                // always allowed).
+                                                if (!selected &&
+                                                    deviceLimitReached) {
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Your plan allows $deviceLimit device(s) at a time. '
+                                                        'Stop a running device or upgrade your plan to run more.',
+                                                      ),
+                                                    ),
+                                                  );
+                                                  return;
+                                                }
+                                                ref
+                                                    .read(sessionTargetProvider
+                                                        .notifier)
+                                                    .toggleDevice(
+                                                        device.macAddress);
+                                                setState(() {
+                                                  if (selected) {
+                                                    _clearDeviceSessionState(
+                                                        device.macAddress);
+                                                  } else {
+                                                    _runDeviceIds
+                                                        .add(device.macAddress);
+                                                    _excludedDeviceIds.remove(
+                                                        device.macAddress);
+                                                  }
+                                                });
+                                              },
                                   ),
                                 ),
                               );
@@ -2759,8 +2762,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       currentRunIds: runIds,
                                       currentLabelsById: currentLabelsById,
                                       busyDeviceIds: inUseDeviceIds,
-                                    pendingStopDeviceIds:
-                                        pendingBackendStopDeviceIds,
+                                      pendingStopDeviceIds:
+                                          pendingBackendStopDeviceIds,
                                     ),
                                   ),
                                 );
@@ -3836,65 +3839,66 @@ class _SessionDeviceSetupCard extends StatelessWidget {
                                 ),
                               )
                             : Container(
-                            height: 34,
-                            padding: const EdgeInsets.only(left: 8, right: 2),
-                            decoration: BoxDecoration(
-                              color: inUse
-                                  ? ThemeConstants.accent
-                                      .withValues(alpha: 0.12)
-                                  : ThemeConstants.surfaceVariant,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: inUse
-                                    ? ThemeConstants.accent
-                                        .withValues(alpha: 0.25)
-                                    : ThemeConstants.border,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  inUse
-                                      ? Icons.play_arrow_rounded
-                                      : Icons.pause_rounded,
-                                  size: 15,
+                                height: 34,
+                                padding:
+                                    const EdgeInsets.only(left: 8, right: 2),
+                                decoration: BoxDecoration(
                                   color: inUse
                                       ? ThemeConstants.accent
-                                      : ThemeConstants.textTertiary,
+                                          .withValues(alpha: 0.12)
+                                      : ThemeConstants.surfaceVariant,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: inUse
+                                        ? ThemeConstants.accent
+                                            .withValues(alpha: 0.25)
+                                        : ThemeConstants.border,
+                                  ),
                                 ),
-                                const SizedBox(width: 4),
-                                Flexible(
-                                  child: Text(
-                                    'Use',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      inUse
+                                          ? Icons.play_arrow_rounded
+                                          : Icons.pause_rounded,
+                                      size: 15,
                                       color: inUse
-                                          ? ThemeConstants.textPrimary
+                                          ? ThemeConstants.accent
                                           : ThemeConstants.textTertiary,
                                     ),
-                                  ),
-                                ),
-                                SizedBox(
-                                  width: 30,
-                                  height: 22,
-                                  child: FittedBox(
-                                    fit: BoxFit.contain,
-                                    child: Switch.adaptive(
-                                      value: inUse,
-                                      activeColor: ThemeConstants.accent,
-                                      materialTapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      onChanged: onToggleInUse,
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        'Use',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: inUse
+                                              ? ThemeConstants.textPrimary
+                                              : ThemeConstants.textTertiary,
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                    SizedBox(
+                                      width: 30,
+                                      height: 22,
+                                      child: FittedBox(
+                                        fit: BoxFit.contain,
+                                        child: Switch.adaptive(
+                                          value: inUse,
+                                          activeColor: ThemeConstants.accent,
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          onChanged: onToggleInUse,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                          ),
+                              ),
                   ),
                   const SizedBox(width: 6),
                   Expanded(

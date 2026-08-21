@@ -125,6 +125,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     _data = PadPlacementViewData.from(widget.payload);
     _recovery = RecoveryPlacement.fromPayload(widget.payload);
     _view = _data.viewFor(null);
+    // Seed the toggle from the engine's own request rather than leaving it off
+    // while the stage draws bilaterally anyway (see `markers()`'s `padBoth`) —
+    // a "Both" pick at intake should read as BOTH here without the user having
+    // to separately find and tap this switch.
+    _bilateral = _data.pads.any((p) => p.pad.renderBothSides);
   }
 
   /// The set colour for chips, legend swatches and set-note badges.
