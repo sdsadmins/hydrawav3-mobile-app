@@ -194,7 +194,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// feeding one's memory to the other resolves nothing and confuses both.
   Map<String, dynamic> _recoverySlots = const {};
 
-  static const _greeting = 'Hey — what are we working on today?';
+  static const _greeting = 'Hi — what are we working on today?';
 
   bool get _isUniversity =>
       (ref.read(authStateProvider).user?.organizationType ?? '')
@@ -244,15 +244,13 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         'or working on recovery?',
         rich: [
           TextSpan(
-              text:
-                  'Let’s find the right pad placement. Are we prepping for '),
+              text: 'Let’s find the right pad placement. Are we prepping for '),
           TextSpan(
               text: 'performance',
               style: TextStyle(fontWeight: FontWeight.w700)),
           TextSpan(text: ', or working on '),
           TextSpan(
-              text: 'recovery',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+              text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
           TextSpan(text: '?'),
         ],
       ));
@@ -454,7 +452,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // response we couldn't read throws above and lands in `_failStep`, so this
     // never blames the account for a wiring problem.
     if (disciplines.isEmpty) {
-      await _ai('No performance disciplines are authored for this account yet.');
+      await _ai(
+          'No performance disciplines are authored for this account yet.');
       _showChips([
         _ChipAction(Icons.refresh_rounded, 'Try again', _perfStartDiscipline),
         _ChipAction(Icons.waves_rounded, 'Recovery instead', _onRecovery),
@@ -1182,7 +1181,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   }
 
   String _revealsFor(String testName) {
-    for (final t in _recoveryRegion?.movementTests ?? const <RecoveryMovementTest>[]) {
+    for (final t
+        in _recoveryRegion?.movementTests ?? const <RecoveryMovementTest>[]) {
       if (t.test.trim().toLowerCase() == testName.trim().toLowerCase()) {
         return t.reveals.trim();
       }
@@ -1417,8 +1417,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (area == null || area.trim().isEmpty) return;
 
     final existing = ref.read(guidedAssessmentProvider).discomfortAreas;
-    if (existing
-        .any((a) => a.bodyPart.toLowerCase() == area.toLowerCase())) {
+    if (existing.any((a) => a.bodyPart.toLowerCase() == area.toLowerCase())) {
       return;
     }
 
@@ -1835,7 +1834,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     if (reply.reply.trim().isEmpty) {
-      await _ai('I don’t have a recovery placement for that yet. Try naming the '
+      await _ai(
+          'I don’t have a recovery placement for that yet. Try naming the '
           'area and how it feels, or pick an area below.');
     }
     _showChips([
