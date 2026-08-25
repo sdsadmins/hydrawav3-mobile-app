@@ -6,6 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../core/utils/logger.dart';
+import '../../session/domain/active_session_model.dart' as active_session;
+import '../../session/presentation/providers/active_sessions_provider.dart';
+import '../../session/services/session_engine.dart';
 import '../domain/music_model.dart';
 
 /// Sentinel [_loadedUrl] value marking "the bundled iOS keep-alive ambient
@@ -71,14 +74,15 @@ class SessionMusicState {
 /// engine / timer / BLE never depend on this.
 final sessionMusicControllerProvider =
     StateNotifierProvider<SessionMusicController, SessionMusicState>((ref) {
-  final controller = SessionMusicController();
+  final controller = SessionMusicController(ref);
   ref.onDispose(controller.shutdown);
   return controller;
 });
 
 class SessionMusicController extends StateNotifier<SessionMusicState> {
-  SessionMusicController() : super(const SessionMusicState());
+  SessionMusicController(this._ref) : super(const SessionMusicState());
 
+  final Ref _ref;
   final AudioPlayer _player = AudioPlayer();
 
   bool _disposed = false;
@@ -90,6 +94,16 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
 
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<bool>? _playingSub;
+
+  /// A phone/FaceTime call or Siri arriving is reported by iOS as
+  /// [AudioInterruptionType.pause] (as opposed to [AudioInterruptionType.duck],
+  /// the transient kind used for things like a notification chime, which we
+  /// shouldn't react to). On that, [_pauseAllLiveSessions] proactively pauses
+  /// EVERY currently-running session app-wide (not just whichever session
+  /// screen happens to be open/mounted — [activeSessionsProvider] is the
+  /// app-wide registry of live sessions, independent of any screen) so the
+  /// session and connected device(s) don't silently drift out of sync while
+  /// no code is guaranteed to keep running for the call's duration.
 
   /// One-time audio-session + player setup. Configures the iOS category to
   /// `playback`/music so audio is audible through the silent switch, and
@@ -122,6 +136,9 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
         if (_disposed) return;
         if (event.begin) {
           unawaited(_safePause());
+          if (event.type != AudioInterruptionType.duck) {
+            _pauseAllLiveSessions();
+          }
         } else {
           unawaited(_evaluate()); // resume only if conditions still hold
         }
@@ -141,6 +158,28 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
         state = state.copyWith(isPlaying: playing);
       }
     });
+  }
+
+  /// iOS-only: pause every currently-running session app-wide, device
+  /// included — not just whichever session screen happens to be mounted.
+  /// Android already survives a call via its foreground service, so it isn't
+  /// at risk of the process being suspended and doesn't need this.
+  void _pauseAllLiveSessions() {
+    if (!Platform.isIOS) return;
+    try {
+      final sessions = _ref.read(activeSessionsProvider);
+      for (final session in sessions) {
+        if (session.status != active_session.SessionStatus.running) continue;
+        appLogger.i(
+          'Music: pausing session ${session.id} for a call/Siri interruption',
+        );
+        unawaited(
+          _ref.read(sessionEngineFamilyProvider(session.id).notifier).pause(),
+        );
+      }
+    } catch (e) {
+      appLogger.w('Music: failed to pause live sessions on interruption: $e');
+    }
   }
 
   /// Choose (or switch to) a track. Loads its URL and starts playing if the
