@@ -114,6 +114,13 @@ flutter:
     # Offline 3D kinetic-chain viewer (three.js bundle + GLB + Draco decoder).
     - assets/3d/
     - assets/3d/draco/
+    # iOS background keep-alive ambient loop, played by SessionMusicController
+    # when a session is running but no Atmosphere track is selected — keeps
+    # the app alive in the background so Protocol Plus switching / BLE
+    # reconnect keep working while locked (see
+    # features/musics/services/session_music_controller.dart). PLACEHOLDER:
+    # synthesized tone, not produced audio — replace before shipping.
+    - assets/audio/
 
 flutter_launcher_icons:
   android: "ic_launcher"
