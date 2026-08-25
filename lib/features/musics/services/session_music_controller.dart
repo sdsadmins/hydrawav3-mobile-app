@@ -92,14 +92,32 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   StreamSubscription<bool>? _playingSub;
 
   /// One-time audio-session + player setup. Configures the iOS category to
-  /// `music`/playback so audio is audible through the silent switch, and wires
-  /// interruption (calls/Siri) handling. Best-effort: failures don't block.
+  /// `playback`/music so audio is audible through the silent switch, and
+  /// wires interruption (calls/Siri) handling. Best-effort: failures don't
+  /// block.
+  ///
+  /// `mixWithOthers` lets our loop keep playing underneath whatever the user
+  /// already has running in Spotify/Apple Music/YouTube/etc. instead of iOS
+  /// forcing an exclusive-focus interruption between the two — that
+  /// interruption is exactly the kind of gap that can let iOS suspend us in
+  /// the background. (A phone/FaceTime call is a different, OS-level
+  /// reservation that `mixWithOthers` cannot avoid — we still pause/resume
+  /// around those via the interruption stream below.)
   Future<void> _ensureReady() async {
     if (_sessionConfigured || _disposed) return;
     _sessionConfigured = true; // set first so we don't re-enter on failure
     try {
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.mixWithOthers,
+        avAudioSessionMode: AVAudioSessionMode.defaultMode,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.music,
+          usage: AndroidAudioUsage.media,
+        ),
+      ));
       _interruptionSub = session.interruptionEventStream.listen((event) {
         if (_disposed) return;
         if (event.begin) {
