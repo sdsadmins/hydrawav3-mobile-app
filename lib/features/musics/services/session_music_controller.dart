@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,10 @@ import 'package:just_audio/just_audio.dart';
 
 import '../../../core/utils/logger.dart';
 import '../domain/music_model.dart';
+
+/// Sentinel [_loadedUrl] value marking "the bundled iOS keep-alive ambient
+/// asset is loaded", as opposed to a real user-selected track URL.
+const _kFallbackTrackKey = 'asset:session_ambient_fallback';
 
 /// UI-facing state of the session "Atmosphere" music.
 class SessionMusicState {
@@ -45,6 +50,21 @@ class SessionMusicState {
 /// One app-scoped controller that owns the single [AudioPlayer]. Plays a looping
 /// "Atmosphere" track during a live session and keeps it alive across app
 /// navigation/background while the session is running.
+///
+/// **iOS background keep-alive.** iOS has no foreground-service equivalent to
+/// Android's — a backgrounded/locked app is suspended within seconds unless it
+/// holds active audio focus (`UIBackgroundModes: audio`). That's what makes
+/// Protocol Plus's socket-driven sub-protocol switching and BLE reconnect keep
+/// working while the phone is locked on iOS. Rather than run a second,
+/// competing [AudioPlayer] purely for that purpose, this controller falls back
+/// to a bundled quiet ambient loop (`assets/audio/session_ambient.wav`) on iOS
+/// whenever a session is running but the user hasn't picked an Atmosphere
+/// track — see [_shouldPlay]/[_evaluate]. The existing session-screen mute
+/// button covers "I don't want to hear anything": muting sets volume to 0
+/// without pausing, so the audio session (and therefore the background grant)
+/// stays active. Explain this in App Store Connect review notes: background
+/// audio keeps protocol timing synced with a connected Bluetooth therapy
+/// device during an active session.
 ///
 /// EVERY audio operation is wrapped so a device/OEM audio quirk can never crash
 /// or stall a session: failures are logged and swallowed, and the session
@@ -127,12 +147,15 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     await _evaluate();
   }
 
-  /// Deselect the current track and stop playback.
+  /// Deselect the current track and stop playback. If a session is still
+  /// running on iOS, [_evaluate] immediately falls back to the ambient
+  /// keep-alive loop rather than leaving audio focus dropped.
   Future<void> clear() async {
     if (_disposed) return;
     if (mounted) state = state.copyWith(clearTrack: true, isPlaying: false);
     _loadedUrl = null;
     await _safeStop();
+    await _evaluate();
   }
 
   /// Mute keeps the track "running" but silent (volume 0), mirroring the web.
@@ -140,8 +163,9 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     if (_disposed || !mounted) return;
     final muted = !state.isMuted;
     state = state.copyWith(isMuted: muted);
+    final unmutedVolume = _loadedUrl == _kFallbackTrackKey ? 0.35 : 1.0;
     try {
-      await _player.setVolume(muted ? 0 : 1);
+      await _player.setVolume(muted ? 0 : unmutedVolume);
     } catch (e) {
       appLogger.w('Music: setVolume failed (ignored): $e');
     }
@@ -153,6 +177,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     required bool sessionRunning,
   }) async {
     _sessionRunning = sessionRunning;
+    await _ensureReady();
     await _evaluate();
   }
 
@@ -171,13 +196,34 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
       _loadedUrl != null &&
       _sessionRunning;
 
+  /// iOS-only keep-alive: a session is running but the user hasn't picked an
+  /// Atmosphere track, so there's nothing else holding audio focus.
+  bool get _shouldPlayFallback =>
+      Platform.isIOS && _sessionRunning && state.activeTrackId == null;
+
   Future<void> _evaluate() async {
     if (_disposed) return;
     if (_shouldPlay) {
       await _safePlay();
+    } else if (_shouldPlayFallback) {
+      await _playFallback();
     } else {
       await _safePause();
     }
+  }
+
+  Future<void> _playFallback() async {
+    try {
+      if (_loadedUrl != _kFallbackTrackKey) {
+        await _player.setAsset('assets/audio/session_ambient.wav');
+        _loadedUrl = _kFallbackTrackKey;
+        await _player.setVolume(state.isMuted ? 0 : 0.35);
+      }
+    } catch (e) {
+      appLogger.w('Music: fallback ambient load failed (ignored): $e');
+      return;
+    }
+    await _safePlay();
   }
 
   Future<void> _safePlay() async {
