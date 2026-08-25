@@ -170,9 +170,16 @@ class AutoConnectManager {
       final current = _ref.read(bleConnectingIdsProvider);
       _ref.read(bleConnectingIdsProvider.notifier).state = {...current}
         ..remove(id);
-      // connectDevice stopped the scan; re-arm it if anything is still pending
-      // (e.g. a second device that dropped at the same time).
-      if (_inFlight.isEmpty && _wantReconnect.isNotEmpty) {
+      // connectDevice always stops the scan — re-arm it whenever auto-connect
+      // is still on, not only when something is pending reconnect. Without
+      // this, connecting to a device for the FIRST time (never in
+      // _wantReconnect, since that set is only for devices that dropped)
+      // left the scan stopped for good: on the device list screen, device A
+      // would connect fine but device B would never be discovered until the
+      // user tapped Scan manually. _ensureScanning() already no-ops
+      // correctly on its own (auto-connect off / still connecting / already
+      // scanning), so this is safe to call unconditionally here.
+      if (_inFlight.isEmpty) {
         _ensureScanning();
       }
     }
