@@ -500,7 +500,7 @@ void _patternATail(Map<String, dynamic> p, List<pw.Widget> out) {
   if (spinal.isNotEmpty || dermatomes.isNotEmpty || viscero.isNotEmpty) {
     out.add(_sub('III. Neurological & Segmental Context'));
     for (final seg in spinal) {
-      final muscles = _s(seg, 'muscles').isNotEmpty ? ' — ${_s(seg, 'muscles')}' : '';
+      final muscles = _s(seg, 'muscles').isNotEmpty ? ' (${_s(seg, 'muscles')})' : '';
       out.add(_kv(_s(seg, 'segment'), _s(seg, 'functional_role') + muscles,
           color: HydraReport.purple700));
     }

@@ -88,7 +88,7 @@ class LocalNotificationService {
   }) =>
       _showOutOfRange(
         '$deviceLabel lost its Bluetooth connection. Move it closer to '
-        'your phone — it will reconnect automatically and your session '
+        'your phone, and it will reconnect automatically and your session '
         'keeps running.',
       );
 

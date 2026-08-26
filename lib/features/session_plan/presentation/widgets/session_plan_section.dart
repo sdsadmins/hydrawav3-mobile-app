@@ -220,7 +220,7 @@ class _SessionPlanSectionState extends ConsumerState<SessionPlanSection> {
           const SizedBox(height: 8),
           if (areas.isEmpty)
             Text(
-                'No focus areas yet — add them in the Guided Assessment '
+                'No focus areas yet, add them in the Guided Assessment '
                 '(Area of Focus) above.',
                 style: TextStyle(
                     fontSize: 12, color: ThemeConstants.textTertiary))

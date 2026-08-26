@@ -194,7 +194,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// feeding one's memory to the other resolves nothing and confuses both.
   Map<String, dynamic> _recoverySlots = const {};
 
-  static const _greeting = 'Hi — what are we working on today?';
+  static const _greeting = 'Hi, what are we working on today?';
 
   bool get _isUniversity =>
       (ref.read(authStateProvider).user?.organizationType ?? '')
@@ -337,7 +337,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               'Start Session.');
         }, hot: true),
         _ChipAction(Icons.bolt_rounded, 'Prep a user', _onPerformance),
-        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+        _ChipAction(Icons.waves_rounded, 'Support Recovery', _onRecovery),
         _ChipAction(Icons.grid_view_rounded, 'Find pad placements', () {
           _me('Find pad placements');
           _ai(
@@ -367,7 +367,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   List<_ChipAction> get _padChips => [
         _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance,
             hot: true),
-        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+        _ChipAction(Icons.waves_rounded, 'Support Recovery', _onRecovery),
       ];
 
   // ── flows ───────────────────────────────────────────────────────────────────
@@ -389,11 +389,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return;
     }
 
-    await _ai('Who are we prepping? Guest works too — no name needed.');
+    await _ai('Who are we prepping? Guest works too, no name needed.');
     final members = await _loadMembers();
     final uni = _isUniversity;
     _showChips([
-      _ChipAction(Icons.person_outline_rounded, 'Guest — no name',
+      _ChipAction(Icons.person_outline_rounded, 'Guest (no name)',
           () => _pickUser('Guest'),
           hot: true),
       for (final m in members)
@@ -666,7 +666,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   Future<void> _showPlacement(PadSetPayload payload) async {
     final context = payload.contextLine;
     await _ai('Placements ready for $_perfWho'
-        '${context.isEmpty ? '' : ' — $context'}.');
+        '${context.isEmpty ? '' : ', $context'}.');
     if (!mounted) return;
     setState(() => _messages.add(_Msg.card(payload)));
     _scrollToEnd();
@@ -728,7 +728,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (!mounted) return;
     setState(() => _typing = false);
     final because = detail == null ? '' : '\n\n${_reason(detail)}';
-    await _ai('$message — tap to retry.$because');
+    await _ai('$message. Tap to retry.$because');
     if (!mounted) return;
     _showChips([
       _ChipAction(Icons.refresh_rounded, 'Try again', retry),
@@ -860,7 +860,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // memory of its own), so an empty map really does start a new topic here.
     _recoverySlots = const {};
     _resetRecovery();
-    _me('Recovery');
+    _me('Support Recovery');
     _askGoal();
   }
 
@@ -1131,7 +1131,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     await _ai('Which movement did you try? Run one of these and note where '
-        'else you feel it — each one reveals something different.');
+        'else you feel it: each one reveals something different.');
     if (!mounted) return;
     _showChips([
       for (var i = 0; i < tests.length; i++)
@@ -1141,8 +1141,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       // Ronel's Option B, kept: a test that is too painful or too limited is
       // skipped and the point selected directly. "I ran this one" and "I could
       // not run any" are different answers, so skipping clears the chosen test.
-      _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
-          () => _skipRom('Too painful — skip the test', confirmed: true)),
+      _ChipAction(Icons.do_not_touch_outlined, 'Too painful, skip the test',
+          () => _skipRom('Too painful, skip the test', confirmed: true)),
       // A plain skip is NOT the same signal as "too painful" — web parity:
       // `RecoveryEngineFlow.jsx` only sends `movementTestSkipped` from a
       // dedicated "I can't run a test" checkbox; simply moving past the chips
@@ -1208,8 +1208,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     await _ai('Does it travel anywhere else?');
     if (!mounted) return;
     _showChips([
-      _ChipAction(Icons.check_circle_outline, 'No — just there', () {
-        _me('No — just there');
+      _ChipAction(Icons.check_circle_outline, 'No, just there', () {
+        _me('No, just there');
         _recoveryReferral = null;
         _recoveryReferralSide = null;
         _askNerveReferral();
@@ -1244,11 +1244,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           // crossing. The engine names the pattern on the result; this is the
           // same statement at the moment of choosing, so it is not a surprise.
           _ai(s.$1 == 'both'
-              ? 'Both sides — the ${target.toLowerCase()} pads are drawn left and right.'
+              ? 'Both sides: the ${target.toLowerCase()} pads are drawn left and right.'
               : (_recoverySide != null && _recoverySide != s.$1)
                   ? 'That’s a cross-body pattern. The main pads stay on the '
                       '$_recoverySide; the ${target.toLowerCase()} pads go on the ${s.$1}.'
-                  : 'Same side — the ${target.toLowerCase()} pads go on the '
+                  : 'Same side: the ${target.toLowerCase()} pads go on the '
                       '${s.$1} with the main pads.');
           _askNerveReferral();
         }),
@@ -1388,7 +1388,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         '${placement.thermalLabel} recommended',
       if (placement.thermalRationale.trim().isNotEmpty)
         placement.thermalRationale.trim(),
-    ].join(' — ');
+    ].join('. ');
     if (thermal.isNotEmpty) await _ai(thermal);
     if (!mounted) return;
 
@@ -2424,7 +2424,7 @@ class _DisciplineSheetState extends State<_DisciplineSheet> {
               child: list.isEmpty
                   ? Center(
                       child: Text(
-                        'No match — new disciplines appear here as their pad '
+                        'No match. New disciplines appear here as their pad '
                         'protocols land.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 12, color: p.ink3),

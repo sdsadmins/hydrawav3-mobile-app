@@ -83,8 +83,8 @@ class HubTiles extends StatelessWidget {
           Expanded(
             child: _Tile(
               icon: HwIcons.wave,
-              title: 'Recovery',
-              body: 'Where it feels tight → ROM check → targeted pads.',
+              title: 'Support Recovery',
+              body: 'Where it feels tight, ROM check, targeted pads.',
               gradient: p.heroGrad,
               fg: const Color(0xFFF2E9E2),
               iconChip: const Color.fromRGBO(255, 255, 255, .18),

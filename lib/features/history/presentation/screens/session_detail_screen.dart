@@ -92,11 +92,11 @@ class _Detail extends ConsumerWidget {
                   children: [
                     _DetailRow('Client', name),
                     const Divider(height: 1),
-                    _DetailRow('Session', first?.protocol ?? '—'),
+                    _DetailRow('Session', first?.protocol ?? '--'),
                     const Divider(height: 1),
                     _DetailRow('Duration', _formatDuration(first?.duration)),
                     const Divider(height: 1),
-                    _DetailRow('Device', first?.deviceName ?? '—'),
+                    _DetailRow('Device', first?.deviceName ?? '--'),
                     const Divider(height: 1),
                     _DetailRow('Music', 'Off'),
                   ],
@@ -151,7 +151,7 @@ class _Detail extends ConsumerWidget {
   }
 
   static String _formatDuration(int? seconds) {
-    if (seconds == null || seconds <= 0) return '—';
+    if (seconds == null || seconds <= 0) return '--';
     final minutes = (seconds / 60).ceil();
     return '$minutes min';
   }

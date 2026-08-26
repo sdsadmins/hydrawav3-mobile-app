@@ -200,7 +200,7 @@ class _PlanBody extends ConsumerWidget {
             ),
             const SizedBox(width: HwSpace.s2),
             HwPill(
-              left == null ? '—' : '${left.round()} credits',
+              left == null ? '--' : '${left.round()} credits',
               tone: HwPillTone.copper,
               tabular: true,
             ),
@@ -216,7 +216,7 @@ class _PlanBody extends ConsumerWidget {
               HwCardHeader(
                 'Session time left',
                 trailing: HwPill(
-                  seconds == null ? '—' : _sessionTimeLeft(seconds),
+                  seconds == null ? '--' : _sessionTimeLeft(seconds),
                   tone: HwPillTone.copper,
                   tabular: true,
                 ),
@@ -242,7 +242,7 @@ class _PlanBody extends ConsumerWidget {
               HwCardHeader(
                 'Full Mobility Reports left',
                 trailing: HwPill(
-                  reports?.toString() ?? '—',
+                  reports?.toString() ?? '--',
                   tone: HwPillTone.info,
                   tabular: true,
                 ),

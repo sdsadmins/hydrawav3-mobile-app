@@ -258,7 +258,7 @@ class Pad {
     final detail = [plane, positionAlongMuscle]
         .where((s) => s.trim().isNotEmpty)
         .join(' · ');
-    final head = parts.join(' — ');
+    final head = parts.join(', ');
     return detail.isEmpty ? head : '$head ($detail)';
   }
 }

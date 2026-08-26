@@ -125,7 +125,7 @@ class _ProtocolListScreenState extends ConsumerState<ProtocolListScreen> {
     if (stacks.isEmpty && protocols.isEmpty) {
       return [
         const _Message(
-          'Nothing under this goal yet — try another filter.',
+          'Nothing under this goal yet, try another filter.',
         ),
       ];
     }

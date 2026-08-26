@@ -399,7 +399,7 @@ class PadPlacementViewData {
         marker['sideStrict'] = true;
         if (padBoth) {
           marker['zone'] = '${marker['zone'] ?? 'perf'}-$side';
-          marker['label'] = '${marker['label'] ?? ''} — $side side (bilateral)'.trim();
+          marker['label'] = '${marker['label'] ?? ''}, $side side (bilateral)'.trim();
         }
         out.add(marker);
       }

@@ -150,7 +150,7 @@ class LiveSessionsBanner extends ConsumerWidget {
         multiple ? '${visible.length} sessions running' : '1 session running';
     final subtitle = multiple
         ? 'Tap to view & switch'
-        : '${_sessionLabel(visible.first)} — tap to view';
+        : '${_sessionLabel(visible.first)}, tap to view';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),

@@ -557,13 +557,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               ),
               const SizedBox(height: HwSpace.s3),
               if (set.sun != null)
-                Text('Sun — ${set.sun!.cue}',
+                Text('Sun: ${set.sun!.cue}',
                     style: TextStyle(
                         fontSize: HwType.sm, height: 1.5, color: p.ink2)),
               if (set.sun != null && set.moon != null)
                 const SizedBox(height: HwSpace.s1),
               if (set.moon != null)
-                Text('Moon — ${set.moon!.cue}',
+                Text('Moon: ${set.moon!.cue}',
                     style: TextStyle(
                         fontSize: HwType.sm, height: 1.5, color: p.ink2)),
               const SizedBox(height: HwSpace.s4),
@@ -984,14 +984,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           ),
           _optionChip(
             p,
-            label: 'Mirror — showing $_mirrorLabel',
+            label: 'Mirror: showing $_mirrorLabel',
             active: _mirrored && !_bilateral,
             enabled: !_bilateral,
             onTap: () => setState(() => _mirrored = !_mirrored),
           ),
           _optionChip(
             p,
-            label: 'Bilateral — both sides at once',
+            label: 'Bilateral, both sides at once',
             active: _bilateral,
             onTap: () => setState(() => _bilateral = !_bilateral),
           ),
@@ -1178,7 +1178,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             if (offView.isNotEmpty) ...[
               const SizedBox(height: HwSpace.s2),
               Text(
-                'On ${offView.first.view} — rotate to see',
+                'On ${offView.first.view}, rotate to see',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w500,
@@ -1392,7 +1392,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                         borderRadius: BorderRadius.circular(HwRadius.xs),
                       ),
                       child: Text(
-                        'Placement not mapped — follow the written cue',
+                        'Placement not mapped: follow the written cue',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -1899,7 +1899,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       if (r.isComposed)
         _notice(
           p,
-          'Composed placement — not authored',
+          'Composed placement, not authored',
           'This placement was composed by the engine rather than taken from an '
               'authored point. Read it as a starting position, not a prescription.',
           tint: p.mid,
@@ -2025,7 +2025,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         if (r.reassessmentNoteMessage.trim().isNotEmpty)
           _body(
             p,
-            'Note — ${r.reassessmentNoteLabel}. ${r.reassessmentNoteMessage}'
+            'Note: ${r.reassessmentNoteLabel}. ${r.reassessmentNoteMessage}'
             '${r.reassessmentTestsOffered.isEmpty ? '' : ' This region’s authored tests: ${r.reassessmentTestsOffered.join('; ')}.'}',
           ),
         if (r.expectedWindow.trim().isNotEmpty)
@@ -2033,7 +2033,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             p,
             'Typical window',
             '${r.expectedWindow}'
-                '${r.expectedWindowNote.trim().isEmpty ? '' : ' — ${r.expectedWindowNote}'}',
+                '${r.expectedWindowNote.trim().isEmpty ? '' : ' (${r.expectedWindowNote})'}',
           ),
       ]),
 
@@ -2159,7 +2159,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         ),
         child: Text(
           'Some pads in this set aren’t mapped to the 3D model yet, so no marker '
-          'is drawn for them. Use the written placement above — a marker in the '
+          'is drawn for them. Use the written placement above; a marker in the '
           'wrong place would be worse than none.',
           style: TextStyle(fontSize: HwType.cap, color: p.mid, height: 1.5),
         ),

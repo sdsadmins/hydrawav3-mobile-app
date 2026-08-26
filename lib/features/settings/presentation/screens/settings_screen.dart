@@ -636,7 +636,7 @@ class _AppearanceSection extends ConsumerWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${(textScale * 100).round()}% — tap to adjust',
+                      '${(textScale * 100).round()}%, tap to adjust',
                       style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
                     ),
                   ],
@@ -931,7 +931,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
           _MoreRow(
             icon: HwIcons.bolt,
             title: 'Default protocol',
-            subtitle: 'Auto-selected on Quick Start & body-part pick — '
+            subtitle: 'Auto-selected on Quick Start & body-part pick, '
                 'yours to change',
             belowSubtitle: HwPill(protocolName, tone: HwPillTone.copper),
             onTap: () => _showDefaultProtocolSheet(context, ref),
@@ -939,7 +939,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
           _MoreRow(
             icon: HwIcons.note,
             title: 'Default session music',
-            subtitle: 'Pre-selected on every session — change or turn off '
+            subtitle: 'Pre-selected on every session, change or turn off '
                 'per session anytime',
             onTap: () => _showMusicSheet(context, ref),
           ),
@@ -947,7 +947,7 @@ class _SessionDefaultsSection extends ConsumerWidget {
             icon: HwIcons.flask,
             title: 'Labs · Readiness Score',
             // The spec's exact wording — the honesty caveat is the point.
-            subtitle: 'Experimental — breath-derived score under validation. '
+            subtitle: 'Experimental: breath-derived score under validation. '
                 'Numbers may change as the model improves.',
             trailing: HwPill(labs ? 'On' : 'Off',
                 tone: labs ? HwPillTone.good : HwPillTone.ghost),
@@ -1142,7 +1142,7 @@ class _ComingOnlineSection extends StatelessWidget {
       (
         '🫁',
         'Breath Sync + Endurance Breathing',
-        'Breathing-led protocols — the pacer becomes primary in live sessions.'
+        'Breathing-led protocols: the pacer becomes primary in live sessions.'
       ),
       (
         '⇄',
@@ -1219,7 +1219,7 @@ class _BrandFooter extends StatelessWidget {
             child: Divider(height: 1, color: p.divider),
           ),
           Text(
-            'Wellness & performance platform — not a medical device. Sessions '
+            'Wellness & performance platform, not a medical device. Sessions '
             'support readiness, recovery, and mobility; they do not treat, '
             'cure, or diagnose.',
             textAlign: TextAlign.center,

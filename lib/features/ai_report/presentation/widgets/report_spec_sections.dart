@@ -243,7 +243,7 @@ class _GradeRow extends StatelessWidget {
               border: unknown ? Border.all(color: p.line) : null,
             ),
             child: Text(
-              row.grade ?? '—',
+              row.grade ?? '--',
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w800,

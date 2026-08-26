@@ -486,7 +486,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     return _StepShell(
       icon: Icons.workspace_premium_rounded,
       title: 'Credentials / Licenses',
-      subtitle: 'This step is optional — you can add these later.',
+      subtitle: 'This step is optional, you can add these later.',
       children: [
         _field(_certName, 'Certification Name', hint: 'State License'),
         _field(_certOrg, 'Issuing Organization', hint: 'State Medical Board'),
@@ -753,7 +753,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       subtitle: 'Confirm your details and accept the agreement.',
       children: [
         _reviewRow(Icons.person_rounded, 'Practitioner',
-            s.form.fullName.isEmpty ? '—' : s.form.fullName, s.form.email),
+            s.form.fullName.isEmpty ? '--' : s.form.fullName, s.form.email),
         _divider(),
         _reviewRow(Icons.workspace_premium_outlined, 'Licenses',
             '${s.certifications.length} added', null),

@@ -2006,7 +2006,7 @@ class _GuidedAssessmentSummary extends ConsumerWidget {
           const SizedBox(height: 6),
           Text(
             bits.isEmpty
-                ? 'Not started — five short steps: area of focus, range of '
+                ? 'Not started, five short steps: area of focus, range of '
                     'motion, daily activities, sleep posture and hardest position.'
                 : bits.join(' · '),
             style: TextStyle(

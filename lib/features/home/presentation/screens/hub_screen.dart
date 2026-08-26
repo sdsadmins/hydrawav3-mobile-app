@@ -427,7 +427,7 @@ class _OfflineBanner extends StatelessWidget {
           const SizedBox(width: HwSpace.s2),
           Expanded(
             child: Text(
-              'Offline — showing cached data. Sessions still run over '
+              'Offline, showing cached data. Sessions still run over '
               'Bluetooth.',
               style: TextStyle(
                 fontSize: HwType.cap,
@@ -567,7 +567,7 @@ class _PendingChecksCard extends ConsumerWidget {
       child: HwRow(
         leading: HwIcon(HwIcons.chat, size: 19, color: p.copperInk),
         title: '$count session${count == 1 ? '' : 's'} need a quick check',
-        subtitle: 'One check each — builds your proof board',
+        subtitle: 'One check each, builds your proof board',
         trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
         onTap: () => context.go(RoutePaths.history),
       ),
@@ -601,7 +601,7 @@ class _GuestNudge extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             const TextSpan(
-              text: 'Tag players and the Game Ready board fills itself — one '
+              text: 'Tag players and the Game Ready board fills itself, one '
                   "tap on any session's after-screen.",
             ),
           ],
@@ -714,7 +714,7 @@ class _HubEditList extends ConsumerWidget {
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
                 TextSpan(
-                  text: 'Drag to reorder, resize, or hide tiles — hidden ones '
+                  text: 'Drag to reorder, resize, or hide tiles; hidden ones '
                       'restore below.',
                 ),
               ],

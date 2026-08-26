@@ -104,9 +104,9 @@ enum HardPositionTolerance {
 
 enum HipTightness {
   no('No', 'No'),
-  yesRight('Yes-right', 'Yes — Right'),
-  yesLeft('Yes-left', 'Yes — Left'),
-  yesBoth('Yes-both', 'Yes — Both');
+  yesRight('Yes-right', 'Yes, Right'),
+  yesLeft('Yes-left', 'Yes, Left'),
+  yesBoth('Yes-both', 'Yes, Both');
 
   final String value;
   final String label;

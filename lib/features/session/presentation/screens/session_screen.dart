@@ -1655,7 +1655,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${_deviceLabel(deviceId)} lost connection — reconnecting…'),
+        content: Text('${_deviceLabel(deviceId)} lost connection, reconnecting…'),
         duration: const Duration(seconds: 3),
       ),
     );

@@ -269,7 +269,7 @@ class _GuidedAssessmentPanelState
                       }
                       context.showSnackBar(
                         err ??
-                            'Generating AI report — you can keep working. '
+                            'Generating AI report, you can keep working. '
                                 'Track progress above.',
                         isError: err != null,
                       );

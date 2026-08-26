@@ -165,7 +165,7 @@ class _ClientReportsSectionState extends ConsumerState<ClientReportsSection> {
         child: Center(
           child: Text(
             // The spec's empty state, verbatim.
-            'No reports yet — run a guided assessment to generate one.',
+            'No reports yet. Run a guided assessment to generate one.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: HwType.cap, height: 1.5, color: p.ink3),
           ),

@@ -263,7 +263,7 @@ class _DetailList extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   if (item.description.isNotEmpty)
-                    TextSpan(text: ' — ${item.description}'),
+                    TextSpan(text: ': ${item.description}'),
                 ],
               ),
             ),

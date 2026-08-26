@@ -156,7 +156,7 @@ class _CurrentPlanCard extends ConsumerWidget {
                 ),
               ),
               HwPill(
-                left == null ? '—' : '${left.round()} credits',
+                left == null ? '--' : '${left.round()} credits',
                 tone: HwPillTone.copper,
                 tabular: true,
               ),
@@ -168,7 +168,7 @@ class _CurrentPlanCard extends ConsumerWidget {
               Expanded(
                 child: _UsageStat(
                   label: 'Session time',
-                  value: seconds == null ? '—' : _sessionTimeLeft(seconds),
+                  value: seconds == null ? '--' : _sessionTimeLeft(seconds),
                 ),
               ),
               Expanded(
@@ -176,14 +176,14 @@ class _CurrentPlanCard extends ConsumerWidget {
                   label: reportsTotal != null && reports != null
                       ? 'AI reports (of ${reportsTotal.round()})'
                       : 'AI reports left',
-                  value: reports?.toString() ?? '—',
+                  value: reports?.toString() ?? '--',
                 ),
               ),
               Expanded(
                 child: _UsageStat(
                   label: 'Devices',
                   value: devices == null
-                      ? '—'
+                      ? '--'
                       : (devices == 0 ? 'Unlimited' : '$devices'),
                 ),
               ),

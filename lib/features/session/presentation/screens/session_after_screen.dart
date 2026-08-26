@@ -258,7 +258,7 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
                     Text('⏹', style: TextStyle(fontSize: 40, color: p.ink)),
                     const SizedBox(height: HwSpace.s2),
                     Text(
-                      'Stopped with ${_fmtRemaining(_remainingSeconds)} remaining — '
+                      'Stopped with ${_fmtRemaining(_remainingSeconds)} remaining, '
                       'logged as stopped early. No outcome or score is recorded for partial sessions.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
@@ -287,8 +287,8 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
                     const SizedBox(height: HwSpace.s1),
                     Text(
                       pending?.clientId == null
-                          ? 'Guest session logged — tag a player next time to build their history.'
-                          : 'Session logged — capture readiness next time to see the before → after story.',
+                          ? 'Guest session logged, tag a player next time to build their history.'
+                          : 'Session logged, capture readiness next time to see the before → after story.',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: HwType.sm, color: p.ink2),
                     ),
