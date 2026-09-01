@@ -20,11 +20,13 @@ import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../advanced_settings/domain/advanced_settings_model.dart';
+import '../../../payments/data/payment_repository.dart';
 import '../../../presets/data/preset_repository.dart';
 import '../../../devices/domain/device_model.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
+import '../../../session/services/session_engine.dart';
 import '../../domain/protocol_model.dart';
 import '../../domain/protocol_plus_model.dart';
 import '../providers/protocol_provider.dart';
@@ -50,56 +52,10 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
   String? _seededProtocolId;
   bool _startingFromDetail = false;
 
-  static const Map<int, int> _hotPwmToLevel = {
-    0: 0,
-    50: 1,
-    55: 2,
-    60: 3,
-    65: 4,
-    70: 5,
-    75: 6,
-    80: 7,
-    85: 8,
-    90: 9,
-    95: 10,
-    100: 11,
-  };
-  static const Map<int, int> _coldPwmToLevel = {
-    0: 0,
-    150: 1,
-    160: 2,
-    170: 3,
-    180: 4,
-    190: 5,
-    200: 6,
-    210: 7,
-    220: 8,
-    230: 9,
-    240: 10,
-    250: 11,
-  };
-
-  int _nearestLevel(int pwm, Map<int, int> map, int fallback) {
-    if (map.containsKey(pwm)) return map[pwm]!;
-    int bestKey = map.keys.first;
-    int bestDiff = (pwm - bestKey).abs();
-    for (final k in map.keys) {
-      final d = (pwm - k).abs();
-      if (d < bestDiff) {
-        bestDiff = d;
-        bestKey = k;
-      }
-    }
-    return map[bestKey] ?? fallback;
-  }
-
   AdvancedSettings _advancedDefaultsFromProtocol(Protocol p) {
-    final first = p.cycles.isNotEmpty ? p.cycles.first : null;
-    final hotLevel =
-        _nearestLevel(first?.hotPwm.toInt() ?? 70, _hotPwmToLevel, 5);
-    final coldLevel =
-        _nearestLevel(first?.coldPwm.toInt() ?? 190, _coldPwmToLevel, 5);
-
+    // hotPwmByCycle/coldPwmByCycle left empty deliberately — the protocol's
+    // own per-cycle hotPwm/coldPwm values are used unmodified until the user
+    // actually adjusts the pooled percentage slider.
     return AdvancedSettings(
       lights: true,
       vibrationMode: 'Sweep',
@@ -108,10 +64,6 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
       vibrationSingleHz: 100,
       cycle1Initiation: p.cycle1,
       cycle5Completion: p.cycle5,
-      hotLevel: hotLevel,
-      coldLevel: coldLevel,
-      hotPack: false,
-      coldPack: false,
       hotDrop: p.hotdrop,
       coldDrop: p.colddrop,
       vibMin: p.vibmin,
@@ -469,7 +421,7 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                       StatChip(
                           icon: Icons.layers_outlined,
                           value: '${plusDetail.protocolCount}',
-                          label: 'protocols'),
+                          label: 'Protocols'),
                     // For a Plus these are summed across the sequence (null until
                     // the detail loads); a normal protocol uses its own counts.
                     StatChip(
@@ -477,13 +429,39 @@ class _ProtocolDetailScreenState extends ConsumerState<ProtocolDetailScreen> {
                         value: isPlus
                             ? '${plusTotals?.cycles ?? '…'}'
                             : '${p.cycles.length}',
-                        label: 'cycles'),
+                        label: 'Cycles'),
                     StatChip(
                         icon: Icons.play_circle_outline_rounded,
                         value: isPlus
                             ? '${plusTotals?.sessions ?? '…'}'
                             : '${p.sessions}',
-                        label: 'sessions'),
+                        label: 'Sessions'),
+                    // Same rate applies to a Plus sequence's own summed total —
+                    // p.totalDuration above already reflects it, so no isPlus
+                    // gating is needed here either.
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final rate =
+                            ref.watch(sessionTokenPerSecondCostProvider);
+                        return rate.when(
+                          data: (perSecond) {
+                            if (perSecond == null || perSecond <= 0) {
+                              return const SizedBox.shrink();
+                            }
+                            final cost =
+                                (p.totalDurationSeconds * perSecond).ceil();
+                            return StatChip(
+                              icon: Icons.bolt_outlined,
+                              value: '$cost',
+                              label:
+                                  cost == 1 ? 'Token to run' : 'Tokens to run',
+                            );
+                          },
+                          loading: () => const SizedBox.shrink(),
+                          error: (_, __) => const SizedBox.shrink(),
+                        );
+                      },
+                    ),
                   ])),
               if (isPlus) ...[
                 const SizedBox(height: 20),
@@ -1482,36 +1460,6 @@ Map<String, dynamic> _protocolToRs35Payload(
 }) {
   final cycles = p.cycles;
 
-  // Intensity mapping from web sender (0–11).
-  const hotMap = <int, int>{
-    0: 0,
-    1: 50,
-    2: 55,
-    3: 60,
-    4: 65,
-    5: 70,
-    6: 75,
-    7: 80,
-    8: 85,
-    9: 90,
-    10: 95,
-    11: 100,
-  };
-  const coldMap = <int, int>{
-    0: 0,
-    1: 150,
-    2: 160,
-    3: 170,
-    4: 180,
-    5: 190,
-    6: 200,
-    7: 210,
-    8: 220,
-    9: 230,
-    10: 240,
-    11: 250,
-  };
-
   List<String> leftFuncs = cycles.map((c) => c.leftFunction).toList();
   List<String> rightFuncs = cycles.map((c) => c.rightFunction).toList();
 
@@ -1526,14 +1474,20 @@ Map<String, dynamic> _protocolToRs35Payload(
     rightFuncs = rightFuncs.map(flip).toList();
   }
 
-  final hotPwm = hotMap[advancedSettings.hotLevel.clamp(0, 11)] ?? 70;
-  final coldPwm = coldMap[advancedSettings.coldLevel.clamp(0, 11)] ?? 190;
-  final pwmHot = advancedSettings.hotPack
-      ? cycles.map((_) => hotPwm).toList()
-      : cycles.map((c) => c.hotPwm.toInt()).toList();
-  final pwmCold = advancedSettings.coldPack
-      ? cycles.map((_) => coldPwm).toList()
-      : cycles.map((c) => c.coldPwm.toInt()).toList();
+  final pwmHot = cycles
+      .map((c) => SessionEngine.applyIndividualPercent(
+            c.hotPwm,
+            advancedSettings.hotPercent,
+            SessionEngine.kMaxHotPwm,
+          ))
+      .toList();
+  final pwmCold = cycles
+      .map((c) => SessionEngine.applyIndividualPercent(
+            c.coldPwm,
+            advancedSettings.coldPercent,
+            SessionEngine.kMaxColdPwm,
+          ))
+      .toList();
 
   final vibMode = advancedSettings.vibrationMode;
   final vibMin = switch (vibMode) {
@@ -1878,6 +1832,67 @@ final _presetsProvider = FutureProvider<List<Preset>>((ref) async {
   return repo.getPresets();
 });
 
+/// Fills the track from the ZERO position outward to the thumb (either
+/// direction) instead of the default left-edge-to-thumb fill — for a +/-
+/// slider, filling the whole left span on a negative value would visually
+/// read as "a large positive amount," which is backwards.
+class _ZeroCenteredSliderTrackShape extends RoundedRectSliderTrackShape {
+  const _ZeroCenteredSliderTrackShape({required this.min, required this.max});
+  final double min;
+  final double max;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    if (sliderTheme.trackHeight == null || sliderTheme.trackHeight! <= 0) {
+      return;
+    }
+    final trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    final trackRadius = Radius.circular(trackRect.height / 2);
+
+    final inactivePaint = Paint()
+      ..color = sliderTheme.inactiveTrackColor ?? const Color(0xFFE0E0E0);
+    final activePaint = Paint()
+      ..color = sliderTheme.activeTrackColor ?? const Color(0xFF000000);
+
+    context.canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, trackRadius),
+      inactivePaint,
+    );
+
+    final range = max - min;
+    final zeroFraction = range == 0 ? 0.0 : ((0 - min) / range).clamp(0.0, 1.0);
+    final zeroX = trackRect.left + trackRect.width * zeroFraction;
+    final left = thumbCenter.dx < zeroX ? thumbCenter.dx : zeroX;
+    final right = thumbCenter.dx < zeroX ? zeroX : thumbCenter.dx;
+
+    context.canvas.save();
+    context.canvas.clipRRect(RRect.fromRectAndRadius(trackRect, trackRadius));
+    context.canvas.drawRect(
+      Rect.fromLTRB(left, trackRect.top, right, trackRect.bottom),
+      activePaint,
+    );
+    context.canvas.restore();
+  }
+}
+
 class _AdvancedSettingsPanel extends ConsumerWidget {
   final String protocolId;
   final List<String> selectedDeviceIds;
@@ -1908,49 +1923,6 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
     const vibMinHz = 0.0;
     const dropMax = 10.0;
 
-    Widget slider({
-      required String label,
-      required int value,
-      required Color valueColor,
-      required ValueChanged<int> onChanged,
-    }) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                label.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: ThemeConstants.textSecondary,
-                  letterSpacing: 0.6,
-                ),
-              ),
-              Text(
-                '$value',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: valueColor,
-                ),
-              ),
-            ],
-          ),
-          Slider(
-            value: value.toDouble(),
-            min: 0,
-            max: 11,
-            divisions: 11,
-            activeColor: valueColor,
-            onChanged: (v) => onChanged(v.round()),
-          ),
-        ],
-      );
-    }
-
     Widget smallNumberSlider({
       required String label,
       required double value,
@@ -1960,8 +1932,22 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
       required Color color,
       required ValueChanged<double> onChanged,
       String? unit,
+      // false = the track fills from ZERO outward toward the thumb (either
+      // direction), not from the left edge — for a +/- slider where the
+      // whole left-to-thumb span filling in would misleadingly suggest
+      // "this much has been added" even on the negative side.
+      bool coloredTrack = true,
     }) {
       final v = value.clamp(min, max);
+      final slider = Slider(
+        value: v,
+        min: min,
+        max: max,
+        divisions: divisions,
+        activeColor: color,
+        inactiveColor: ThemeConstants.borderLight,
+        onChanged: onChanged,
+      );
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1987,14 +1973,17 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
               ),
             ],
           ),
-          Slider(
-            value: v,
-            min: min,
-            max: max,
-            divisions: divisions,
-            activeColor: color,
-            onChanged: onChanged,
-          ),
+          coloredTrack
+              ? slider
+              : SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackShape: _ZeroCenteredSliderTrackShape(
+                      min: min,
+                      max: max,
+                    ),
+                  ),
+                  child: slider,
+                ),
         ],
       );
     }
@@ -2163,21 +2152,31 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         ],
         const SizedBox(height: 12),
 
-        // Hot / Cold intensity — web order after vibration.
-        slider(
+        // Hot / Cold intensity — each cycle scales independently off its own
+        // protocol base value (SessionEngine.applyIndividualPercent); no
+        // pooling/coupling between cycles.
+        smallNumberSlider(
           label: 'Hot Pad Intensity',
-          value: settings.hotLevel,
-          valueColor: ThemeConstants.accent,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(hotLevel: v, hotPack: true)),
+          value: settings.hotPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: ThemeConstants.accent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) => onChangeSettings(settings.copyWith(hotPercent: v)),
         ),
         const SizedBox(height: 10),
-        slider(
+        smallNumberSlider(
           label: 'Cold Pad Intensity',
-          value: settings.coldLevel,
-          valueColor: Colors.blueAccent,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(coldLevel: v, coldPack: true)),
+          value: settings.coldPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: Colors.blueAccent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
         const SizedBox(height: 12),
 

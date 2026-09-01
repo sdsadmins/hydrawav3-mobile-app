@@ -93,36 +93,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   bool _didInitializeAutoScan = false;
   bool _isSeedingDefaultProtocol = false;
 
-  static const Map<int, int> _hotPwmToLevel = {
-    0: 0,
-    50: 1,
-    55: 2,
-    60: 3,
-    65: 4,
-    70: 5,
-    75: 6,
-    80: 7,
-    85: 8,
-    90: 9,
-    95: 10,
-    100: 11,
-  };
-
-  static const Map<int, int> _coldPwmToLevel = {
-    0: 0,
-    150: 1,
-    160: 2,
-    170: 3,
-    180: 4,
-    190: 5,
-    200: 6,
-    210: 7,
-    220: 8,
-    230: 9,
-    240: 10,
-    250: 11,
-  };
-
   @override
   void initState() {
     super.initState();
@@ -162,27 +132,10 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     // offers the manual "Connect all" button.
   }
 
-  int _nearestLevel(int pwm, Map<int, int> map, int fallback) {
-    if (map.containsKey(pwm)) return map[pwm]!;
-    var bestKey = map.keys.first;
-    var bestDiff = (pwm - bestKey).abs();
-    for (final key in map.keys) {
-      final diff = (pwm - key).abs();
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestKey = key;
-      }
-    }
-    return map[bestKey] ?? fallback;
-  }
-
   AdvancedSettings _advancedDefaultsFromProtocol(Protocol protocol) {
-    final first = protocol.cycles.isNotEmpty ? protocol.cycles.first : null;
-    final hotLevel =
-        _nearestLevel(first?.hotPwm.toInt() ?? 70, _hotPwmToLevel, 5);
-    final coldLevel =
-        _nearestLevel(first?.coldPwm.toInt() ?? 190, _coldPwmToLevel, 5);
-
+    // hotPwmByCycle/coldPwmByCycle left empty deliberately — the protocol's
+    // own per-cycle hotPwm/coldPwm values are used unmodified until the user
+    // actually adjusts the pooled percentage slider.
     return AdvancedSettings(
       lights: true,
       vibrationMode: 'Sweep',
@@ -191,10 +144,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       vibrationSingleHz: 100,
       cycle1Initiation: protocol.cycle1,
       cycle5Completion: protocol.cycle5,
-      hotLevel: hotLevel,
-      coldLevel: coldLevel,
-      hotPack: false,
-      coldPack: false,
       hotDrop: protocol.hotdrop,
       coldDrop: protocol.colddrop,
       vibMin: protocol.vibmin,
@@ -4118,6 +4067,67 @@ class _SessionDeviceSetupCard extends StatelessWidget {
   }
 }
 
+/// Fills the track from the ZERO position outward to the thumb (either
+/// direction) instead of the default left-edge-to-thumb fill — for a +/-
+/// slider, filling the whole left span on a negative value would visually
+/// read as "a large positive amount," which is backwards.
+class _ZeroCenteredSliderTrackShape extends RoundedRectSliderTrackShape {
+  const _ZeroCenteredSliderTrackShape({required this.min, required this.max});
+  final double min;
+  final double max;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    if (sliderTheme.trackHeight == null || sliderTheme.trackHeight! <= 0) {
+      return;
+    }
+    final trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    final trackRadius = Radius.circular(trackRect.height / 2);
+
+    final inactivePaint = Paint()
+      ..color = sliderTheme.inactiveTrackColor ?? const Color(0xFFE0E0E0);
+    final activePaint = Paint()
+      ..color = sliderTheme.activeTrackColor ?? const Color(0xFF000000);
+
+    context.canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, trackRadius),
+      inactivePaint,
+    );
+
+    final range = max - min;
+    final zeroFraction = range == 0 ? 0.0 : ((0 - min) / range).clamp(0.0, 1.0);
+    final zeroX = trackRect.left + trackRect.width * zeroFraction;
+    final left = thumbCenter.dx < zeroX ? thumbCenter.dx : zeroX;
+    final right = thumbCenter.dx < zeroX ? zeroX : thumbCenter.dx;
+
+    context.canvas.save();
+    context.canvas.clipRRect(RRect.fromRectAndRadius(trackRect, trackRadius));
+    context.canvas.drawRect(
+      Rect.fromLTRB(left, trackRect.top, right, trackRect.bottom),
+      activePaint,
+    );
+    context.canvas.restore();
+  }
+}
+
 class _SessionAdvancedSettingsPanel extends StatelessWidget {
   final AdvancedSettings settings;
   final List<String> selectedDeviceIds;
@@ -4141,49 +4151,6 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
     const vibMaxHz = 230.0;
     const vibMinHz = 0.0;
 
-    Widget slider({
-      required String label,
-      required int value,
-      required Color valueColor,
-      required ValueChanged<int> onChanged,
-    }) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                label.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: ThemeConstants.textSecondary,
-                  letterSpacing: 0.6,
-                ),
-              ),
-              Text(
-                '$value',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: valueColor,
-                ),
-              ),
-            ],
-          ),
-          Slider(
-            value: value.toDouble(),
-            min: 0,
-            max: 11,
-            divisions: 11,
-            activeColor: valueColor,
-            onChanged: (value) => onChanged(value.round()),
-          ),
-        ],
-      );
-    }
-
     Widget smallNumberSlider({
       required String label,
       required double value,
@@ -4193,8 +4160,22 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
       required Color color,
       required ValueChanged<double> onChanged,
       String? unit,
+      // false = the track fills from ZERO outward toward the thumb (either
+      // direction), not from the left edge — for a +/- slider where the
+      // whole left-to-thumb span filling in would misleadingly suggest
+      // "this much has been added" even on the negative side.
+      bool coloredTrack = true,
     }) {
       final clamped = value.clamp(min, max);
+      final slider = Slider(
+        value: clamped,
+        min: min,
+        max: max,
+        divisions: divisions,
+        activeColor: color,
+        inactiveColor: ThemeConstants.borderLight,
+        onChanged: onChanged,
+      );
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4220,14 +4201,17 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
               ),
             ],
           ),
-          Slider(
-            value: clamped,
-            min: min,
-            max: max,
-            divisions: divisions,
-            activeColor: color,
-            onChanged: onChanged,
-          ),
+          coloredTrack
+              ? slider
+              : SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackShape: _ZeroCenteredSliderTrackShape(
+                      min: min,
+                      max: max,
+                    ),
+                  ),
+                  child: slider,
+                ),
         ],
       );
     }
@@ -4458,21 +4442,33 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 10),
-        slider(
+        // Hot / Cold intensity — each cycle scales independently off its own
+        // protocol base value (SessionEngine.applyIndividualPercent); no
+        // pooling/coupling between cycles.
+        smallNumberSlider(
           label: 'Hot Pad Intensity',
-          value: settings.hotLevel,
-          valueColor: ThemeConstants.accent,
-          onChanged: (value) => onChangeSettings(
-              settings.copyWith(hotLevel: value, hotPack: true)),
+          value: settings.hotPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: ThemeConstants.accent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) =>
+              onChangeSettings(settings.copyWith(hotPercent: v)),
         ),
         const SizedBox(height: 8),
-        slider(
+        smallNumberSlider(
           label: 'Cold Pad Intensity',
-          value: settings.coldLevel,
-          valueColor: Colors.blueAccent,
-          onChanged: (value) => onChangeSettings(
-            settings.copyWith(coldLevel: value, coldPack: true),
-          ),
+          value: settings.coldPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: Colors.blueAccent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) =>
+              onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
         const SizedBox(height: 10),
         Text(

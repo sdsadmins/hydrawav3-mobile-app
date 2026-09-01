@@ -301,6 +301,11 @@ class ApiEndpoints {
   static const String paymentUser = '/payments/user';
   static const String products = '/products';
 
+  // Token cost config — the backend's per-second session token rate
+  // (session.service.ts: `perSecondCost`), used to show "this will cost ~N
+  // tokens" on a protocol before starting it.
+  static const String tokenConfig = '/token-config';
+
   /// Every SUBSCRIPTION product. `GET /products` deliberately drops the one
   /// named "Free" (`product.service.ts:150`) because it isn't purchasable — but
   /// that is the product a free org's plan points at, so its `aiCredit` (the

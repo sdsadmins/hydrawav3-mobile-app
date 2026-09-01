@@ -436,15 +436,38 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// post-session questions can be asked even after the live card is gone.
   /// Idempotent; only fires for sessions that actually ran (a draft was saved).
   void enqueuePendingOutcome() {
-    if (_pendingOutcomeEnqueued) return;
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: enqueuePendingOutcome() called — '
+      'alreadyEnqueued=$_pendingOutcomeEnqueued historyCaptured=$_historyCaptured '
+      'protocol=${state.protocol?.templateName} deviceIds=${state.deviceIds}',
+    );
+    if (_pendingOutcomeEnqueued) {
+      appLogger.i('🩺 OUTCOME-DEBUG: skipped — already enqueued this run');
+      return;
+    }
     // Snapshot every session that actually ran so the after-screen (or History
     // "Needs review") can finalize a single `/intake` POST. Pulse questions are
     // client-only — guests still log from the after screen without prompting.
-    if (!_historyCaptured) return; // never started running
-    if (state.protocol == null || state.deviceIds.isEmpty) return;
+    if (!_historyCaptured) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — _historyCaptured is false '
+        '(session never started running / draft never saved)',
+      );
+      return;
+    }
+    if (state.protocol == null || state.deviceIds.isEmpty) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — protocol or deviceIds missing '
+        '(protocol=${state.protocol}, deviceIds=${state.deviceIds})',
+      );
+      return;
+    }
     _pendingOutcomeEnqueued = true;
     try {
       final snapshot = _buildPendingOutcome();
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: snapshot built, enqueuing sessionId=${snapshot.sessionId}',
+      );
       unawaited(_ref.read(pendingOutcomesProvider.notifier).enqueue(snapshot));
     } catch (e) {
       _pendingOutcomeEnqueued = false;
@@ -1166,8 +1189,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final current = state.deviceStatuses[deviceId];
     if (current == null) return;
 
-    // TEMP-DISABLED (rs status handler for non-Plus firmware devices) — commented
-    // out at request, pending investigation. Restore by uncommenting.
     switch (normalized) {
       case 'pause':
         if (current == SessionStatus.running) {
@@ -1185,6 +1206,23 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           unawaited(resumeDevice(deviceId));
           // Web parity: mirror the per-device resume to the backend too.
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
+        }
+        break;
+      case 'stop':
+        // A NORMAL (non-Plus — Plus already returned above) device reporting
+        // `rs:"stop"` has finished its protocol and is ending the session on
+        // its own — this is what "natural completion" actually looks like on
+        // the wire. There is no ambiguity here the way there is for a Plus
+        // device (no stacked sub-protocol to wait through), so act on it
+        // immediately. Previously this case didn't exist at all, so a
+        // session's own natural completion never queued the post-session
+        // outcomes screen or finalized history — only an app-initiated
+        // stop() did.
+        if (current == SessionStatus.running ||
+            current == SessionStatus.paused) {
+          appLogger.i('Session: device $deviceId reported rs=stop → '
+              'treating as natural completion');
+          _forceDeviceStopped(deviceId);
         }
         break;
       // 'estop' is handled above — before the Plus early-return — so it applies
@@ -1496,6 +1534,21 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         'newStatuses=$statuses');
     if (overallStatus == SessionStatus.stopped ||
         overallStatus == SessionStatus.completed) {
+      // The device itself reporting `rs=stop` (natural completion on the
+      // hardware, or an external/firmware-side stop) is a terminal
+      // transition exactly like a manual stop() or _onTick's own
+      // local-timer completion — it must also queue the post-session
+      // outcome. Without this, a session whose FIRMWARE ends it first
+      // (the common case: the device finishes its programmed duration and
+      // reports rs=stop before the app's local timer even notices) never
+      // got the after-screen or its final history entry — only an
+      // app-initiated stop()/_onTick completion did, because those two
+      // call enqueuePendingOutcome() and this path never did.
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _forceDeviceStopped reached terminal '
+        'overallStatus=$overallStatus, calling enqueuePendingOutcome()',
+      );
+      enqueuePendingOutcome();
       unawaited(_syncBackgroundRuntime('stopped'));
     } else {
       _pushNotificationSync();
@@ -2746,36 +2799,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     final cycles = p.cycles;
 
-    // Intensity mapping from web sender (0–11).
-    const hotMap = <int, int>{
-      0: 0,
-      1: 50,
-      2: 55,
-      3: 60,
-      4: 65,
-      5: 70,
-      6: 75,
-      7: 80,
-      8: 85,
-      9: 90,
-      10: 95,
-      11: 100,
-    };
-    const coldMap = <int, int>{
-      0: 0,
-      1: 150,
-      2: 160,
-      3: 170,
-      4: 180,
-      5: 190,
-      6: 200,
-      7: 210,
-      8: 220,
-      9: 230,
-      10: 240,
-      11: 250,
-    };
-
     List<String> leftFuncs = cycles.map((c) => c.leftFunction).toList();
     List<String> rightFuncs = cycles.map((c) => c.rightFunction).toList();
 
@@ -2790,14 +2813,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       rightFuncs = rightFuncs.map(flip).toList();
     }
 
-    final hotPwm = hotMap[advancedSettings.hotLevel.clamp(0, 11)] ?? 70;
-    final coldPwm = coldMap[advancedSettings.coldLevel.clamp(0, 11)] ?? 190;
-    final pwmHot = advancedSettings.hotPack
-        ? cycles.map((_) => hotPwm).toList()
-        : cycles.map((c) => c.hotPwm.toInt()).toList();
-    final pwmCold = advancedSettings.coldPack
-        ? cycles.map((_) => coldPwm).toList()
-        : cycles.map((c) => c.coldPwm.toInt()).toList();
+    final pwmHot = cycles
+        .map((c) => applyIndividualPercent(
+              c.hotPwm,
+              advancedSettings.hotPercent,
+              kMaxHotPwm,
+            ))
+        .toList();
+    final pwmCold = cycles
+        .map((c) => applyIndividualPercent(
+              c.coldPwm,
+              advancedSettings.coldPercent,
+              kMaxColdPwm,
+            ))
+        .toList();
 
     final vibMode = advancedSettings.vibrationMode;
     final vibMin = switch (vibMode) {
@@ -2959,6 +2988,30 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       advancedSettings,
       applyStartDelay: applyStartDelay,
     );
+  }
+
+  /// Hardware ceiling for a single cycle's hot/cold PWM value — matches the
+  /// firmware's 0–11 intensity map (`hotMap`/`coldMap` above): level 11 tops
+  /// out at 100 (hot) / 250 (cold).
+  static const int kMaxHotPwm = 100;
+  static const int kMaxColdPwm = 250;
+
+  /// Scales ONE cycle's hot/cold PWM value by [percent] independently — no
+  /// pooling, no coupling with any other cycle. [basePwm] is always the
+  /// protocol's ORIGINAL value for this cycle (never a previously-adjusted
+  /// result), so repeated adjustments recompute fresh each time rather than
+  /// compounding.
+  ///
+  /// `new = basePwm × (1 + percent / 100)`, clamped to `[0, maxPwm]`. A
+  /// cycle whose base value is 0 always stays 0 at any percent — that falls
+  /// out of the multiplication itself, no special-casing needed.
+  static int applyIndividualPercent(
+    double basePwm,
+    double percent,
+    int maxPwm,
+  ) {
+    final scaled = basePwm * (1 + percent / 100);
+    return scaled.clamp(0, maxPwm.toDouble()).round();
   }
 
   Future<void> pause() async {
@@ -3614,6 +3667,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     if (overallStatus == SessionStatus.completed ||
         overallStatus == SessionStatus.stopped) {
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _onTick reached terminal overallStatus='
+        '$overallStatus, calling enqueuePendingOutcome()',
+      );
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();

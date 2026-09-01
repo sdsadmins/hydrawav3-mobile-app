@@ -338,6 +338,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _musicController = ref.read(sessionMusicControllerProvider.notifier);
     _activeSessionId = _findMatchingActiveSessionId();
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: SessionScreen.initState — _engineKey=$_engineKey '
+      '(_activeSessionId=$_activeSessionId, widget.sessionId=${widget.sessionId}, '
+      'protocolId=${widget.protocolId}, deviceIds=${widget.deviceIds}, '
+      'remoteView=${widget.remoteView})',
+    );
 
     // REMOTE VIEW: this screen mirrors a foreign WiFi session from the org-wide
     // live feed Ã¢â‚¬â€ there is no local engine to bootstrap, listen to, or sync.
@@ -568,7 +574,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           final protocolName = updatedEngineState.protocol?.templateName ??
               widget.protocol?.templateName ??
               'Unknown Protocol';
-          await _ensureActiveSessionCreated(protocolName: protocolName);
+          await _ensureActiveSessionCreated(
+            protocolName: protocolName,
+            totalDurationSeconds: updatedEngineState.timer.totalDuration.inSeconds,
+          );
           await _syncCurrentSessionToActiveSessions();
         } else {
           appLogger
@@ -1423,7 +1432,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _padPollTimer = null;
   }
 
-  Future<void> _ensureActiveSessionCreated({String? protocolName}) async {
+  Future<void> _ensureActiveSessionCreated({
+    String? protocolName,
+    int totalDurationSeconds = 0,
+  }) async {
     final activeSessionsNotifier = ref.read(activeSessionsProvider.notifier);
     active_session.ActiveSession? existingSession;
     for (final session in ref.read(activeSessionsProvider)) {
@@ -1436,6 +1448,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (existingSession != null) {
       _activeSessionId = existingSession.id;
       appLogger.i('Reusing existing session by ID: $_activeSessionId');
+      // Backfill the duration if an earlier creator (e.g. the launch-time
+      // call) didn't have it yet — createSession() itself handles this.
+      if (totalDurationSeconds > 0) {
+        unawaited(activeSessionsNotifier.createSession(
+          sessionId: _engineKey,
+          protocolId: widget.protocolId,
+          protocolName: protocolName ?? 'Unknown Protocol',
+          deviceIds: widget.deviceIds,
+          transport: widget.transport,
+          totalDurationSeconds: totalDurationSeconds,
+        ));
+      }
       return;
     }
 
@@ -1445,6 +1469,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       protocolName: protocolName ?? 'Unknown Protocol',
       deviceIds: widget.deviceIds,
       transport: widget.transport,
+      totalDurationSeconds: totalDurationSeconds,
       // Persist Plus bindings so re-opening from history can re-attach the
       // socket and stop the server-side schedule. Prefer bindings resolved at
       // runtime (instant-UI launch) over the up-front widget bindings.
@@ -1806,6 +1831,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     await _ensureActiveSessionCreated(
       protocolName:
           engine.protocol?.templateName ?? widget.protocol?.templateName,
+      totalDurationSeconds: engine.timer.totalDuration.inSeconds,
     );
     // Session draft is captured once on start by [SessionEngine._captureSessionHistoryOnce]
     // â€” do NOT POST `/intake` here; finalize happens on the after-screen.
@@ -1819,6 +1845,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   void _queuePostSessionReview() {
     if (_navigatedToAfter || widget.remoteView) return;
     _navigatedToAfter = true;
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: _queuePostSessionReview — using _engineKey=$_engineKey',
+    );
     ref
         .read(sessionEngineFamilyProvider(_engineKey).notifier)
         .enqueuePendingOutcome();
@@ -4171,12 +4200,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     setState(() => _startingSession = true);
                     try {
                       await ctrl.start();
-                      final currentProtocol = ref
-                          .read(sessionEngineFamilyProvider(_engineKey))
-                          .protocol;
+                      final startedEngineState =
+                          ref.read(sessionEngineFamilyProvider(_engineKey));
+                      final currentProtocol = startedEngineState.protocol;
                       await _ensureActiveSessionCreated(
                         protocolName:
                             currentProtocol?.templateName ?? 'Unknown Protocol',
+                        totalDurationSeconds:
+                            startedEngineState.timer.totalDuration.inSeconds,
                       );
                       await _syncCurrentSessionToActiveSessions();
                     } finally {

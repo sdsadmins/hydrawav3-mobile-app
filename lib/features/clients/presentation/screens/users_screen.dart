@@ -223,11 +223,16 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         preppedToday.add(id);
       }
 
-      for (final d in s.discomfortAreas) {
-        if (d.discomfortBefore == null || d.discomfortAfter == null) continue;
-        scored[id] = (scored[id] ?? 0) + 1;
-        if (d.discomfortAfter! < d.discomfortBefore!) {
-          improved[id] = (improved[id] ?? 0) + 1;
+      // Same rank-based signal as the Hub's Outcome Pulse: each answered
+      // post-session preset question is a "check", rank >= 4 of 5 counts as
+      // improved. Free-text answers (rank 0) carry no quality signal.
+      for (final p in s.protocols) {
+        for (final qa in p.questionAnswers) {
+          if (qa.rank <= 0) continue;
+          scored[id] = (scored[id] ?? 0) + 1;
+          if (qa.rank >= 4) {
+            improved[id] = (improved[id] ?? 0) + 1;
+          }
         }
       }
     }
@@ -728,11 +733,18 @@ class _UserRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
+                    // Top-aligned so a name that wraps to 2+ lines doesn't
+                    // vertically center the jersey badge against the middle
+                    // of the whole wrapped block.
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Flexible(
                         child: Text(
-                          client.clientName,
-                          maxLines: 1,
+                          // "Name - Nickname", same as the Select Client
+                          // sheet (Client.displayName). Wraps to a 2nd line
+                          // for a long name instead of being cut to one.
+                          client.displayName,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 15,

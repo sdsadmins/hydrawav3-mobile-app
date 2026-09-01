@@ -17,11 +17,13 @@ class AdvancedSettings {
   final bool cycle1Initiation;
   final bool cycle5Completion;
 
-  /// 0–11 intensity levels, mapped to PWM arrays when hotPack/coldPack enabled.
-  final int hotLevel;
-  final int coldLevel;
-  final bool hotPack;
-  final bool coldPack;
+  /// Hot/cold pad intensity adjustment, as a percentage applied
+  /// INDEPENDENTLY to each cycle's own base PWM value (see
+  /// [SessionEngine.applyIndividualPercent]) — no coupling between cycles,
+  /// no pooling. 0 means "unmodified, use the protocol's own values".
+  /// A cycle whose base value is 0 always stays 0, at any percent.
+  final double hotPercent;
+  final double coldPercent;
 
   final double hotDrop;
   final double coldDrop;
@@ -42,10 +44,8 @@ class AdvancedSettings {
     this.vibrationSingleHz = 100,
     this.cycle1Initiation = true,
     this.cycle5Completion = true,
-    this.hotLevel = 5,
-    this.coldLevel = 5,
-    this.hotPack = false,
-    this.coldPack = false,
+    this.hotPercent = 0,
+    this.coldPercent = 0,
     this.hotDrop = 0,
     this.coldDrop = 0,
     this.vibMin = 15,
@@ -63,10 +63,8 @@ class AdvancedSettings {
         vibrationSingleHz != defaults.vibrationSingleHz ||
         cycle1Initiation != defaults.cycle1Initiation ||
         cycle5Completion != defaults.cycle5Completion ||
-        hotLevel != defaults.hotLevel ||
-        coldLevel != defaults.coldLevel ||
-        hotPack != defaults.hotPack ||
-        coldPack != defaults.coldPack ||
+        hotPercent != defaults.hotPercent ||
+        coldPercent != defaults.coldPercent ||
         hotDrop != defaults.hotDrop ||
         coldDrop != defaults.coldDrop ||
         vibMin != defaults.vibMin ||
@@ -83,10 +81,8 @@ class AdvancedSettings {
     double? vibrationSingleHz,
     bool? cycle1Initiation,
     bool? cycle5Completion,
-    int? hotLevel,
-    int? coldLevel,
-    bool? hotPack,
-    bool? coldPack,
+    double? hotPercent,
+    double? coldPercent,
     double? hotDrop,
     double? coldDrop,
     double? vibMin,
@@ -102,10 +98,8 @@ class AdvancedSettings {
       vibrationSingleHz: vibrationSingleHz ?? this.vibrationSingleHz,
       cycle1Initiation: cycle1Initiation ?? this.cycle1Initiation,
       cycle5Completion: cycle5Completion ?? this.cycle5Completion,
-      hotLevel: hotLevel ?? this.hotLevel,
-      coldLevel: coldLevel ?? this.coldLevel,
-      hotPack: hotPack ?? this.hotPack,
-      coldPack: coldPack ?? this.coldPack,
+      hotPercent: hotPercent ?? this.hotPercent,
+      coldPercent: coldPercent ?? this.coldPercent,
       hotDrop: hotDrop ?? this.hotDrop,
       coldDrop: coldDrop ?? this.coldDrop,
       vibMin: vibMin ?? this.vibMin,
@@ -123,10 +117,8 @@ class AdvancedSettings {
         'vibrationSingleHz': vibrationSingleHz,
         'cycle1Initiation': cycle1Initiation,
         'cycle5Completion': cycle5Completion,
-        'hotLevel': hotLevel,
-        'coldLevel': coldLevel,
-        'hotPack': hotPack,
-        'coldPack': coldPack,
+        'hotPercent': hotPercent,
+        'coldPercent': coldPercent,
         'hotDrop': hotDrop,
         'coldDrop': coldDrop,
         'vibMin': vibMin,
@@ -141,10 +133,14 @@ class AdvancedSettings {
     final hasLegacy = json.containsKey('hotPwm') ||
         json.containsKey('coldPwm') ||
         json.containsKey('lightIntensity') ||
-        json.containsKey('overrideProtocolDefaults');
+        json.containsKey('overrideProtocolDefaults') ||
+        json.containsKey('hotLevel') ||
+        json.containsKey('hotPwmByCycle');
 
     if (hasLegacy) {
-      // Legacy was percent-based; keep web default vibration mode/lights.
+      // Legacy was level- or array-based; keep web default vibration
+      // mode/lights and drop the intensity override rather than guess at a
+      // conversion.
       return AdvancedSettings(
         lights: true,
         vibrationMode: 'Sweep',
@@ -161,10 +157,8 @@ class AdvancedSettings {
       vibrationSingleHz: (json['vibrationSingleHz'] as num?)?.toDouble() ?? 100,
       cycle1Initiation: json['cycle1Initiation'] as bool? ?? true,
       cycle5Completion: json['cycle5Completion'] as bool? ?? true,
-      hotLevel: (json['hotLevel'] as num?)?.toInt() ?? 5,
-      coldLevel: (json['coldLevel'] as num?)?.toInt() ?? 5,
-      hotPack: json['hotPack'] as bool? ?? false,
-      coldPack: json['coldPack'] as bool? ?? false,
+      hotPercent: (json['hotPercent'] as num?)?.toDouble() ?? 0,
+      coldPercent: (json['coldPercent'] as num?)?.toDouble() ?? 0,
       hotDrop: (json['hotDrop'] as num?)?.toDouble() ?? 0,
       coldDrop: (json['coldDrop'] as num?)?.toDouble() ?? 0,
       vibMin: (json['vibMin'] as num?)?.toDouble() ?? 15,

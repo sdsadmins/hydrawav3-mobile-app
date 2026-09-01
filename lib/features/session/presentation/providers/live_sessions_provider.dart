@@ -234,6 +234,19 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       }
     }
     try {
+      // The backend noticing a session ended (its own duration tracking, or
+      // the session dropping off the active feed) is just as real a "this
+      // session is over" signal as any local detection — and can legitimately
+      // WIN THE RACE against the app's own local completion logic, arriving
+      // here first. Queue the outcome BEFORE reset() wipes the engine's
+      // protocol/deviceIds clean, or a session that ends this way would
+      // never make it into "needs review" / history at all — this was a
+      // real, previously-undiscovered gap, not a hypothetical one.
+      _ref
+          .read(sessionEngineFamilyProvider(localId).notifier)
+          .enqueuePendingOutcome();
+    } catch (_) {}
+    try {
       _ref.read(sessionEngineFamilyProvider(localId).notifier).reset();
     } catch (_) {}
     unawaited(

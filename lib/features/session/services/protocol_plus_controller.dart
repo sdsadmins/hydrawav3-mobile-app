@@ -1569,6 +1569,43 @@ Future<void> launchSession(
             ? delayedDeviceId
             : null;
 
+    // Register the ActiveSession record SYNCHRONOUSLY, right here at launch —
+    // not later, from the session screen's own bootstrap once it happens to
+    // notice the engine went "running". That later path depends on this
+    // exact screen instance watching the exact right engine key, which has
+    // proven fragile (a re-entered/backgrounded screen can miss it
+    // entirely, silently leaving no ActiveSession record at all). Doing it
+    // here means EVERY session launched through this function is guaranteed
+    // a record — with its real total duration — the moment it starts,
+    // independent of any screen's lifecycle. This is what makes the
+    // app-wide outcome watchdog (SessionOutcomeGate) actually able to
+    // guarantee "every session ends up in history, no matter how or where
+    // it ends": it reads ActiveSession.totalDurationSeconds, which was
+    // previously never set anywhere and always silently defaulted to 0.
+    final maxTotalDurationSeconds = deviceIds
+        .map((id) {
+          final proto = protocolByDevice[id];
+          final settings = advancedByDevice[id];
+          if (proto == null || settings == null) return 0;
+          final applyStartDelay = settings.startDelay > 0 &&
+              (effectiveDelayedDeviceId == null ||
+                  effectiveDelayedDeviceId == id);
+          return SessionEngine.computeEffectiveTotalDurationSeconds(
+            proto,
+            settings,
+            applyStartDelay: applyStartDelay,
+          );
+        })
+        .fold<int>(0, (a, b) => a > b ? a : b);
+    await ref.read(activeSessionsProvider.notifier).createSession(
+          sessionId: sessionId,
+          protocolId: commonProtocol.id,
+          protocolName: commonProtocol.templateName,
+          deviceIds: deviceIds,
+          transport: transport,
+          totalDurationSeconds: maxTotalDurationSeconds,
+        );
+
     engine.prepareSession(deviceIds: deviceIds, transport: transportEnum);
     engine.loadSession(
       commonProtocol,

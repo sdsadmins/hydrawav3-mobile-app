@@ -569,8 +569,11 @@ class _PlayerCell extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              client.displayName.split(' ').first,
-              maxLines: 1,
+              // Full name, not just the first word — wraps within the
+              // narrow cell rather than being cut down to one name part.
+              client.displayName,
+              textAlign: TextAlign.center,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 10, color: p.ink3),
             ),

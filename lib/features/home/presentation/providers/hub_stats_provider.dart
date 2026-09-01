@@ -16,9 +16,10 @@ class HubStats {
   /// Distinct days with at least one session in the last 7 (ring 3).
   final int activeDays7d;
 
-  /// Share of this week's discomfort checks that improved, 0–100. Null when no
-  /// check has been captured yet (ring 2 sits at zero and the card shows its
-  /// first-run line).
+  /// Share of this week's answered post-session outcome questions that came
+  /// back "good" (preset answer rank >= 4 of 5), 0–100. Null when no ranked
+  /// question has been answered yet (ring 2 sits at zero and the card shows
+  /// its first-run line).
   final int? pulsePct;
 
   /// How many before/after checks that percentage is drawn from.
@@ -73,15 +74,16 @@ HubStats _computeStats(List<SessionHistoryItem> sessions) {
     if (at.isAfter(weekAgo)) {
       activeDays.add('${at.year}-${at.month}-${at.day}');
 
-      // The Outcome Pulse: a discomfort area that reads lower after the
-      // session than before it is a "YES". Areas the practitioner never
-      // scored on both sides aren't a check and aren't counted either way.
-      for (final d in s.discomfortAreas) {
-        final before = d.discomfortBefore;
-        final after = d.discomfortAfter;
-        if (before == null || after == null) continue;
-        checks++;
-        if (after < before) improved++;
+      // The Outcome Pulse: each answered post-session preset question is a
+      // "check". Rank 1-5 (higher = better outcome, see QuestionAnswer) — a
+      // rank of 4 or 5 counts as "YES". Free-text answers (rank 0) carry no
+      // quality signal and aren't counted either way.
+      for (final p in s.protocols) {
+        for (final qa in p.questionAnswers) {
+          if (qa.rank <= 0) continue;
+          checks++;
+          if (qa.rank >= 4) improved++;
+        }
       }
     }
   }

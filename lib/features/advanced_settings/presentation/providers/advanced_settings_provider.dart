@@ -22,10 +22,9 @@ class AdvancedSettingsNotifier extends StateNotifier<AdvancedSettings> {
   void setVibrationSingleHz(double value) =>
       state = state.copyWith(vibrationSingleHz: value);
 
-  void setHotLevel(int level) => state = state.copyWith(hotLevel: level);
-  void setColdLevel(int level) => state = state.copyWith(coldLevel: level);
-  void setHotPack(bool value) => state = state.copyWith(hotPack: value);
-  void setColdPack(bool value) => state = state.copyWith(coldPack: value);
+  void setHotPercent(double value) => state = state.copyWith(hotPercent: value);
+  void setColdPercent(double value) =>
+      state = state.copyWith(coldPercent: value);
 
   void setHotDrop(double value) => state = state.copyWith(hotDrop: value);
   void setColdDrop(double value) => state = state.copyWith(coldDrop: value);
