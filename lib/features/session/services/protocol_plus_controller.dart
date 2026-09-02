@@ -1524,7 +1524,20 @@ Future<void> launchSession(
         if (first.cycles.isEmpty) {
           throw StateError('protocol[0] (${first.templateName}) has no cycles');
         }
-        final advanced = _advancedFromProtocol(first);
+        // _advancedFromProtocol derives protocol[0]'s OWN fields
+        // (cycle1/cycle5, vibration range, hot/cold drop) — but it must not
+        // discard what the user actually chose in the Protocol Plus
+        // Advanced Settings panel (vibration on/off, lights, flip,
+        // hot/cold %). Layer those 4 user-facing fields from sel.advanced
+        // on top, so they reach both the device write below and the
+        // POST /protocol-plus/start body via plusPlans.
+        final advanced = _advancedFromProtocol(first).copyWith(
+          vibrationMode: sel.advanced.vibrationMode,
+          lights: sel.advanced.lights,
+          flipSettings: sel.advanced.flipSettings,
+          hotPercent: sel.advanced.hotPercent,
+          coldPercent: sel.advanced.coldPercent,
+        );
         protocolByDevice[sel.deviceId] = first;
         advancedByDevice[sel.deviceId] = advanced;
         plusDeviceIds.add(sel.deviceId);

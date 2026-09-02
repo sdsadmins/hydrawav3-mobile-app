@@ -2297,9 +2297,28 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // switch payload uses that protocol's own cycle1/cycle5 (edge cycle) and
     // vibration range — not the previous protocol's. Otherwise every protocol
     // in the sequence inherits protocol[0]'s edge-cycle flags.
+    //
+    // BUT the four user-facing Protocol Plus toggles/sliders (vibration
+    // on/off, lights, flip, hot/cold %) must carry through EVERY switch —
+    // they're a session-wide choice made once at launch, not something that
+    // should silently reset to default the moment the sequence advances.
+    // Recompute them fresh against THIS protocol's own base values each
+    // time (never reuse a stale computed result from a previous switch),
+    // then layer the previous device's chosen fields on top of the newly
+    // protocol-derived ones.
+    final previousSettings =
+        state.advancedSettingsByDevice[mac] ?? const AdvancedSettings();
+    final protocolDerivedSettings = _advancedSettingsForProtocol(newProtocol)
+        .copyWith(
+      vibrationMode: previousSettings.vibrationMode,
+      lights: previousSettings.lights,
+      flipSettings: previousSettings.flipSettings,
+      hotPercent: previousSettings.hotPercent,
+      coldPercent: previousSettings.coldPercent,
+    );
     final updatedSettingsByDevice =
         Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice)
-          ..[mac] = _advancedSettingsForProtocol(newProtocol);
+          ..[mac] = protocolDerivedSettings;
     final updatedIndexByDevice =
         Map<String, int>.from(state.protocolPlusIndexByDevice)
           ..[mac] = protocolIndex;

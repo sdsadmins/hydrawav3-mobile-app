@@ -1654,9 +1654,6 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final showAdvanced = _showAdvancedByDeviceId[data.id] ?? false;
     final canEditAdvanced = isIncluded &&
         selectedProtocol != null &&
-        // Protocol Plus runs a fixed server-driven sequence; advanced settings
-        // don't apply, so the Advanced control is locked for it.
-        !selectedProtocol.isProtocolPlus &&
         settings != null &&
         !isBusy;
     // A busy device has no protocol of its own to show (it's running one we
@@ -1699,20 +1696,27 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
               });
             }
           : null,
-      advancedChild: canEditAdvanced
-          ? _SessionAdvancedSettingsPanel(
-              settings: settings,
-              selectedDeviceIds: currentRunIds,
-              selectedDeviceLabelsById: currentLabelsById,
-              delayedDeviceId: _delayedDeviceId,
-              onChangeSettings: (updated) {
-                setState(() => _settingsByDeviceId[data.id] = updated);
-              },
-              onChangeDelayedDeviceId: (deviceId) {
-                setState(() => _delayedDeviceId = deviceId);
-              },
-            )
-          : null,
+      advancedChild: !canEditAdvanced
+          ? null
+          : (selectedProtocol.isProtocolPlus
+              ? _ProtocolPlusAdvancedSettingsPanel(
+                  settings: settings,
+                  onChangeSettings: (updated) {
+                    setState(() => _settingsByDeviceId[data.id] = updated);
+                  },
+                )
+              : _SessionAdvancedSettingsPanel(
+                  settings: settings,
+                  selectedDeviceIds: currentRunIds,
+                  selectedDeviceLabelsById: currentLabelsById,
+                  delayedDeviceId: _delayedDeviceId,
+                  onChangeSettings: (updated) {
+                    setState(() => _settingsByDeviceId[data.id] = updated);
+                  },
+                  onChangeDelayedDeviceId: (deviceId) {
+                    setState(() => _delayedDeviceId = deviceId);
+                  },
+                )),
       refDesign: refDesign,
     );
   }
@@ -4612,6 +4616,174 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
                   onChangeSettings(settings.copyWith(flipSettings: value)),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Advanced Settings for a Protocol Plus run — deliberately minimal
+/// (unlike [_SessionAdvancedSettingsPanel]'s full set): only the 4 controls
+/// that make sense as a session-wide choice carried across every
+/// sub-protocol switch. No cycle1/cycle5, no start delay, no vibration
+/// min/max, no hot/cold drop — Plus derives all of that fresh from each
+/// sub-protocol itself (see SessionEngine._advancedSettingsForProtocol).
+class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
+  final AdvancedSettings settings;
+  final ValueChanged<AdvancedSettings> onChangeSettings;
+
+  const _ProtocolPlusAdvancedSettingsPanel({
+    required this.settings,
+    required this.onChangeSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget smallNumberSlider({
+      required String label,
+      required double value,
+      required double min,
+      required double max,
+      required int divisions,
+      required Color color,
+      required ValueChanged<double> onChanged,
+      String? unit,
+      bool coloredTrack = true,
+    }) {
+      final clamped = value.clamp(min, max);
+      final slider = Slider(
+        value: clamped,
+        min: min,
+        max: max,
+        divisions: divisions,
+        activeColor: color,
+        inactiveColor: ThemeConstants.borderLight,
+        onChanged: onChanged,
+      );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: ThemeConstants.textSecondary,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              Text(
+                '${clamped.toStringAsFixed(0)}${unit ?? ''}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          coloredTrack
+              ? slider
+              : SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackShape: _ZeroCenteredSliderTrackShape(
+                      min: min,
+                      max: max,
+                    ),
+                  ),
+                  child: slider,
+                ),
+        ],
+      );
+    }
+
+    Widget toggle({
+      required String label,
+      required bool value,
+      required ValueChanged<bool> onChanged,
+    }) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: ThemeConstants.surfaceVariant,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ThemeConstants.border),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: ThemeConstants.textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Switch(
+              value: value,
+              activeThumbColor: ThemeConstants.accent,
+              activeTrackColor: ThemeConstants.accent.withValues(alpha: 0.35),
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        toggle(
+          label: 'Vibration',
+          value: settings.vibrationMode != 'Off',
+          onChanged: (on) => onChangeSettings(
+            settings.copyWith(vibrationMode: on ? 'Sweep' : 'Off'),
+          ),
+        ),
+        const SizedBox(height: 10),
+        smallNumberSlider(
+          label: 'Hot Pad Intensity',
+          value: settings.hotPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: ThemeConstants.accent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) =>
+              onChangeSettings(settings.copyWith(hotPercent: v)),
+        ),
+        const SizedBox(height: 8),
+        smallNumberSlider(
+          label: 'Cold Pad Intensity',
+          value: settings.coldPercent,
+          min: -100,
+          max: 100,
+          divisions: 200,
+          color: Colors.blueAccent,
+          unit: '%',
+          coloredTrack: false,
+          onChanged: (v) =>
+              onChangeSettings(settings.copyWith(coldPercent: v)),
+        ),
+        const SizedBox(height: 10),
+        toggle(
+          label: 'LED',
+          value: settings.lights,
+          onChanged: (value) =>
+              onChangeSettings(settings.copyWith(lights: value)),
+        ),
+        const SizedBox(height: 8),
+        toggle(
+          label: 'Flip Pad',
+          value: settings.flipSettings,
+          onChanged: (value) =>
+              onChangeSettings(settings.copyWith(flipSettings: value)),
         ),
       ],
     );
