@@ -1597,6 +1597,19 @@ Future<void> launchSession(
     // previously never set anywhere and always silently defaulted to 0.
     final maxTotalDurationSeconds = deviceIds
         .map((id) {
+          // Protocol Plus: protocolByDevice[id] is only protocol[0] of the
+          // sequence (see above), so computing the firmware duration off it
+          // would give protocol[0]'s own runtime, not the whole sequence's.
+          // durationsByDevice[id] already holds the correct whole-sequence
+          // total (detail.totalDuration from the Plus detail API) — using
+          // protocol[0]'s duration here previously made ActiveSession.
+          // totalDurationSeconds too short, which made SessionOutcomeGate's
+          // watchdog force the post-session screen the moment sub-protocol[0]
+          // finished, even though the sequence was still meant to continue.
+          if (plusDeviceIds.contains(id)) {
+            final plusTotal = durationsByDevice[id];
+            if (plusTotal != null && plusTotal > 0) return plusTotal;
+          }
           final proto = protocolByDevice[id];
           final settings = advancedByDevice[id];
           if (proto == null || settings == null) return 0;

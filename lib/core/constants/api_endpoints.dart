@@ -23,7 +23,8 @@ class ApiEndpoints {
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
   //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
-  static const String nodeBaseUrl = 'http://192.168.31.92:5000/hydrawav/v1/';
+  static const String nodeBaseUrl =
+      'https://api.hydrawav3.studio/api/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
