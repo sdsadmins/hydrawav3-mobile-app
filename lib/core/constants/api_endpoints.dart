@@ -25,6 +25,8 @@ class ApiEndpoints {
 
   static const String nodeBaseUrl =
       'https://api.hydrawav3.studio/api/hydrawav/v1/';
+
+  // static const String nodeBaseUrl = 'http://192.168.31.92:5000/hydrawav/v1/';
   static const String deviceControlUrl = 'https://hydrawav3.app';
 
   // Auth
@@ -362,6 +364,15 @@ class ApiEndpoints {
   /// Resumes the run; every held switch is re-queued with the wait it had left.
   static String protocolPlusResume(String sessionId, String organizationId) =>
       'protocol-plus/$sessionId/resume/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/restart`
+  /// Restarts the CURRENTLY RUNNING sub-protocol for this device from its own
+  /// beginning (fresh timer/cycles) — the server re-serves the same
+  /// protocol/index it already has active. Does NOT end the session or touch
+  /// token/session lifecycle; unlike pause/resume this route is NOT nested
+  /// under `:organizationId`.
+  static String protocolPlusRestart(String sessionId) =>
+      'protocol-plus/$sessionId/restart';
 
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';

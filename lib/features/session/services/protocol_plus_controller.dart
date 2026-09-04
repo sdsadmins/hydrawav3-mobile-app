@@ -200,7 +200,12 @@ class ProtocolPlusController {
 
   /// Protocol switches that arrived while a (BLE) device was disconnected,
   /// keyed by localMac. Only the LATEST is kept; applied on reconnect.
-  final Map<String, ({Protocol protocol, int index})> _pendingSwitches = {};
+  /// `advanced` is set only for a restart's START_PROTOCOL event (`restarted:
+  /// true`, carrying the server's confirmed advancedSettings) — null for a
+  /// normal switch, matching [SessionEngine.applyProtocolPlusSwitch]'s
+  /// `advancedOverride`.
+  final Map<String, ({Protocol protocol, int index, AdvancedSettings? advanced})>
+      _pendingSwitches = {};
 
   /// Devices whose OWN server session has already been stopped because the user
   /// stopped that unit on the hardware. [stopServerSession] and [_finishRun]
@@ -238,15 +243,26 @@ class ProtocolPlusController {
     SessionEngine engine,
     String localMac,
     Protocol protocol,
-    int index,
-  ) {
+    int index, {
+    AdvancedSettings? advancedOverride,
+  }) {
     if (!Platform.isIOS) {
-      return engine.applyProtocolPlusSwitch(localMac, protocol, index);
+      return engine.applyProtocolPlusSwitch(
+        localMac,
+        protocol,
+        index,
+        advancedOverride: advancedOverride,
+      );
     }
     final completer = Completer<bool>();
     _iosSwitchQueue = _iosSwitchQueue.then((_) async {
       try {
-        final ok = await engine.applyProtocolPlusSwitch(localMac, protocol, index);
+        final ok = await engine.applyProtocolPlusSwitch(
+          localMac,
+          protocol,
+          index,
+          advancedOverride: advancedOverride,
+        );
         completer.complete(ok);
       } catch (e) {
         completer.completeError(e);
@@ -485,6 +501,64 @@ class ProtocolPlusController {
       } catch (e) {
         appLogger.e('ProtocolPlus: resume failed: $e');
       }
+    }
+  }
+
+  /// POST /protocol-plus/:sessionId/restart for [localMac]'s binding —
+  /// restarts the sub-protocol CURRENTLY RUNNING on that device from the
+  /// beginning. Unlike pause/resume this route is NOT nested under
+  /// `:organizationId`.
+  ///
+  /// This call only TRIGGERS the restart and reports whether the server
+  /// accepted it — it does NOT itself write to the device. The server
+  /// broadcasts the same `START_PROTOCOL` socket event a normal sequence
+  /// switch uses (now carrying `restarted: true` plus authoritative timing:
+  /// `startedAt`/`elapsedSeconds`/`remainingSeconds`), and THAT event is what
+  /// drives the actual STOP -> fresh config -> PLAY device write, through the
+  /// exact same handler as every other switch (see the `START_PROTOCOL`
+  /// listener in [connectAll]). Applying the device write here too, from this
+  /// REST response, would double-fire it — the device would get two
+  /// STOP+config+PLAY cycles for one restart. Because it's the same
+  /// protocol/index — not a new sub-protocol — this is a clean restart of the
+  /// running stage: the whole-sequence total, the backend session, and
+  /// token/session lifecycle are all untouched. This must NEVER be confused
+  /// with a stop: we are only resetting the currently-running firmware, not
+  /// ending anything.
+  Future<bool> restartCurrentProtocol(String localMac) async {
+    final binding = _bindingForDevice(localMac);
+    if (binding == null) return false;
+    final ctx = await _sessionRequestContext();
+    // ctx is used only for auth headers here — the restart route has no
+    // :organizationId segment, so ctx.orgId is intentionally NOT appended to
+    // the path (unlike pause/resume above). A missing org context still
+    // allows the call to proceed with no extra headers rather than no-op.
+    final dio = _ref.read(nodeDioProvider);
+    try {
+      final res = await dio.post(
+        ApiEndpoints.protocolPlusRestart(binding.serverSessionId),
+        data: binding.identityBody,
+        options: ctx?.options,
+      );
+      appLogger.i(
+        'ProtocolPlus: ⇐ POST restart for $localMac\n${_pretty(res.data)}',
+      );
+      final data = res.data;
+      if (data is! Map || data['success'] != true) {
+        appLogger.w('ProtocolPlus: restart rejected for $localMac');
+        return false;
+      }
+      // The device write + timer resync arrive via the START_PROTOCOL socket
+      // event this triggers — nothing further to do here on success.
+      return true;
+    } on DioException catch (e) {
+      appLogger.e(
+        'ProtocolPlus: restart failed (status=${e.response?.statusCode}) '
+        '${e.response?.data}',
+      );
+      return false;
+    } catch (e) {
+      appLogger.e('ProtocolPlus: restart failed: $e');
+      return false;
     }
   }
 
@@ -921,6 +995,15 @@ class ProtocolPlusController {
         if (binding == null) return;
 
         final index = (data['protocolIndex'] as num?)?.toInt() ?? 0;
+        // Set only on a restart's event (see restartCurrentProtocol) — the
+        // server's confirmed advancedSettings for the (unchanged) protocol
+        // that's re-starting, and authoritative timing for the instant jump.
+        // A normal switch carries neither.
+        final restarted = data['restarted'] == true;
+        final advancedJson = data['advancedSettings'];
+        final advancedOverride = (restarted && advancedJson is Map)
+            ? AdvancedSettings.fromJson(Map<String, dynamic>.from(advancedJson))
+            : null;
 
         // The event's `protocol` may arrive as a full populated object, a
         // partial object (no cycles), or just an id from the protocolIds array.
@@ -936,7 +1019,7 @@ class ProtocolPlusController {
         appLogger.i(
           'ProtocolPlus: START_PROTOCOL (session=$evSession, index=$index, '
           'device=${binding.localMac}, protocol=${protocol.templateName}, '
-          'cycles=${protocol.cycles.length})',
+          'cycles=${protocol.cycles.length}, restarted=$restarted)',
         );
 
         // If this is a BLE run and the device's link is currently down, the
@@ -945,8 +1028,11 @@ class ProtocolPlusController {
         final isBle = engine.transport == SessionTransport.ble;
         if (isBle &&
             !_ref.read(bleConnectorProvider).isConnected(binding.localMac)) {
-          _pendingSwitches[binding.localMac] =
-              (protocol: protocol, index: index);
+          _pendingSwitches[binding.localMac] = (
+            protocol: protocol,
+            index: index,
+            advanced: advancedOverride,
+          );
           // Tell the engine a switch is outstanding: while it is, the device's
           // `rs:stop` is the expected idle waiting for this protocol, not the
           // user pressing STOP on the unit.
@@ -966,14 +1052,18 @@ class ProtocolPlusController {
           binding.localMac,
           protocol,
           index,
+          advancedOverride: advancedOverride,
         );
         // If the write failed/timed out (e.g. the device dropped between the
         // connection check and the write), DON'T lose the switch — queue it so
         // the reconciler retries once the link is healthy again. Otherwise the
         // device would strand on "SWITCHING".
         if (!ok) {
-          _pendingSwitches[binding.localMac] =
-              (protocol: protocol, index: index);
+          _pendingSwitches[binding.localMac] = (
+            protocol: protocol,
+            index: index,
+            advanced: advancedOverride,
+          );
           engine.setPlusSwitchPending(binding.localMac, true);
           appLogger.w(
             'ProtocolPlus: switch apply failed for ${binding.localMac} '
@@ -981,6 +1071,14 @@ class ProtocolPlusController {
           );
         } else {
           engine.setPlusSwitchPending(binding.localMac, false);
+          if (restarted) {
+            _applyRestartTimingOverride(
+              engine,
+              binding.localMac,
+              index,
+              data,
+            );
+          }
         }
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to handle START_PROTOCOL: $e');
@@ -1067,6 +1165,61 @@ class ProtocolPlusController {
     });
 
     socket.connect();
+  }
+
+  /// Compute the correct WHOLE-SEQUENCE remaining seconds from a restart
+  /// event's authoritative PER-STAGE numbers (`elapsedSeconds`,
+  /// `protocolDurationSeconds` — the sample restart response's `protocolIndex:
+  /// 1, elapsedSeconds: 0, remainingSeconds: 252` for a 252s stage 2), and
+  /// hand it to the engine as a short-lived display override.
+  ///
+  /// This exists because the backend sets `deviceStartTime = restartedAt` on
+  /// restart, which zeroes the WHOLE-SEQUENCE wall clock the live-feed poll's
+  /// own `remainingSeconds` is computed from — not just this stage's. Left
+  /// uncompensated, the on-screen countdown briefly shows close to the full
+  /// session duration remaining right after a restart (looks like the timer
+  /// jumped back to the very start, and — since it then barely moves for a
+  /// long stretch — like the UI is stuck) until/unless the backend is fixed
+  /// to rewind `deviceStartTime` by the stage's own start offset instead.
+  ///
+  /// `stageStartElapsed` (how far into the WHOLE sequence this stage began)
+  /// is reconstructed from data already tracked locally: the sum of every
+  /// earlier stage's own duration plus the break seconds between stages
+  /// (`protocolPlusDurationsByDevice` / `protocolPlusDelayByDevice`, both
+  /// populated at launch from the same Plus detail the durations come from).
+  void _applyRestartTimingOverride(
+    SessionEngine engine,
+    String localMac,
+    int index,
+    Map data,
+  ) {
+    final durations = engine.protocolPlusDurationsByDevice[localMac];
+    final total = engine.deviceTimers[localMac]?.totalDuration;
+    if (durations == null || total == null || index >= durations.length) {
+      return;
+    }
+    final delay = engine.protocolPlusDelayByDevice[localMac] ?? 0;
+    var stageStartElapsed = delay * index;
+    for (var i = 0; i < index && i < durations.length; i++) {
+      stageStartElapsed += durations[i];
+    }
+    // Prefer the event's own elapsed/remaining for THIS stage when present
+    // (right after a restart that's `elapsedSeconds: 0`); fall back to the
+    // stage's full duration if the event omitted them.
+    final stageElapsed = (data['elapsedSeconds'] as num?)?.toInt() ?? 0;
+    final stageRemaining = (data['remainingSeconds'] as num?)?.toInt() ??
+        (data['protocolDurationSeconds'] as num?)?.toInt();
+    if (stageRemaining == null) return;
+    final wholeSequenceRemaining =
+        total.inSeconds - stageStartElapsed - stageElapsed;
+    if (wholeSequenceRemaining <= 0) return;
+    appLogger.i(
+      'ProtocolPlus: restart timing override for $localMac — '
+      'stageStartElapsed=${stageStartElapsed}s, stageRemaining=${stageRemaining}s, '
+      'wholeSequenceRemaining=${wholeSequenceRemaining}s (was reporting the '
+      'full ${total.inSeconds}s per the backend feed)',
+    );
+    engine.setPlusRestartTimingOverride(localMac, wholeSequenceRemaining);
   }
 
   /// Resolve the `START_PROTOCOL` payload into a full [Protocol] with cycles.
@@ -1349,7 +1502,12 @@ class ProtocolPlusController {
     engine.setPlusSwitchPending(mac, false);
     unawaited(
       engine
-          .applyProtocolPlusSwitch(mac, pending.protocol, pending.index)
+          .applyProtocolPlusSwitch(
+            mac,
+            pending.protocol,
+            pending.index,
+            advancedOverride: pending.advanced,
+          )
           .then((ok) {
         // Re-queue on failure so the next reconciler tick retries — keep trying
         // until the device actually accepts the switch.

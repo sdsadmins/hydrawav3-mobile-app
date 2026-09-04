@@ -149,6 +149,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
+
+  /// Devices with a "Restart this stage" request in flight — drives the
+  /// button's own inline spinner and keeps it from being tapped twice.
+  final Set<String> _restartingStageDeviceIds = {};
   ProviderSubscription<SessionEngineState>? _engineSub;
   ProviderSubscription<AsyncValue<Map<String, BleConnectionStatus>>>?
       _bleConnectionSub;
@@ -2085,6 +2089,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         // matches the web exactly instead of drifting from the local engine.
         backendRemainingSeconds: backendDev?.remainingSeconds,
         backendTotalSeconds: backendDev?.totalDurationSeconds,
+        // Correct whole-sequence remaining reconstructed from a restart
+        // event's own per-stage numbers — see
+        // SessionEngineState.protocolPlusRestartRemainingByDevice for why the
+        // backend feed's remainingSeconds is briefly wrong right after one.
+        restartRemainingSeconds:
+            engine.protocolPlusRestartRemainingByDevice[id],
         telemetry: engine.telemetryByDevice[id],
         ctrl: ctrl,
         isProtocolPlusDevice: deviceSequence.isNotEmpty,
@@ -3166,13 +3176,91 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// `.lc-active` â€” 22px/800 copper, the running stage's name only.
+  /// Trigger a "Restart this stage" request for [deviceId]/[stageLabel],
+  /// with toast feedback at every step and a brief inline-spinner lock
+  /// (via [_restartingStageDeviceIds]) so a slow request can't be tapped
+  /// twice. The actual device write happens asynchronously off the
+  /// START_PROTOCOL socket event this triggers (see
+  /// [ProtocolPlusController.restartCurrentProtocol]) — this toast only
+  /// confirms the server accepted the request, not that the firmware has
+  /// finished restarting.
+  Future<void> _restartStage(String deviceId, String stageLabel) async {
+    if (_restartingStageDeviceIds.contains(deviceId)) return;
+    setState(() => _restartingStageDeviceIds.add(deviceId));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Restarting $stageLabel…')),
+            ],
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    bool ok = false;
+    try {
+      ok = await ref
+          .read(protocolPlusControllerProvider)
+          .restartCurrentProtocol(deviceId);
+    } finally {
+      if (mounted) setState(() => _restartingStageDeviceIds.remove(deviceId));
+    }
+    if (!mounted) return;
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                ok ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  ok
+                      ? '$stageLabel restarted'
+                      : 'Could not restart $stageLabel — try again',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: ok ? null : Colors.red.shade700,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+  }
+
+  /// `.lc-active` â€” 22px/800 copper, the running stage's name only. For a
+  /// Protocol Plus device, carries the "Restart this stage" affordance right
+  /// under the name it belongs to (not up in the stack header, not down by
+  /// the elapsed/progress row) — see [onRestart].
   Widget _lcActiveName({
     required List<String> plusSequence,
     required int plusIndex,
     required bool plusOnBreak,
     required String protocolName,
     required Color gc,
+    // Restart only ever applies to the ACTIVE sub-protocol of a real Plus
+    // sequence (plusSequence.length > 1) — never during a break (nothing is
+    // running to restart) and never for a plain, non-Plus protocol.
+    VoidCallback? onRestart,
+    bool restartEnabled = false,
+    bool restarting = false,
   }) {
     final isPlus = plusSequence.length > 1;
     final name = !isPlus
@@ -3182,7 +3270,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             : plusSequence[plusIndex.clamp(0, plusSequence.length - 1)];
     if (name.trim().isEmpty) return const SizedBox.shrink();
 
-    return Text(
+    final nameText = Text(
       name,
       textAlign: TextAlign.center,
       style: TextStyle(
@@ -3191,6 +3279,64 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         height: 1.1,
         color: plusOnBreak ? _kBreakColor : gc,
       ),
+    );
+
+    if (!isPlus || plusOnBreak || onRestart == null) return nameText;
+
+    final tappable = restartEnabled && !restarting;
+    final fg = tappable ? pal.ink2 : pal.ink3;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        nameText,
+        const SizedBox(height: 6),
+        // Small pill affordance — quiet enough not to compete with the bold
+        // Pause/Stop row below, but with enough of its own shape (outline +
+        // fill) to read as tappable rather than as more label text.
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: tappable ? onRestart : null,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: fg.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: fg.withValues(alpha: 0.25)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (restarting)
+                    SizedBox(
+                      width: 13,
+                      height: 13,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: fg,
+                      ),
+                    )
+                  else
+                    Icon(Icons.replay_rounded, size: 15, color: fg),
+                  const SizedBox(width: 5),
+                  Text(
+                    restarting ? 'Restarting…' : 'Restart this stage',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -3388,6 +3534,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     required SessionEngine ctrl,
     int? backendRemainingSeconds,
     int? backendTotalSeconds,
+    // Correct whole-sequence remaining right after a restart — see
+    // SessionEngineState.protocolPlusRestartRemainingByDevice. Null except
+    // for the brief window until the backend feed's own remainingSeconds
+    // reflects the restart correctly.
+    int? restartRemainingSeconds,
     DeviceTelemetry? telemetry,
     bool isProtocolPlusDevice = false,
     List<String> plusSequence = const [],
@@ -3480,6 +3631,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     var displayRemaining = useBackendTimer
         ? Duration(seconds: backendRemainingSeconds + effectiveBreakHoldSeconds)
         : timer.remaining;
+
+    // Just-restarted device: the backend feed's remainingSeconds is briefly
+    // WRONG right after a restart (it zeroes the whole-sequence wall clock
+    // instead of rewinding it to just this stage, so it over-reports —
+    // looking like the countdown jumped back to the very start). Prefer the
+    // correct, reconstructed value for as long as the feed is still reporting
+    // MORE time than that — the moment the feed drops to/below it, the feed
+    // has caught up (or genuinely moved past it) and is trusted again as
+    // normal. See SessionEngineState.protocolPlusRestartRemainingByDevice.
+    if (restartRemainingSeconds != null &&
+        restartRemainingSeconds < displayRemaining.inSeconds) {
+      displayRemaining = Duration(seconds: restartRemainingSeconds);
+    }
 
     // Freeze the visible countdown only for a break-time disconnect. When the
     // unit stays connected, or it's mid-protocol, the backend timer + break-
@@ -3799,6 +3963,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                       plusOnBreak: visualOnBreak,
                       protocolName: protocolName,
                       gc: gc,
+                      restartEnabled: !widget.remoteView &&
+                          status == SessionStatus.running &&
+                          !visualOnBreak,
+                      restarting: _restartingStageDeviceIds.contains(id),
+                      onRestart: widget.remoteView
+                          ? null
+                          : () => unawaited(_restartStage(
+                                id,
+                                plusSequence.length > 1
+                                    ? plusSequence[plusIndex.clamp(
+                                        0, plusSequence.length - 1)]
+                                    : protocolName,
+                              )),
                     ),
                     if (plusSequence.length > 1) ...[
                       const SizedBox(height: 8),
