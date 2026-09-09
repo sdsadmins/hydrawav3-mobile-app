@@ -181,7 +181,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                   )
                 else if (filtered.isEmpty)
                   const _Message(
-                    'No sessions yet — completed sessions land here.',
+                    'No sessions yet. Completed sessions land here.',
                   )
                 else ...[
                   _SessionList(sessions: filtered, clients: clients),
@@ -210,7 +210,7 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                         child: TextButton(
                           onPressed: () =>
                               ref.read(historyPagingProvider.notifier).loadMore(),
-                          child: const Text('Couldn\'t load more — tap to retry'),
+                          child: const Text('Couldn\'t load more, tap to retry'),
                         ),
                       ),
                     ),
@@ -419,7 +419,7 @@ class _OutcomePill extends StatelessWidget {
           answer.length > 14 ? '${answer.substring(0, 13)}…' : answer);
     }
 
-    return const HwPill('—');
+    return const HwPill('--');
   }
 
   /// The first non-empty outcome answer logged on any of the session's
@@ -452,7 +452,7 @@ class _NeedsReviewCard extends StatelessWidget {
       child: HwRow(
         leading: HwIcon(HwIcons.chat, size: 19, color: p.copperInk),
         title: 'Session needs a quick check',
-        subtitle: 'One check — builds your proof board',
+        subtitle: 'One check, builds your proof board',
         trailing: HwIcon(HwIcons.chev, size: 18, color: p.ink3),
         onTap: onTap,
       ),

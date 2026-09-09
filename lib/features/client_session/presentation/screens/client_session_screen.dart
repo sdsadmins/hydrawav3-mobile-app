@@ -33,7 +33,7 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
       ref.read(clientSessionControllerProvider.notifier);
 
   String _fmtDuration(int totalSeconds) {
-    if (totalSeconds <= 0) return '—';
+    if (totalSeconds <= 0) return '--';
     final m = totalSeconds ~/ 60;
     final s = totalSeconds % 60;
     return '${m}m ${s.toString().padLeft(2, '0')}s';
@@ -536,7 +536,7 @@ class _ClientSessionScreenState extends ConsumerState<ClientSessionScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: _liveStat('DEVICE',
-                  session.connectedMac.isEmpty ? '—' : session.connectedMac),
+                  session.connectedMac.isEmpty ? '--' : session.connectedMac),
             ),
           ]),
           const SizedBox(height: 18),

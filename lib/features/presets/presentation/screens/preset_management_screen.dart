@@ -177,7 +177,7 @@ class _EmptySlot extends StatelessWidget {
         border: Border.all(color: p.line, width: 1.5),
       ),
       child: Text(
-        'Empty slot — save a setup here from any session.',
+        'Empty slot: save a setup here from any session.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: HwType.cap, height: 1.4, color: p.ink3),
       ),

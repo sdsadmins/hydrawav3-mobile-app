@@ -48,8 +48,8 @@ class AiHubScreen extends ConsumerWidget {
               _HeroCard(
                 title: 'AI Assistant',
                 pill: 'Chat',
-                body: 'Ask about protocols, placement, recovery — '
-                    'streaming answers.',
+                body: 'Ask about protocols, placement, and recovery, '
+                    'with streaming answers.',
                 onTap: () => context.go(RoutePaths.assistant),
               ),
 

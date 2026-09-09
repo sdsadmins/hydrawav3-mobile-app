@@ -230,6 +230,25 @@ class SessionEngineState {
   /// meaningful while [protocolPlusOnBreakByDevice] is true for that device.
   final Map<String, int> protocolPlusBreakRemainingByDevice;
 
+  /// Local override for a device's WHOLE-SEQUENCE remaining seconds, set only
+  /// right after a restart's `START_PROTOCOL` event (see
+  /// [SessionEngine.setPlusRestartTimingOverride]) and cleared once the
+  /// backend feed's own remainingSeconds visibly reflects the restart again
+  /// (drops to or below this value) or a real switch replaces it.
+  ///
+  /// Backend restart currently sets `deviceStartTime = restartedAt`, which
+  /// zeroes the WHOLE-SEQUENCE wall clock the backend feed's remainingSeconds
+  /// is computed from — not just the current stage's. Right after a restart
+  /// that makes the feed briefly report close to the FULL session duration
+  /// remaining, which reads as the countdown jumping back to the very start
+  /// (and, since it then barely moves for a long stretch, as the UI being
+  /// "stuck"). The restart event itself DOES carry correct per-stage numbers
+  /// (`elapsedSeconds`/`remainingSeconds` for just this stage) — this map
+  /// holds the correctly reconstructed WHOLE-SEQUENCE remaining computed from
+  /// those, so the screen can show the right countdown immediately instead of
+  /// the backend's temporarily-wrong one.
+  final Map<String, int> protocolPlusRestartRemainingByDevice;
+
   /// TOTAL seconds a Plus device has spent sitting on a BREAK waiting for its
   /// next sub-protocol, accumulated across the whole run.
   ///
@@ -292,6 +311,7 @@ class SessionEngineState {
     this.protocolPlusDelayByDevice = const {},
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
+    this.protocolPlusRestartRemainingByDevice = const {},
     this.protocolPlusBreakHoldByDevice = const {},
     this.protocolPlusAwaitingReconnectByDevice = const {},
     this.telemetryByDevice = const {},
@@ -323,6 +343,7 @@ class SessionEngineState {
     Map<String, int>? protocolPlusDelayByDevice,
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
+    Map<String, int>? protocolPlusRestartRemainingByDevice,
     Map<String, int>? protocolPlusBreakHoldByDevice,
     Map<String, bool>? protocolPlusAwaitingReconnectByDevice,
     Map<String, DeviceTelemetry>? telemetryByDevice,
@@ -362,6 +383,9 @@ class SessionEngineState {
           protocolPlusOnBreakByDevice ?? this.protocolPlusOnBreakByDevice,
       protocolPlusBreakRemainingByDevice: protocolPlusBreakRemainingByDevice ??
           this.protocolPlusBreakRemainingByDevice,
+      protocolPlusRestartRemainingByDevice:
+          protocolPlusRestartRemainingByDevice ??
+              this.protocolPlusRestartRemainingByDevice,
       protocolPlusBreakHoldByDevice:
           protocolPlusBreakHoldByDevice ?? this.protocolPlusBreakHoldByDevice,
       protocolPlusAwaitingReconnectByDevice:
@@ -436,15 +460,38 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// post-session questions can be asked even after the live card is gone.
   /// Idempotent; only fires for sessions that actually ran (a draft was saved).
   void enqueuePendingOutcome() {
-    if (_pendingOutcomeEnqueued) return;
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: enqueuePendingOutcome() called — '
+      'alreadyEnqueued=$_pendingOutcomeEnqueued historyCaptured=$_historyCaptured '
+      'protocol=${state.protocol?.templateName} deviceIds=${state.deviceIds}',
+    );
+    if (_pendingOutcomeEnqueued) {
+      appLogger.i('🩺 OUTCOME-DEBUG: skipped — already enqueued this run');
+      return;
+    }
     // Snapshot every session that actually ran so the after-screen (or History
     // "Needs review") can finalize a single `/intake` POST. Pulse questions are
     // client-only — guests still log from the after screen without prompting.
-    if (!_historyCaptured) return; // never started running
-    if (state.protocol == null || state.deviceIds.isEmpty) return;
+    if (!_historyCaptured) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — _historyCaptured is false '
+        '(session never started running / draft never saved)',
+      );
+      return;
+    }
+    if (state.protocol == null || state.deviceIds.isEmpty) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — protocol or deviceIds missing '
+        '(protocol=${state.protocol}, deviceIds=${state.deviceIds})',
+      );
+      return;
+    }
     _pendingOutcomeEnqueued = true;
     try {
       final snapshot = _buildPendingOutcome();
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: snapshot built, enqueuing sessionId=${snapshot.sessionId}',
+      );
       unawaited(_ref.read(pendingOutcomesProvider.notifier).enqueue(snapshot));
     } catch (e) {
       _pendingOutcomeEnqueued = false;
@@ -905,6 +952,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// whether a held switch is gated on a BLE link.
   SessionTransport get transport => state.transport;
 
+  /// Public, read-only views of a few more [state] fields — same reasoning as
+  /// [transport]. Used by [ProtocolPlusController._applyRestartTimingOverride]
+  /// to reconstruct a restarted stage's true whole-sequence remaining from
+  /// data already tracked locally.
+  Map<String, List<int>> get protocolPlusDurationsByDevice =>
+      state.protocolPlusDurationsByDevice;
+  Map<String, int> get protocolPlusDelayByDevice =>
+      state.protocolPlusDelayByDevice;
+  Map<String, TimerState> get deviceTimers => state.deviceTimers;
+
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
       if (!_isActive) return;
@@ -1166,8 +1223,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final current = state.deviceStatuses[deviceId];
     if (current == null) return;
 
-    // TEMP-DISABLED (rs status handler for non-Plus firmware devices) — commented
-    // out at request, pending investigation. Restore by uncommenting.
     switch (normalized) {
       case 'pause':
         if (current == SessionStatus.running) {
@@ -1185,6 +1240,23 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           unawaited(resumeDevice(deviceId));
           // Web parity: mirror the per-device resume to the backend too.
           unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'resume'));
+        }
+        break;
+      case 'stop':
+        // A NORMAL (non-Plus — Plus already returned above) device reporting
+        // `rs:"stop"` has finished its protocol and is ending the session on
+        // its own — this is what "natural completion" actually looks like on
+        // the wire. There is no ambiguity here the way there is for a Plus
+        // device (no stacked sub-protocol to wait through), so act on it
+        // immediately. Previously this case didn't exist at all, so a
+        // session's own natural completion never queued the post-session
+        // outcomes screen or finalized history — only an app-initiated
+        // stop() did.
+        if (current == SessionStatus.running ||
+            current == SessionStatus.paused) {
+          appLogger.i('Session: device $deviceId reported rs=stop → '
+              'treating as natural completion');
+          _forceDeviceStopped(deviceId);
         }
         break;
       // 'estop' is handled above — before the Plus early-return — so it applies
@@ -1496,6 +1568,21 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         'newStatuses=$statuses');
     if (overallStatus == SessionStatus.stopped ||
         overallStatus == SessionStatus.completed) {
+      // The device itself reporting `rs=stop` (natural completion on the
+      // hardware, or an external/firmware-side stop) is a terminal
+      // transition exactly like a manual stop() or _onTick's own
+      // local-timer completion — it must also queue the post-session
+      // outcome. Without this, a session whose FIRMWARE ends it first
+      // (the common case: the device finishes its programmed duration and
+      // reports rs=stop before the app's local timer even notices) never
+      // got the after-screen or its final history entry — only an
+      // app-initiated stop()/_onTick completion did, because those two
+      // call enqueuePendingOutcome() and this path never did.
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _forceDeviceStopped reached terminal '
+        'overallStatus=$overallStatus, calling enqueuePendingOutcome()',
+      );
+      enqueuePendingOutcome();
       unawaited(_syncBackgroundRuntime('stopped'));
     } else {
       _pushNotificationSync();
@@ -2197,8 +2284,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Future<bool> applyProtocolPlusSwitch(
     String mac,
     Protocol newProtocol,
-    int protocolIndex,
-  ) async {
+    int protocolIndex, {
+    // Set only by a RESTART (same protocol/index, re-applied): the backend's
+    // restart response is authoritative about what's actually running on
+    // this device right now, so use it as-is instead of re-deriving from
+    // the protocol + previously-stored settings the way a normal
+    // START_PROTOCOL switch does. Null for every normal switch — behavior
+    // there is unchanged.
+    AdvancedSettings? advancedOverride,
+  }) async {
     if (!_isActive) return false;
     // Never resurrect a device that has already stopped. A START_PROTOCOL can
     // arrive late — after the user stopped the unit and we ended its run — and
@@ -2225,6 +2319,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         mac,
         newProtocol,
         protocolIndex,
+        advancedOverride: advancedOverride,
       );
     } finally {
       _plusSwitchInFlight.remove(mac);
@@ -2234,8 +2329,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Future<bool> _applyProtocolPlusSwitchInner(
     String mac,
     Protocol newProtocol,
-    int protocolIndex,
-  ) async {
+    int protocolIndex, {
+    AdvancedSettings? advancedOverride,
+  }) async {
     // Reflect the new protocol per-device + advance the sequence indicator so
     // the live session screen highlights the now-active protocol chip.
     final updatedByDevice = Map<String, Protocol>.from(state.protocolByDevice)
@@ -2244,18 +2340,84 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // switch payload uses that protocol's own cycle1/cycle5 (edge cycle) and
     // vibration range — not the previous protocol's. Otherwise every protocol
     // in the sequence inherits protocol[0]'s edge-cycle flags.
+    //
+    // BUT the four user-facing Protocol Plus toggles/sliders (vibration
+    // on/off, lights, flip, hot/cold %) must carry through EVERY switch —
+    // they're a session-wide choice made once at launch, not something that
+    // should silently reset to default the moment the sequence advances.
+    // Recompute them fresh against THIS protocol's own base values each
+    // time (never reuse a stale computed result from a previous switch),
+    // then layer the previous device's chosen fields on top of the newly
+    // protocol-derived ones.
+    //
+    // A restart (advancedOverride != null) skips all of that: the backend
+    // just told us exactly what's applied to this device right now, so we
+    // trust it verbatim rather than re-deriving.
+    final previousSettings =
+        state.advancedSettingsByDevice[mac] ?? const AdvancedSettings();
+    final protocolDerivedSettings = advancedOverride ??
+        _advancedSettingsForProtocol(newProtocol).copyWith(
+          vibrationMode: previousSettings.vibrationMode,
+          lights: previousSettings.lights,
+          flipSettings: previousSettings.flipSettings,
+          hotPercent: previousSettings.hotPercent,
+          coldPercent: previousSettings.coldPercent,
+        );
     final updatedSettingsByDevice =
         Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice)
-          ..[mac] = _advancedSettingsForProtocol(newProtocol);
+          ..[mac] = protocolDerivedSettings;
     final updatedIndexByDevice =
         Map<String, int>.from(state.protocolPlusIndexByDevice)
           ..[mac] = protocolIndex;
 
+    // A restart (advancedOverride != null, same protocol/index re-applied)
+    // must REWIND the whole-run clock back to the exact point THIS stage
+    // began — not reset to a fresh per-stage clock. The Plus countdown is one
+    // continuous whole-sequence clock (matches the web): restarting stage 1
+    // rewinds to session start; restarting stage 2 rewinds to stage 1's
+    // duration + the break already spent, i.e. exactly where the clock stood
+    // the moment stage 2's own switch first landed. Capture that point (the
+    // OLD segment end minus this stage's own duration) before it gets
+    // overwritten below, and rewind _deviceClockOffset by the gap between
+    // "now" and that point — the same mechanism already used for drift
+    // correction elsewhere, just negative here. This keeps this device's own
+    // LOCAL bookkeeping (break detection, cycle position) consistent.
+    //
+    // The on-screen countdown itself comes from the backend feed, which is
+    // WRONG right after a restart: the backend sets `deviceStartTime =
+    // restartedAt`, zeroing the WHOLE-SEQUENCE clock instead of rewinding it
+    // to just this stage — so the feed briefly reports close to the full
+    // session duration remaining. That is compensated by
+    // [SessionEngine.setPlusRestartTimingOverride], called by the caller with
+    // the restart event's own correct per-stage numbers, once this function
+    // returns.
+    final stageDurationSeconds = _plusProtocolDurationSeconds(newProtocol);
+    if (advancedOverride != null) {
+      final oldSegEnd = _plusSegmentEndByDevice[mac];
+      final stageStartElapsed = (oldSegEnd != null)
+          ? oldSegEnd - Duration(seconds: stageDurationSeconds)
+          : Duration.zero;
+      final rewindBy = _deviceElapsed(mac) - stageStartElapsed;
+      if (rewindBy > Duration.zero) {
+        _deviceClockOffset[mac] =
+            (_deviceClockOffset[mac] ?? Duration.zero) - rewindBy;
+      }
+    } else {
+      // A REAL switch — any restart override left over from the stage that
+      // just ended is moot now; the backend feed is trusted for the new
+      // stage like normal.
+      _clearPlusRestartTimingOverride(mac);
+    }
+
     // The switch landing IS the end of the break: this protocol now runs, so
     // re-base the segment end to "now + this protocol's runtime" and clear any
     // break flag for the device. The next break begins when this elapses.
-    _plusSegmentEndByDevice[mac] = _deviceElapsed(mac) +
-        Duration(seconds: _plusProtocolDurationSeconds(newProtocol));
+    // (After the rewind above, `_deviceElapsed(mac)` on a restart is back to
+    // stageStartElapsed, so this still lands the segment end at exactly
+    // stageStartElapsed + stageDuration — the same point a normal switch
+    // would compute.)
+    _plusSegmentEndByDevice[mac] =
+        _deviceElapsed(mac) + Duration(seconds: stageDurationSeconds);
     // This switch's PLAY restarts the device, so whatever stop streak was
     // running belonged to the break before it.
     _plusStopSince.remove(mac);
@@ -2341,6 +2503,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await Future<void>.delayed(const Duration(milliseconds: 800));
 
       // 2) Push the new protocol config.
+      appLogger.i('ProtocolPlus: BLE config payload for $mac:\n$payloadStr');
       final okPayload = await _sendLargePayload(mac, payloadStr);
       if (!okPayload) {
         appLogger.e(
@@ -2437,6 +2600,75 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else {
       _plusSwitchPendingExternal.remove(mac);
     }
+  }
+
+  /// Wall-clock moment [setPlusRestartTimingOverride] last set an override for
+  /// each device — used to tick the override down between ticks without
+  /// re-deriving it from the (now-stale) event data every second.
+  final Map<String, DateTime> _plusRestartOverrideSetAt = {};
+
+  /// Record the WHOLE-SEQUENCE remaining seconds computed from a restart
+  /// event's authoritative per-stage numbers (see
+  /// [SessionEngineState.protocolPlusRestartRemainingByDevice] for why this
+  /// is needed — the backend feed's own remainingSeconds is briefly wrong
+  /// right after a restart). Ticked down every second in [_onTick] and
+  /// cleared once the backend feed's own value has caught up or a real
+  /// switch/stop makes it moot.
+  void setPlusRestartTimingOverride(String mac, int remainingSeconds) {
+    if (!_isActive || remainingSeconds <= 0) return;
+    _plusRestartOverrideSetAt[mac] = DateTime.now();
+    try {
+      state = state.copyWith(
+        protocolPlusRestartRemainingByDevice: {
+          ...state.protocolPlusRestartRemainingByDevice,
+          mac: remainingSeconds,
+        },
+      );
+    } catch (_) {}
+  }
+
+  /// Drop [mac]'s restart timing override (a real switch or stop replaces it,
+  /// or the caller decided the backend feed has caught up).
+  void _clearPlusRestartTimingOverride(String mac) {
+    _plusRestartOverrideSetAt.remove(mac);
+    if (!state.protocolPlusRestartRemainingByDevice.containsKey(mac)) return;
+    try {
+      state = state.copyWith(
+        protocolPlusRestartRemainingByDevice: {
+          ...state.protocolPlusRestartRemainingByDevice,
+        }..remove(mac),
+      );
+    } catch (_) {}
+  }
+
+  /// Tick down every device's restart-timing override by the real wall-clock
+  /// gap since it was last set/ticked, and drop it once it reaches zero (the
+  /// stage the restart put us at has itself now elapsed — the backend feed is
+  /// trusted again from here, same as any other device that reached 0).
+  void _tickPlusRestartTimingOverrides() {
+    final current = state.protocolPlusRestartRemainingByDevice;
+    if (current.isEmpty) return;
+    final updated = <String, int>{};
+    final now = DateTime.now();
+    for (final entry in current.entries) {
+      final mac = entry.key;
+      final since = _plusRestartOverrideSetAt[mac];
+      final elapsed = since == null ? 0 : now.difference(since).inSeconds;
+      final left = entry.value - elapsed;
+      if (left <= 0) {
+        _plusRestartOverrideSetAt.remove(mac);
+        continue;
+      }
+      updated[mac] = left;
+    }
+    if (updated.length == current.length &&
+        updated.entries.every((e) => current[e.key] == e.value)) {
+      return; // nothing actually changed this tick — keep state stable
+    }
+    _plusRestartOverrideSetAt.updateAll((mac, _) => now);
+    try {
+      state = state.copyWith(protocolPlusRestartRemainingByDevice: updated);
+    } catch (_) {}
   }
 
   /// Device-elapsed (monotonic + slept-time catch-up) for [id].
@@ -2746,36 +2978,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     final cycles = p.cycles;
 
-    // Intensity mapping from web sender (0–11).
-    const hotMap = <int, int>{
-      0: 0,
-      1: 50,
-      2: 55,
-      3: 60,
-      4: 65,
-      5: 70,
-      6: 75,
-      7: 80,
-      8: 85,
-      9: 90,
-      10: 95,
-      11: 100,
-    };
-    const coldMap = <int, int>{
-      0: 0,
-      1: 150,
-      2: 160,
-      3: 170,
-      4: 180,
-      5: 190,
-      6: 200,
-      7: 210,
-      8: 220,
-      9: 230,
-      10: 240,
-      11: 250,
-    };
-
     List<String> leftFuncs = cycles.map((c) => c.leftFunction).toList();
     List<String> rightFuncs = cycles.map((c) => c.rightFunction).toList();
 
@@ -2790,14 +2992,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       rightFuncs = rightFuncs.map(flip).toList();
     }
 
-    final hotPwm = hotMap[advancedSettings.hotLevel.clamp(0, 11)] ?? 70;
-    final coldPwm = coldMap[advancedSettings.coldLevel.clamp(0, 11)] ?? 190;
-    final pwmHot = advancedSettings.hotPack
-        ? cycles.map((_) => hotPwm).toList()
-        : cycles.map((c) => c.hotPwm.toInt()).toList();
-    final pwmCold = advancedSettings.coldPack
-        ? cycles.map((_) => coldPwm).toList()
-        : cycles.map((c) => c.coldPwm.toInt()).toList();
+    final pwmHot = cycles
+        .map((c) => applyIndividualPercent(
+              c.hotPwm,
+              advancedSettings.hotPercent,
+              kMaxHotPwm,
+            ))
+        .toList();
+    final pwmCold = cycles
+        .map((c) => applyIndividualPercent(
+              c.coldPwm,
+              advancedSettings.coldPercent,
+              kMaxColdPwm,
+            ))
+        .toList();
 
     final vibMode = advancedSettings.vibrationMode;
     final vibMin = switch (vibMode) {
@@ -2891,7 +3099,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     if (advancedSettings.cycle5Completion) {
-      total += 30 + edgeCycleDuration;
+      // Matches the backend's buildPadTimeline (session.service.ts): the
+      // trailing edge cycle's lead-in pause is the protocol's own
+      // sessionPause, not a fixed 30s — the backend is the source of truth
+      // the device's real runtime is measured against, so this must track
+      // it exactly rather than an older fixed constant.
+      total += p.sessionPause.toInt() + edgeCycleDuration;
     }
 
     return total;
@@ -2959,6 +3172,30 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       advancedSettings,
       applyStartDelay: applyStartDelay,
     );
+  }
+
+  /// Hardware ceiling for a single cycle's hot/cold PWM value — matches the
+  /// firmware's 0–11 intensity map (`hotMap`/`coldMap` above): level 11 tops
+  /// out at 100 (hot) / 250 (cold).
+  static const int kMaxHotPwm = 100;
+  static const int kMaxColdPwm = 250;
+
+  /// Scales ONE cycle's hot/cold PWM value by [percent] independently — no
+  /// pooling, no coupling with any other cycle. [basePwm] is always the
+  /// protocol's ORIGINAL value for this cycle (never a previously-adjusted
+  /// result), so repeated adjustments recompute fresh each time rather than
+  /// compounding.
+  ///
+  /// `new = basePwm × (1 + percent / 100)`, clamped to `[0, maxPwm]`. A
+  /// cycle whose base value is 0 always stays 0 at any percent — that falls
+  /// out of the multiplication itself, no special-casing needed.
+  static int applyIndividualPercent(
+    double basePwm,
+    double percent,
+    int maxPwm,
+  ) {
+    final scaled = basePwm * (1 + percent / 100);
+    return scaled.clamp(0, maxPwm.toDouble()).round();
   }
 
   Future<void> pause() async {
@@ -3412,6 +3649,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _evaluatePlusDeviceStops();
     if (!_isActive || state.status != SessionStatus.running) return;
     _reconcileClockFromWall();
+    _tickPlusRestartTimingOverrides();
     _syncDisplayedTimerFromStopwatch();
   }
 
@@ -3614,6 +3852,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     if (overallStatus == SessionStatus.completed ||
         overallStatus == SessionStatus.stopped) {
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _onTick reached terminal overallStatus='
+        '$overallStatus, calling enqueuePendingOutcome()',
+      );
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();

@@ -83,8 +83,8 @@ class HubTiles extends StatelessWidget {
           Expanded(
             child: _Tile(
               icon: HwIcons.wave,
-              title: 'Recovery',
-              body: 'Where it feels tight → ROM check → targeted pads.',
+              title: 'Support Recovery',
+              body: 'Where it feels tight, ROM check, targeted pads.',
               gradient: p.heroGrad,
               fg: const Color(0xFFF2E9E2),
               iconChip: const Color.fromRGBO(255, 255, 255, .18),
@@ -569,8 +569,11 @@ class _PlayerCell extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              client.displayName.split(' ').first,
-              maxLines: 1,
+              // Full name, not just the first word — wraps within the
+              // narrow cell rather than being cut down to one name part.
+              client.displayName,
+              textAlign: TextAlign.center,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 10, color: p.ink3),
             ),

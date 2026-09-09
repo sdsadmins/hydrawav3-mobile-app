@@ -58,7 +58,7 @@ class FindPadPlacementsCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Sun & Moon pad map — performance or recovery',
+                      'Sun & Moon pad map, for performance or recovery',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: p.ink3),

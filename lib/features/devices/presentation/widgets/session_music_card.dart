@@ -174,8 +174,8 @@ class SessionMusicCard extends ConsumerWidget {
                   ),
                   Text(
                     on
-                        ? '${music.activeTrackName ?? 'Track'} — tap to change'
-                        : 'Off — tap to choose a track',
+                        ? '${music.activeTrackName ?? 'Track'}, tap to change'
+                        : 'Off, tap to choose a track',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, height: 1.4, color: p.ink3),

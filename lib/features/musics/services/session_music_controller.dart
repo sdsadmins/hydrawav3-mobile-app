@@ -95,16 +95,6 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<bool>? _playingSub;
 
-  /// A phone/FaceTime call or Siri arriving is reported by iOS as
-  /// [AudioInterruptionType.pause] (as opposed to [AudioInterruptionType.duck],
-  /// the transient kind used for things like a notification chime, which we
-  /// shouldn't react to). On that, [_pauseAllLiveSessions] proactively pauses
-  /// EVERY currently-running session app-wide (not just whichever session
-  /// screen happens to be open/mounted — [activeSessionsProvider] is the
-  /// app-wide registry of live sessions, independent of any screen) so the
-  /// session and connected device(s) don't silently drift out of sync while
-  /// no code is guaranteed to keep running for the call's duration.
-
   /// One-time audio-session + player setup. Configures the iOS category to
   /// `playback`/music so audio is audible through the silent switch, and
   /// wires interruption (calls/Siri) handling. Best-effort: failures don't
@@ -161,9 +151,12 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   }
 
   /// iOS-only: pause every currently-running session app-wide, device
-  /// included — not just whichever session screen happens to be mounted.
-  /// Android already survives a call via its foreground service, so it isn't
-  /// at risk of the process being suspended and doesn't need this.
+  /// included, not just whichever session screen happens to be mounted.
+  /// [activeSessionsProvider] is the app-wide registry of live sessions, so
+  /// this reaches every one of them regardless of which screen (if any) is
+  /// on screen at the moment the call arrives. Android already survives a
+  /// call via its foreground service, so it isn't at risk of the process
+  /// being suspended and doesn't need this.
   void _pauseAllLiveSessions() {
     if (!Platform.isIOS) return;
     try {

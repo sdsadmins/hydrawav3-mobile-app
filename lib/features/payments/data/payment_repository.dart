@@ -90,6 +90,30 @@ class PaymentRepository {
     }
   }
 
+  /// The backend's per-second session token rate (`type: 'session'` config,
+  /// `perSecondCost` — falls back to `perMinuteCost / 60` if only that's
+  /// set). Null when no session token config exists yet, so callers can
+  /// simply not show a cost rather than guessing one.
+  Future<double?> getSessionTokenPerSecondCost() async {
+    try {
+      final response = await _dio.get(ApiEndpoints.tokenConfig);
+      final data = response.data;
+      final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+      for (final raw in items) {
+        if (raw is! Map) continue;
+        final map = Map<String, dynamic>.from(raw);
+        if (map['type'] != 'session') continue;
+        final perSecond = (map['perSecondCost'] as num?)?.toDouble();
+        if (perSecond != null) return perSecond;
+        final perMinute = (map['perMinuteCost'] as num?)?.toDouble();
+        if (perMinute != null) return perMinute / 60;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<String> createCheckoutSession({
     required String orgId,
     required String plan,
@@ -121,6 +145,15 @@ class PaymentRepository {
 final subscriptionProductsProvider =
     FutureProvider.autoDispose<List<Product>>((ref) {
   return ref.read(paymentRepositoryProvider).getSubscriptionProducts();
+});
+
+/// The session token rate (tokens per second), for showing "this protocol
+/// will cost ~N tokens" before starting it. Not `.autoDispose` — this is an
+/// admin-set config that doesn't change session to session, so it's fine to
+/// keep across screens rather than re-fetching every time a protocol's
+/// detail screen opens.
+final sessionTokenPerSecondCostProvider = FutureProvider<double?>((ref) {
+  return ref.read(paymentRepositoryProvider).getSessionTokenPerSecondCost();
 });
 
 /// Provider to check if user has paid subscription.

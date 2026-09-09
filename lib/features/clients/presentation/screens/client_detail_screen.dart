@@ -183,7 +183,7 @@ class _StatTiles extends StatelessWidget {
             child: _Tile(
               // Nothing scored yet → an em-dash, never a fabricated 0%.
               value: scored == 0
-                  ? '—'
+                  ? '--'
                   : '${((improved / scored) * 100).round()}%',
               label: 'Improved',
               tone: _Tone.good,
@@ -324,7 +324,7 @@ class _SessionHistory extends StatelessWidget {
         if (sessions.isEmpty) {
           return HwCard(
             child: Text(
-              'No sessions logged yet — the first one will appear here.',
+              'No sessions logged yet. The first one will appear here.',
               style:
                   TextStyle(fontSize: HwType.sm, height: 1.45, color: p.ink2),
             ),

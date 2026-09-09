@@ -348,7 +348,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             style: TextStyle(color: ThemeConstants.textPrimary),
           ),
           const SizedBox(height: 6),
-          Text('Hashed with bcrypt on the server — never shown again.',
+          Text('Hashed with bcrypt on the server, never shown again.',
               style: TextStyle(
                   color: ThemeConstants.textTertiary, fontSize: 12)),
           const SizedBox(height: 16),
@@ -371,7 +371,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
 
   Widget _pendingCard(Client client, LeaseFlowState flow) {
     return _sectionCard(
-      title: 'Lease — Pending',
+      title: 'Lease: Pending',
       badge: _badge('Not Loaded', ThemeConstants.warning),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -380,9 +380,9 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
               'lease ID onto it.',
               style: TextStyle(color: ThemeConstants.textSecondary)),
           const SizedBox(height: 14),
-          _readonlyRow('Lease ID', client.leaseId ?? '—', copyable: true),
+          _readonlyRow('Lease ID', client.leaseId ?? '--', copyable: true),
           const SizedBox(height: 10),
-          _readonlyRow('Device MAC', client.macAddress ?? '—'),
+          _readonlyRow('Device MAC', client.macAddress ?? '--'),
           const SizedBox(height: 16),
           _primaryButton(
             icon: Icons.bluetooth_connected_rounded,
@@ -406,7 +406,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
 
   Widget _activeCard(Client client, LeaseFlowState flow) {
     return _sectionCard(
-      title: 'Lease — Active',
+      title: 'Lease: Active',
       badge: _badge('Active', ThemeConstants.success),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -415,9 +415,9 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             _readonlyRow('Lease Date', _fmtDate(client.leaseDate!)),
             const SizedBox(height: 10),
           ],
-          _readonlyRow('Lease ID', client.leaseId ?? '—', copyable: true),
+          _readonlyRow('Lease ID', client.leaseId ?? '--', copyable: true),
           const SizedBox(height: 10),
-          _readonlyRow('Device MAC', client.macAddress ?? '—'),
+          _readonlyRow('Device MAC', client.macAddress ?? '--'),
           const SizedBox(height: 16),
           if (_resetMode) ...[
             _label('New Password'),
@@ -542,7 +542,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
                   fontSize: 13,
                   fontWeight: FontWeight.w600)),
         ),
-        if (copyable && value != '—')
+        if (copyable && value != '--')
           InkWell(
             onTap: () {
               Clipboard.setData(ClipboardData(text: value));

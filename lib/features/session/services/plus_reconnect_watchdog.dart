@@ -69,8 +69,8 @@ class _PlusReconnectWatchdogState
             : 'Please bring your devices back in range',
         message: count == 1
             ? 'That device lost its Bluetooth connection. Its session is '
-                'paused and will resume automatically once it reconnects — '
-                'move it closer to your phone. You can stop the session at '
+                'paused and will resume automatically once it reconnects. '
+                'Move it closer to your phone. You can stop the session at '
                 'any time.'
             : '$count devices lost their Bluetooth connection. Their '
                 'sessions are paused and will resume automatically once they '

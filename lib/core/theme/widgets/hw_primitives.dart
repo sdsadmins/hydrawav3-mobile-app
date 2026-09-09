@@ -423,6 +423,12 @@ class HwRow extends StatelessWidget {
   final Widget? trailing;
   final VoidCallback? onTap;
 
+  /// Caps the title to this many lines (with ellipsis) instead of the
+  /// default unbounded wrap. Null (the default) keeps every existing HwRow
+  /// call site's current behavior — only opt in where a long name needs a
+  /// fixed line count (e.g. a scrollable list of protocol names).
+  final int? titleMaxLines;
+
   const HwRow({
     super.key,
     this.leading,
@@ -431,6 +437,7 @@ class HwRow extends StatelessWidget {
     this.belowSubtitle,
     this.trailing,
     this.onTap,
+    this.titleMaxLines,
   });
 
   @override
@@ -451,6 +458,9 @@ class HwRow extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  maxLines: titleMaxLines,
+                  overflow:
+                      titleMaxLines != null ? TextOverflow.ellipsis : null,
                   style: TextStyle(
                     fontSize: HwType.base,
                     fontWeight: FontWeight.w600,

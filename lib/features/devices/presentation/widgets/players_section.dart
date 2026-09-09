@@ -70,7 +70,7 @@ class PlayersSection extends ConsumerWidget {
       name: isGuest ? 'Guest' : client.clientName,
       initials: isGuest ? null : _initials(client.clientName),
       subline: isGuest
-          ? 'Anonymous session — no profile saved'
+          ? 'Anonymous session, no profile saved'
           : (university ? _playerSubline(client) : _clientSubline(client)),
       onTapSelector: () =>
           showClientSelectSheet(context, ref, playersOnly: university),
@@ -257,7 +257,7 @@ Future<void> showClientSelectSheet(
                   palette: p,
                   initials: null,
                   name: 'Guest',
-                  subline: 'Anonymous session — no profile saved',
+                  subline: 'Anonymous session, no profile saved',
                   selected: isGuest,
                   onTap: pickGuest,
                 ),
@@ -286,8 +286,8 @@ Future<void> showClientSelectSheet(
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         child: Text(
                           playersOnly
-                              ? 'No players yet — tap Add User to create one.'
-                              : 'No clients yet — tap Add Client to create one.',
+                              ? 'No players yet. Tap Add User to create one.'
+                              : 'No clients yet. Tap Add Client to create one.',
                           style: TextStyle(fontSize: 13, color: p.ink3),
                         ),
                       );
@@ -391,9 +391,9 @@ class _ProtoDrop extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
+                      // No line cap — full name always shown, wraps rather
+                      // than being clipped.
                       name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -495,9 +495,9 @@ class _WhoRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
+                        // No line cap — full name always shown, wraps rather
+                        // than being clipped.
                         name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
@@ -713,7 +713,7 @@ class _AddPlayerFormState extends ConsumerState<_AddPlayerForm> {
               ],
             ),
             const SizedBox(height: 13),
-            _label(p, 'Position(s) — tap all that apply'),
+            _label(p, 'Position(s): tap all that apply'),
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
