@@ -1579,7 +1579,11 @@ int _computeFirmwareTotalDurationSeconds(
   }
 
   if (advancedSettings.cycle5Completion) {
-    total += 30 + edgeCycleDuration;
+    // Matches the backend's buildPadTimeline (session.service.ts) and
+    // SessionEngine._computeFirmwareTotalDurationSeconds: the trailing edge
+    // cycle's lead-in pause is this protocol's own sessionPause, not a
+    // fixed 30s.
+    total += p.sessionPause.toInt() + edgeCycleDuration;
   }
 
   return total;

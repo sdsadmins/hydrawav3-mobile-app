@@ -987,8 +987,14 @@ class _SessionDefaultsSection extends ConsumerWidget {
                         _MoreRow(
                           icon: HwIcons.bolt,
                           title: proto.templateName,
+                          // .totalDurationSeconds (not the raw
+                          // apiTotalDurationSeconds field) — the list API
+                          // doesn't send a per-protocol duration, so every
+                          // row read 0 here; the computed getter derives it
+                          // from cycles the same way the rest of the app
+                          // does.
                           subtitle:
-                              '~${(proto.apiTotalDurationSeconds / 60).round()} min',
+                              '~${(proto.totalDurationSeconds / 60).round()} min',
                           trailing: proto.id == selected
                               ? const HwPill('Default', tone: HwPillTone.copper)
                               : null,

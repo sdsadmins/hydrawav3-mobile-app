@@ -295,7 +295,9 @@ class Protocol {
   ///   `reps * duration + (reps - 1) * pause` and the inter-cycle pause between
   ///   cycle blocks
   /// - add session pause between sessions
-  /// - finish-edge cycle: add `30 + edgeCycleDuration` when `cycle5`
+  /// - finish-edge cycle: add `sessionPause + edgeCycleDuration` when `cycle5`
+  ///   (matches the backend's buildPadTimeline — this is the protocol's own
+  ///   sessionPause, not a fixed 30s)
   ///
   /// Protocol Plus entries do not carry cycles, so those still fall back to the
   /// server-provided `apiTotalDurationSeconds`.
@@ -334,7 +336,12 @@ class Protocol {
     }
 
     if (cycle5) {
-      total += 30 + edgecycleduration.toInt();
+      // Matches the backend's buildPadTimeline (session.service.ts) and
+      // SessionEngine._computeFirmwareTotalDurationSeconds: the trailing
+      // edge cycle's lead-in pause is this protocol's own sessionPause, not
+      // a fixed 30s — kept in sync with those so every duration prediction
+      // in the app agrees with what the real device actually runs.
+      total += sessionPause.toInt() + edgecycleduration.toInt();
     }
 
     return total;

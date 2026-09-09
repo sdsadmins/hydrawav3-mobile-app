@@ -3099,7 +3099,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
 
     if (advancedSettings.cycle5Completion) {
-      total += 30 + edgeCycleDuration;
+      // Matches the backend's buildPadTimeline (session.service.ts): the
+      // trailing edge cycle's lead-in pause is the protocol's own
+      // sessionPause, not a fixed 30s — the backend is the source of truth
+      // the device's real runtime is measured against, so this must track
+      // it exactly rather than an older fixed constant.
+      total += p.sessionPause.toInt() + edgeCycleDuration;
     }
 
     return total;

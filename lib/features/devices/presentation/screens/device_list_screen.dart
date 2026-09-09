@@ -23,6 +23,7 @@ import '../../../ble/services/ble_connector.dart';
 import '../../../ble/services/ble_scanner.dart';
 import '../../../devices/domain/device_model.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
+import '../../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../../devices/presentation/widgets/players_section.dart';
 import '../../../devices/presentation/widgets/find_pad_placements_card.dart';
 import '../../../devices/presentation/widgets/session_music_card.dart';
@@ -771,7 +772,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                               children: [
                                                 Text(
                                                   protocol.templateName,
-                                                  maxLines: 1,
+                                                  maxLines: 2,
                                                   overflow:
                                                       TextOverflow.ellipsis,
                                                   style: TextStyle(
@@ -877,36 +878,42 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             constraints: const BoxConstraints(maxWidth: 220),
             child: SizedBox(
               height: 34,
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    WidgetSpan(
-                      alignment: PlaceholderAlignment.middle,
-                      child: Icon(
-                        locked
-                            ? Icons.lock_outline_rounded
-                            : selected
-                                ? Icons.check_circle_rounded
-                                : Icons.science_outlined,
-                        size: 15,
-                        color: selected
-                            ? ThemeConstants.accent
-                            : ThemeConstants.textTertiary,
+              // Center both axes: a name short enough for one line sits
+              // centered in the reserved two-line height instead of
+              // top-left; a wrapped two-line name centers naturally too.
+              child: Center(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Icon(
+                          locked
+                              ? Icons.lock_outline_rounded
+                              : selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.science_outlined,
+                          size: 15,
+                          color: selected
+                              ? ThemeConstants.accent
+                              : ThemeConstants.textTertiary,
+                        ),
                       ),
-                    ),
-                    const WidgetSpan(child: SizedBox(width: 8)),
-                    TextSpan(
-                      text: protocol.templateName,
-                      style: TextStyle(
-                        color: ThemeConstants.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
+                      const WidgetSpan(child: SizedBox(width: 8)),
+                      TextSpan(
+                        text: protocol.templateName,
+                        style: TextStyle(
+                          color: ThemeConstants.textPrimary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
@@ -968,7 +975,18 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         .toList();
     if (missingDeviceIds.isEmpty) return;
 
-    final defaultProtocol = _findDefaultProtocolOption(protocols);
+    // The user's Settings-chosen default (Home > Quick Start default, also
+    // settable from the Settings screen) — takes priority over the hardcoded
+    // "Deep-Tension Recovery" fallback below, which only applies when the
+    // user has never set one and has no recent protocol either. Without
+    // this, changing the default in Settings had no visible effect here:
+    // this screen always fell back to the hardcoded id/name match.
+    final settingsDefaultId = ref.read(defaultProtocolIdProvider);
+    final settingsDefault = settingsDefaultId == null
+        ? null
+        : protocols.where((p) => p.id == settingsDefaultId).firstOrNull;
+    final defaultProtocol =
+        settingsDefault ?? _findDefaultProtocolOption(protocols);
     // Restore each device's previously PICKED protocol (persisted across
     // navigation) and only fall back to the default when it was never chosen.
     final persisted = ref.read(selectedProtocolIdByDeviceProvider);
