@@ -1723,7 +1723,9 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         ),
         const SizedBox(height: 8),
         TextFormField(
-          key: ValueKey('start_delay_${settings.startDelay}'),
+          // Stable key — keying by the live value rebuilds the field on
+          // every keystroke and drops the keyboard.
+          key: const ValueKey('start_delay_field'),
           initialValue: settings.startDelay.toString(),
           keyboardType: TextInputType.number,
           inputFormatters: [
@@ -2107,6 +2109,77 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           value: settings.flipSettings,
           onChanged: (value) =>
               onChangeSettings(settings.copyWith(flipSettings: value)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'START DELAY',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: ThemeConstants.textSecondary,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          // Applies to the FIRST sub-protocol only: the pad waits this many
+          // seconds before it begins, and the whole run is that much longer.
+          'The device waits this long before the first protocol starts.',
+          style: TextStyle(
+            fontSize: 11,
+            color: ThemeConstants.textTertiary,
+            height: 1.3,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          // Stable key + no `initialValue` rebind on change — keying by the
+          // live value would rebuild the field on every keystroke and drop
+          // the keyboard.
+          key: const ValueKey('plus_start_delay_field'),
+          initialValue: settings.startDelay.toString(),
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(2),
+          ],
+          style: TextStyle(
+            color: ThemeConstants.textPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Enter seconds (0-60)',
+            hintStyle: TextStyle(color: ThemeConstants.textTertiary),
+            filled: true,
+            fillColor: ThemeConstants.surfaceVariant,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            suffixText: 'sec',
+            suffixStyle: TextStyle(
+              color: ThemeConstants.textSecondary,
+              fontWeight: FontWeight.w700,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.accent),
+            ),
+          ),
+          onChanged: (value) {
+            final parsed = int.tryParse(value) ?? 0;
+            final clamped = parsed.clamp(0, 60);
+            if (clamped != settings.startDelay) {
+              onChangeSettings(settings.copyWith(startDelay: clamped));
+            }
+          },
         ),
       ],
     );

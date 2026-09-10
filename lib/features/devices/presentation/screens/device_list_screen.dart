@@ -21,6 +21,7 @@ import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../ble/presentation/providers/ble_scan_provider.dart';
 import '../../../ble/services/ble_connector.dart';
 import '../../../ble/services/ble_scanner.dart';
+import '../../../devices/data/device_repository.dart';
 import '../../../devices/domain/device_model.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../home/presentation/providers/hub_prefs_provider.dart';
@@ -1057,6 +1058,30 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     }
   }
 
+  /// One-tap Locate for a BLE-connected device card: sends `{"beeping": true}`
+  /// straight over BLE via [DeviceRepository.locateDeviceViaBle] (works
+  /// mid-session too) with a brief toast — no popup.
+  bool _locateSending = false;
+  Future<void> _sendLocate(String deviceId) async {
+    if (_locateSending) return;
+    _locateSending = true;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(deviceRepositoryProvider)
+          .locateDeviceViaBle(deviceId, beeping: true);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Locate command sent')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Locate failed: $e')),
+      );
+    } finally {
+      _locateSending = false;
+    }
+  }
+
   Future<void> _startSession({
     required List<String> runIds,
     required SessionTransport transport,
@@ -1707,6 +1732,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       onSelectProtocol:
           isIncluded ? () => _selectProtocolForDevice(data.id) : null,
       onDisconnect: data.onDisconnect,
+      // Locate is offered only for a BLE-connected unit (WiFi units locate
+      // from the Devices Fleet screen). data.id is the BLE remoteId — the
+      // exact key locateDeviceViaBle / bleRepository.isConnected use, and
+      // works on iOS (UUID) as well as Android (MAC). One tap fires it
+      // straight away (beep on) — no popup.
+      onLocate: data.transportLabel == 'BLE'
+          ? () => _sendLocate(data.id)
+          : null,
       onToggleAdvanced: canEditAdvanced
           ? () {
               setState(() {
@@ -3184,8 +3217,16 @@ class _RefDeviceCard {
                   ),
                 ),
                 const SizedBox(width: 8),
-                _pill(p, w.isRunning ? '● Running' : 'BLE',
-                    strong: w.isRunning),
+                // Locate takes the header slot whenever it's available (a
+                // BLE-connected unit) — including mid-session, so a device
+                // running a protocol can still be pinged. The "● Running" /
+                // transport pill only shows when Locate isn't offered.
+                if (w.onLocate != null)
+                  _locateChip(p, w.onLocate!)
+                else if (w.isRunning)
+                  _pill(p, '● Running', strong: true)
+                else
+                  _pill(p, w.transportLabel),
               ],
             ),
             const SizedBox(height: 10),
@@ -3317,6 +3358,40 @@ class _RefDeviceCard {
             fontSize: 11,
             fontWeight: FontWeight.w700,
             color: p.copperInk,
+          ),
+        ),
+      );
+
+  /// Header-slot "Locate" chip — a pill-shaped button that pings the physical
+  /// unit (see the Locate popup). Replaces the plain transport pill for a
+  /// BLE-connected device.
+  Widget _locateChip(RefPalette p, VoidCallback onTap) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: p.tanSoft,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: p.copper.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.my_location_rounded, size: 12, color: p.copperInk),
+                const SizedBox(width: 4),
+                Text(
+                  'Locate',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: p.copperInk,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -3549,6 +3624,12 @@ class _SessionDeviceSetupCard extends StatelessWidget {
   /// (protocol select, Use, Advanced, Disconnect) are identical.
   final bool refDesign;
 
+  /// Opens the Locate popup for this (BLE-connected) device. When set, the
+  /// header's transport pill ("BLE") is replaced by a tappable Locate
+  /// button. Null hides the button and keeps the plain pill (e.g. WiFi
+  /// units, which locate from the Devices Fleet screen instead).
+  final VoidCallback? onLocate;
+
   const _SessionDeviceSetupCard({
     required this.icon,
     required this.transportLabel,
@@ -3568,6 +3649,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
     required this.onDisconnect,
     required this.onToggleAdvanced,
     required this.advancedChild,
+    this.onLocate,
     this.refDesign = false,
   });
 
@@ -4504,7 +4586,9 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         TextFormField(
-          key: ValueKey('start_delay_${settings.startDelay}'),
+          // Stable key — keying by the live value rebuilds the field on
+          // every keystroke and drops the keyboard.
+          key: const ValueKey('start_delay_field'),
           initialValue: settings.startDelay.toString(),
           keyboardType: TextInputType.number,
           inputFormatters: [
@@ -4802,6 +4886,77 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           value: settings.flipSettings,
           onChanged: (value) =>
               onChangeSettings(settings.copyWith(flipSettings: value)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'START DELAY',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: ThemeConstants.textSecondary,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          // Applies to the FIRST sub-protocol only: the pad waits this many
+          // seconds before it begins, and the whole run is that much longer.
+          'The device waits this long before the first protocol starts.',
+          style: TextStyle(
+            fontSize: 11,
+            color: ThemeConstants.textTertiary,
+            height: 1.3,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          // Stable key + no `initialValue` rebind on change — keying by the
+          // live value would rebuild the field on every keystroke and drop
+          // the keyboard.
+          key: const ValueKey('plus_start_delay_field'),
+          initialValue: settings.startDelay.toString(),
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(2),
+          ],
+          style: TextStyle(
+            color: ThemeConstants.textPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Enter seconds (0-60)',
+            hintStyle: TextStyle(color: ThemeConstants.textTertiary),
+            filled: true,
+            fillColor: ThemeConstants.surfaceVariant,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            suffixText: 'sec',
+            suffixStyle: TextStyle(
+              color: ThemeConstants.textSecondary,
+              fontWeight: FontWeight.w700,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: ThemeConstants.accent),
+            ),
+          ),
+          onChanged: (value) {
+            final parsed = int.tryParse(value) ?? 0;
+            final clamped = parsed.clamp(0, 60);
+            if (clamped != settings.startDelay) {
+              onChangeSettings(settings.copyWith(startDelay: clamped));
+            }
+          },
         ),
       ],
     );
