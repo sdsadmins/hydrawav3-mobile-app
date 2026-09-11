@@ -746,10 +746,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       return;
     }
 
+    // If this transition was applied by a remote SESSION_PAUSED/SESSION_RESUMED
+    // socket event (via engine.applyRemoteDeviceLifecycle), do NOT POST it back
+    // to the server it just came from: the server would re-broadcast, this
+    // listener would fire again, and pause/resume would flicker in an infinite
+    // loop. Only locally-initiated pause/resume should sync to the server.
+    final engine =
+        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final remoteAt = engine.lastRemoteLifecycleAt;
+    final fromRemote = remoteAt != null &&
+        DateTime.now().difference(remoteAt) < const Duration(seconds: 2);
+    if (fromRemote) return;
+
     if (prevS == SessionStatus.running && nextS == SessionStatus.paused) {
+      // Open the settle window (same as _maybeSyncNormalServer): the backend
+      // pause is a round-trip and its own SESSION_PAUSED echo + the 1s live
+      // feed lag briefly report the device as still RUNNING. Without this
+      // stamp the reconcilers apply that stale value back onto the engine,
+      // which re-fires this sync as paused->running, and the state flickers.
+      _localLifecycleActionAt = DateTime.now();
       unawaited(controller.pauseServerSession());
     } else if (prevS == SessionStatus.paused &&
         nextS == SessionStatus.running) {
+      _localLifecycleActionAt = DateTime.now();
       unawaited(controller.resumeServerSession());
     }
     // Terminal (stopped/completed) is intentionally NOT handled here. The
