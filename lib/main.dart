@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +18,17 @@ import 'features/session/services/background_session_runtime.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // iOS: opt into CoreBluetooth state restoration so a BLE central session
+  // can survive the app being suspended (e.g. during a phone call) and be
+  // restored by iOS rather than torn down. No-op on Android. Must be called
+  // before any BLE connect/scan calls — do it as early as possible in
+  // startup. This alone does not keep Socket.IO/Dart timers running through
+  // a call; it only improves the odds CoreBluetooth keeps the link alive /
+  // hands it back cleanly. See protocol_plus BLE-telemetry completion work.
+  if (!kIsWeb) {
+    await FlutterBluePlus.setOptions(restoreState: true);
+  }
 
   // Lock orientation on mobile only (not web)
   if (!kIsWeb) {

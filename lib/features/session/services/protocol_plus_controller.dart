@@ -218,6 +218,25 @@ class ProtocolPlusController {
   StreamSubscription<Map<String, BleConnectionStatus>>? _connStatesSub;
   Map<String, BleConnectionStatus> _lastConnStates = {};
 
+  /// Watches raw BLE firmware telemetry (`tl`/`rs`/`s`) so a Plus device's
+  /// stage completion can be detected off the DEVICE'S OWN clock, independent
+  /// of the `START_PROTOCOL` socket event (a fire-and-forget `server.emit`
+  /// with no redelivery — if this client's socket happened to be down at the
+  /// exact moment the backend fired it, e.g. suspended during an iOS phone
+  /// call, that switch is lost until something else notices). See
+  /// [_onTelemetry].
+  StreamSubscription<BleTelemetry>? _telemetrySub;
+
+  /// Debounces [_onTelemetry] per device so a brief `tl==0` blip (rounding, a
+  /// stale cached packet) doesn't fire a recovery check before a legitimate
+  /// `START_PROTOCOL` has had a normal chance to arrive.
+  final Map<String, Timer> _telemetryStallTimers = {};
+
+  /// One recovery attempt in flight per device at a time — the debounce timer
+  /// firing again while a previous check is still awaiting the status GET
+  /// must not start a second, overlapping one.
+  final Set<String> _telemetryRecoveryInFlight = {};
+
   /// Periodic safety net that drains [_pendingSwitches]. The connection-state
   /// stream ([_applyPendingSwitchesOn]) only fires on the exact disconnected→
   /// connected transition — if that edge is missed, or a switch lands here after
@@ -883,6 +902,17 @@ class ProtocolPlusController {
         .connectionStates
         .listen(_applyPendingSwitchesOn);
 
+    // BLE-telemetry recovery path (see field docs above): survives a missed
+    // START_PROTOCOL independent of socket/app-foreground state.
+    _telemetrySub?.cancel();
+    for (final t in _telemetryStallTimers.values) {
+      t.cancel();
+    }
+    _telemetryStallTimers.clear();
+    _telemetryRecoveryInFlight.clear();
+    _telemetrySub =
+        _ref.read(bleConnectorProvider).telemetry.listen(_onTelemetry);
+
     // Safety net for the above: re-attempt held switches on a fixed cadence too,
     // not only on the connection-state edge. Covers missed transitions and
     // switches re-queued after a failed/timed-out write.
@@ -1429,6 +1459,147 @@ class ProtocolPlusController {
     dispose();
   }
 
+  /// How long a device must sit at `timeLeftSeconds == 0` before it's treated
+  /// as a genuinely stalled switch rather than a momentary blip (rounding, a
+  /// stale packet, or the normal split-second before `START_PROTOCOL` lands).
+  static const _telemetryStallDebounce = Duration(seconds: 6);
+
+  /// Firmware telemetry handler — the BLE-driven half of switch recovery.
+  ///
+  /// `timeLeftSeconds` ("tl") is the firmware's OWN wall-clock countdown for
+  /// whatever it is currently playing; it reaches 0 purely from the device's
+  /// clock, with no dependency on the app or socket. For a Plus device not on
+  /// its final sub-protocol, `tl == 0` sustained for [_telemetryStallDebounce]
+  /// means: the device finished its current stage and is idling, but nothing
+  /// has told it what's next — exactly the symptom of a missed/lost
+  /// `START_PROTOCOL` (see field docs on [_telemetrySub]). At that point we
+  /// ask the backend's session-status endpoint what index it actually has for
+  /// this device and, if it's ahead of what we have locally, apply that
+  /// switch via the SAME path a normal socket-driven switch uses.
+  void _onTelemetry(BleTelemetry t) {
+    final engine = _engine;
+    if (engine == null) return;
+    final binding = _bindingForDevice(t.deviceId);
+    if (binding == null) return; // not one of ours (or not a Plus device)
+
+    final looksStalled = t.timeLeftSeconds == 0 &&
+        (t.totalDurationSeconds ?? 0) > 0 && // 0/0 = no device-tracked session
+        engine.isDeviceRunning(t.deviceId) &&
+        !engine.isPlusDeviceOnFinalProtocol(t.deviceId);
+
+    final existing = _telemetryStallTimers.remove(t.deviceId);
+    existing?.cancel();
+    if (!looksStalled) return;
+
+    _telemetryStallTimers[t.deviceId] = Timer(_telemetryStallDebounce, () {
+      _telemetryStallTimers.remove(t.deviceId);
+      unawaited(_recoverPlusSwitchFor(binding, engine));
+    });
+  }
+
+  /// Reconcile ONE device's Protocol Plus index against the backend after
+  /// [_onTelemetry] flags a sustained stall, and apply the switch if the
+  /// backend is ahead. Idempotent: a normal `START_PROTOCOL` racing in first
+  /// (via the socket) has already advanced [SessionEngine]'s local index, so
+  /// the "already applied" check below is what stops this from re-sending a
+  /// switch the socket path already delivered.
+  Future<void> _recoverPlusSwitchFor(
+    ProtocolPlusBinding binding,
+    SessionEngine engine,
+  ) async {
+    final mac = binding.localMac;
+    if (!_telemetryRecoveryInFlight.add(mac)) return; // one at a time
+    try {
+      final ctx = await _sessionRequestContext();
+      if (ctx == null) return;
+      final dio = _ref.read(nodeDioProvider);
+      final res = await dio.get(
+        ApiEndpoints.sessionStatus(binding.serverSessionId, ctx.orgId),
+        options: ctx.options,
+      );
+      final raw = res.data;
+      if (raw is! Map) return;
+      final devices = raw['devices'];
+      if (devices is! List) return;
+
+      Map<String, dynamic>? deviceEntry;
+      for (final d in devices) {
+        if (d is! Map) continue;
+        final m = d.cast<String, dynamic>();
+        final name = m['deviceName']?.toString();
+        final serverMac = m['macAddress']?.toString();
+        if ((binding.deviceName.isNotEmpty && name == binding.deviceName) ||
+            (serverMac != null &&
+                serverMac.isNotEmpty &&
+                serverMac == binding.serverDeviceId)) {
+          deviceEntry = m;
+          break;
+        }
+      }
+      // A single-device Plus session's status carries exactly one device —
+      // fall back to it if name/mac matching above found nothing (defensive;
+      // matching should normally succeed).
+      deviceEntry ??= devices.length == 1
+          ? (devices.first as Map).cast<String, dynamic>()
+          : null;
+      if (deviceEntry == null) {
+        appLogger.w(
+          'ProtocolPlus: telemetry recovery for $mac — no matching device '
+          'in status response',
+        );
+        return;
+      }
+
+      final backendIndex = (deviceEntry['protocolIndex'] as num?)?.toInt();
+      final localIndex = engine.protocolPlusIndexByDevice[mac];
+      if (backendIndex == null || localIndex == null) return;
+      if (backendIndex <= localIndex) {
+        // Already caught up (a socket START_PROTOCOL won the race, or the
+        // backend genuinely hasn't advanced yet) — nothing to recover.
+        appLogger.i(
+          'ProtocolPlus: telemetry stall for $mac resolved itself '
+          '(local=$localIndex, backend=$backendIndex)',
+        );
+        return;
+      }
+
+      appLogger.w(
+        'ProtocolPlus: telemetry-detected missed switch for $mac — '
+        'local=$localIndex, backend=$backendIndex. Recovering via '
+        'GET session status (likely a lost START_PROTOCOL broadcast, e.g. '
+        'socket down during an iOS call).',
+      );
+
+      final detail = await getProtocolPlusDetail(binding.plusId);
+      if (backendIndex >= detail.protocolIds.length) {
+        appLogger.e(
+          'ProtocolPlus: telemetry recovery for $mac — backendIndex='
+          '$backendIndex out of range (${detail.protocolIds.length} protocols)',
+        );
+        return;
+      }
+      final protoId = detail.protocolIds[backendIndex];
+      final protocol = await _ref.read(protocolDetailProvider(protoId).future);
+      if (protocol.cycles.isEmpty) {
+        appLogger.e(
+          'ProtocolPlus: telemetry recovery for $mac — resolved protocol '
+          '$protoId has no cycles, aborting',
+        );
+        return;
+      }
+
+      final ok = await _applyDeviceSwitch(engine, mac, protocol, backendIndex);
+      appLogger.i(
+        'ProtocolPlus: telemetry recovery switch for $mac '
+        '(index=$backendIndex) → $ok',
+      );
+    } catch (e) {
+      appLogger.e('ProtocolPlus: telemetry recovery failed for $mac: $e');
+    } finally {
+      _telemetryRecoveryInFlight.remove(mac);
+    }
+  }
+
   /// On each BLE connection-state change, replay a held protocol switch for any
   /// bound device that JUST transitioned to `connected`.
   void _applyPendingSwitchesOn(Map<String, BleConnectionStatus> states) {
@@ -1528,6 +1699,13 @@ class ProtocolPlusController {
     _removeEngineListener = null;
     _connStatesSub?.cancel();
     _connStatesSub = null;
+    _telemetrySub?.cancel();
+    _telemetrySub = null;
+    for (final t in _telemetryStallTimers.values) {
+      t.cancel();
+    }
+    _telemetryStallTimers.clear();
+    _telemetryRecoveryInFlight.clear();
     _pendingSwitchReconciler?.cancel();
     _pendingSwitchReconciler = null;
     _pendingSwitches.clear();

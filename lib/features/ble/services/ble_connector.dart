@@ -29,6 +29,40 @@ class BleNotification {
   });
 }
 
+/// Parsed form of the firmware's `functionStatusChar` telemetry packet
+/// (PublishBLETelemetry in the firmware) — the short-key JSON pushed on every
+/// telemetry tick while BLE-connected, e.g.
+/// `{"m","rs","s","tp","c","td":600,"tl":120,"p1":{...},"p2":{...},...}`.
+///
+/// `timeLeftSeconds` ("tl") is the firmware's own wall-clock countdown for
+/// whatever it is currently playing — it reaches device-observed completion
+/// independently of any app/socket command, which is what makes it usable as
+/// a local "current stage finished" signal (see ProtocolPlusController).
+class BleTelemetry {
+  final String deviceId;
+  final String? runStatus; // "rs"
+  final String? runState; // "s"
+  final int? totalDurationSeconds; // "td" — 0 when no device-tracked session
+  final int? timeLeftSeconds; // "tl" — 0 when no device-tracked session OR done
+  final String? warning; // "w" — e.g. "pad_disconnect", "ntc_overheat"
+  final String? faultReason; // "fr"
+
+  const BleTelemetry({
+    required this.deviceId,
+    this.runStatus,
+    this.runState,
+    this.totalDurationSeconds,
+    this.timeLeftSeconds,
+    this.warning,
+    this.faultReason,
+  });
+
+  @override
+  String toString() =>
+      'BleTelemetry(device=$deviceId, rs=$runStatus, s=$runState, '
+      'td=$totalDurationSeconds, tl=$timeLeftSeconds, w=$warning, fr=$faultReason)';
+}
+
 class BleGattInfo {
   final String? serviceUuid;
   final String? writeUuid;
@@ -56,6 +90,7 @@ class BleConnector {
   final _stateController =
       StreamController<Map<String, BleConnectionStatus>>.broadcast();
   final _notificationController = StreamController<BleNotification>.broadcast();
+  final _telemetryController = StreamController<BleTelemetry>.broadcast();
   final _batteryController = StreamController<Map<String, int>>.broadcast();
   final Map<String, BleConnectionStatus> _deviceStates = {};
   final Map<String, int> _batteryLevels = {};
@@ -114,6 +149,13 @@ class BleConnector {
       _stateController.stream;
 
   Stream<BleNotification> get notifications => _notificationController.stream;
+
+  /// Parsed firmware telemetry (`functionStatusChar`), one event per notify
+  /// tick per connected device. See [BleTelemetry] for field meaning — in
+  /// particular `timeLeftSeconds`/`runStatus`/`runState`, the local signal a
+  /// consumer (e.g. Protocol Plus) can use to detect a stage finishing on the
+  /// device's own clock, independent of any socket/backend command.
+  Stream<BleTelemetry> get telemetry => _telemetryController.stream;
 
   Stream<Map<String, int>> get batteryLevels => _batteryController.stream;
 
@@ -481,6 +523,7 @@ class BleConnector {
           );
           _tryCaptureFirmwareSessionId(deviceId, value);
           _tryCaptureHardwareMac(deviceId, value);
+          _tryParseTelemetry(deviceId, value);
           appLogger.d('BLE: Notification from $deviceId: $value');
         }, onError: (e) {
           appLogger.e('BLE: Notification stream error for $deviceId: $e');
@@ -658,6 +701,43 @@ class BleConnector {
       }
     } catch (_) {
       // Ignore: not UTF8 / no MAC present.
+    }
+  }
+
+  /// Parse a firmware telemetry packet (see [BleTelemetry]) out of a raw
+  /// notify payload and broadcast it on [telemetry]. Best-effort: any
+  /// non-JSON / non-UTF8 payload (e.g. a plain MAC string, or an unrelated
+  /// notification on the EVENT channel) is silently ignored — this must
+  /// never throw into the notification listener.
+  void _tryParseTelemetry(String deviceId, List<int> value) {
+    try {
+      final s = utf8.decode(value, allowMalformed: true).trim();
+      if (s.isEmpty || s[0] != '{') return;
+      final decoded = jsonDecode(s);
+      if (decoded is! Map) return;
+      // Require at least one telemetry-shaped key so we don't misfire on
+      // unrelated JSON (e.g. the {"deviceId":...}/{"mac":...} acks parsed
+      // above) — "rs"/"s"/"tl"/"td" are the fields PublishBLETelemetry sends.
+      if (!decoded.containsKey('rs') &&
+          !decoded.containsKey('s') &&
+          !decoded.containsKey('tl') &&
+          !decoded.containsKey('td')) {
+        return;
+      }
+      int? asInt(dynamic v) => v is num ? v.toInt() : null;
+      _telemetryController.add(
+        BleTelemetry(
+          deviceId: deviceId,
+          runStatus: decoded['rs']?.toString(),
+          runState: decoded['s']?.toString(),
+          totalDurationSeconds: asInt(decoded['td']),
+          timeLeftSeconds: asInt(decoded['tl']),
+          warning: decoded['w']?.toString(),
+          faultReason: decoded['fr']?.toString(),
+        ),
+      );
+    } catch (_) {
+      // Ignore: not JSON / not UTF8 / unexpected shape.
     }
   }
 
@@ -845,6 +925,7 @@ class BleConnector {
         );
         _tryCaptureFirmwareSessionId(deviceId, value);
         _tryCaptureHardwareMac(deviceId, value);
+        _tryParseTelemetry(deviceId, value);
         appLogger.d('BLE: Status notification from $deviceId: $value');
       }, onError: (e) {
         appLogger.e('BLE: Status stream error for $deviceId: $e');

@@ -374,6 +374,17 @@ class ApiEndpoints {
   static String protocolPlusRestart(String sessionId) =>
       'protocol-plus/$sessionId/restart';
 
+  /// Node Nest: `GET /hydrawav/v1/session/:sessionId/status/:organizationId`
+  /// Per-device session snapshot, including `protocolIndex` (Protocol Plus
+  /// sub-sequence position) — authoritative even if this client's socket
+  /// missed a `START_PROTOCOL` broadcast (that event is a fire-and-forget
+  /// socket.emit with no delivery guarantee; the backend still advances its
+  /// own state either way). Used to recover after a missed switch, detected
+  /// locally via BLE telemetry (`timeLeftSeconds` reaching 0) rather than
+  /// waiting indefinitely for a socket event that may never arrive.
+  static String sessionStatus(String sessionId, String organizationId) =>
+      'session/$sessionId/status/$organizationId';
+
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';
   static const String aiChat = '/api/chat';

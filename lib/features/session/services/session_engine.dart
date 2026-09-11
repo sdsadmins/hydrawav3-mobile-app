@@ -962,6 +962,26 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       state.protocolPlusDelayByDevice;
   Map<String, TimerState> get deviceTimers => state.deviceTimers;
 
+  /// Public view of each Plus device's current sub-sequence index — used by
+  /// [ProtocolPlusController]'s BLE-telemetry recovery path to compare the
+  /// app's locally-known index against the backend's authoritative one after
+  /// a `START_PROTOCOL` socket event may have been missed (e.g. socket down
+  /// during an iOS phone call — that event is fire-and-forget, no redelivery).
+  Map<String, int> get protocolPlusIndexByDevice =>
+      state.protocolPlusIndexByDevice;
+
+  /// Public wrapper for [_isPlusDeviceOnFinalProtocol] — true when [id] is on
+  /// the LAST sub-protocol of its Plus sequence (nothing to recover-switch to).
+  bool isPlusDeviceOnFinalProtocol(String id) =>
+      _isPlusDeviceOnFinalProtocol(id);
+
+  /// True while [id] is actively RUNNING (not paused/stopped/completed) — the
+  /// only state in which a BLE-telemetry-detected stall should trigger a
+  /// recovery switch; a device the user paused, or that already finished,
+  /// must not be nudged forward.
+  bool isDeviceRunning(String id) =>
+      state.deviceStatuses[id] == SessionStatus.running;
+
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
       if (!_isActive) return;
