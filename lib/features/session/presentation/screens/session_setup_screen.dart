@@ -1688,9 +1688,11 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         smallNumberSlider(
           label: 'Hot Pad Intensity',
           value: settings.hotPercent,
-          min: -100,
-          max: 100,
-          divisions: 200,
+          // Range capped at ±10% (was ±100%) — client requirement, small-step
+          // fine tuning only.
+          min: -10,
+          max: 10,
+          divisions: 20,
           color: ThemeConstants.accent,
           unit: '%',
           coloredTrack: false,
@@ -1701,9 +1703,11 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
         smallNumberSlider(
           label: 'Cold Pad Intensity',
           value: settings.coldPercent,
-          min: -100,
-          max: 100,
-          divisions: 200,
+          // Range capped at ±10% (was ±100%) — client requirement, small-step
+          // fine tuning only.
+          min: -10,
+          max: 10,
+          divisions: 20,
           color: Colors.blueAccent,
           unit: '%',
           coloredTrack: false,
@@ -2074,9 +2078,11 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
         smallNumberSlider(
           label: 'Hot Pad Intensity',
           value: settings.hotPercent,
-          min: -100,
-          max: 100,
-          divisions: 200,
+          // Range capped at ±10% (was ±100%) — client requirement, small-step
+          // fine tuning only.
+          min: -10,
+          max: 10,
+          divisions: 20,
           color: ThemeConstants.accent,
           unit: '%',
           coloredTrack: false,
@@ -2087,9 +2093,11 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
         smallNumberSlider(
           label: 'Cold Pad Intensity',
           value: settings.coldPercent,
-          min: -100,
-          max: 100,
-          divisions: 200,
+          // Range capped at ±10% (was ±100%) — client requirement, small-step
+          // fine tuning only.
+          min: -10,
+          max: 10,
+          divisions: 20,
           color: Colors.blueAccent,
           unit: '%',
           coloredTrack: false,
