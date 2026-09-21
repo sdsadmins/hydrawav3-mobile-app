@@ -117,15 +117,13 @@ class DeviceRepository {
     }
   }
 
-  /// Locate: BLE JSON write `{"beeping": beeping}` to whichever of this
+  /// Locate over BLE: JSON write `{"beeping": beeping}` to whichever of this
   /// device's MAC candidates (see [_macCandidates]) is currently connected.
-  Future<void> locateDevice(String macAddress, {bool beeping = true}) async {
-    // MQTT path — commented out per request; kept in case BLE locate needs a
-    // fallback for a device that isn't currently BLE-connected.
-    // return _remoteSource.publishMqttPayload({
-    //   'mac': _normalizeMac(macAddress),
-    //   'beeping': beeping,
-    // });
+  /// Used by the Device List screen, where the card is only shown for a
+  /// BLE-connected unit. Works mid-session too (the write is a plain JSON
+  /// frame the firmware handles alongside a running protocol).
+  Future<void> locateDeviceViaBle(String macAddress,
+      {bool beeping = true}) async {
     for (final mac in _macCandidates(macAddress)) {
       if (_bleRepository.isConnected(mac)) {
         final ok =
@@ -136,6 +134,22 @@ class DeviceRepository {
     }
     throw Exception('Device not connected over BLE');
   }
+
+  /// Locate over the server's MQTT bridge (web parity — `mqttConnect` on the
+  /// web devices page): POST /mqtt/publish `{mac, beeping}`. Used by the
+  /// Devices Fleet (register) screen, which lists WiFi-registered units that
+  /// may not have a live BLE link to this phone.
+  Future<void> locateDeviceViaMqtt(String macAddress,
+      {bool beeping = true}) async {
+    await _remoteSource.publishMqttPayload({
+      'mac': _normalizeMac(macAddress),
+      'beeping': beeping,
+    });
+  }
+
+  /// Backwards-compatible alias — BLE locate (its long-standing behavior).
+  Future<void> locateDevice(String macAddress, {bool beeping = true}) =>
+      locateDeviceViaBle(macAddress, beeping: beeping);
 
   Future<void> runDiagnostics(String macAddress, {bool selfCheck = true}) =>
       _remoteSource.publishMqttPayload({

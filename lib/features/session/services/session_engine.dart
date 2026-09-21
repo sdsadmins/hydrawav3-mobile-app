@@ -1049,6 +1049,33 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     return ok;
   }
 
+  /// BLE-only: arm the firmware's alarm-mute window via `{"muteSeconds": N}`
+  /// (firmware V30.4+ — `AlarmMuteUntilMillis = now + N`). N<=0 cancels;
+  /// firmware caps at 3600. Time-based and wall-clock (does NOT pause with the
+  /// session), so we only arm it while a Plus run is actively RUNNING.
+  ///
+  /// Protocol Plus use: armed once, ~10s before protocol[0]'s predicted end,
+  /// to span (rest of the stack − final protocol − margin). That window
+  /// swallows protocol[0]'s completion chime and every mid-sequence
+  /// stop/start chime, and closes just before the final sub-protocol so its
+  /// own completion beep still sounds — net 2 beeps (first start, last end)
+  /// instead of six for a 3-stage stack. See [_maybeArmPlusMute].
+  final Set<String> _plusMuteArmed = {};
+  Future<void> _setDeviceMuteSeconds(String mac, int seconds) async {
+    if (state.transport != SessionTransport.ble) return;
+    try {
+      final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(mac)) return;
+      final ok = await connector.writeJsonToDevice(
+        mac,
+        utf8.encode(jsonEncode({'muteSeconds': seconds})),
+      );
+      appLogger.i('Session: BLE muteSeconds=$seconds for $mac → $ok');
+    } catch (e) {
+      appLogger.w('Session: muteSeconds write failed for $mac: $e');
+    }
+  }
+
   Future<void> _publishWifiPlayCmd(int playCmd) async {
     final deviceIds = state.deviceIds;
     if (deviceIds.isEmpty) return;
@@ -1661,6 +1688,18 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     return null;
   }
 
+  /// When a pause/resume was applied to the engine FROM a remote lifecycle
+  /// event (SESSION_PAUSED / SESSION_RESUMED off the socket), not from a
+  /// local button. The session screen's Plus server-sync
+  /// (`_maybeSyncProtocolPlusServer`) checks this: a status transition that
+  /// happened right after a remote event must NOT be POSTed back to the
+  /// server it came from — doing so makes the backend re-broadcast, which
+  /// flips the engine again, which re-POSTs… an infinite pause/resume loop
+  /// (only visible once the backend has a queued sub-protocol switch to
+  /// hold, which is why it shows up mid-stack, not on protocol[0]).
+  DateTime? _lastRemoteLifecycleAt;
+  DateTime? get lastRemoteLifecycleAt => _lastRemoteLifecycleAt;
+
   /// Apply a remote lifecycle change to ONE device — UI-only reconciliation, no
   /// device commands re-issued.
   ///
@@ -1670,6 +1709,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// other device in a multi-device run along with it.
   void applyRemoteDeviceLifecycle(String deviceId, SessionStatus remoteStatus) {
     if (!_isActive) return;
+    // Stamp BEFORE the state change below fires the screen listener, so the
+    // Plus server-sync sees "this came from a remote event" and skips it.
+    _lastRemoteLifecycleAt = DateTime.now();
     // Ignore the echo of our OWN connectivity-freeze mirror
     // (_mirrorDeviceLifecycleToBackend, called from the tick loop when a Plus
     // device freezes/unfreezes waiting to reconnect): the backend broadcasts
@@ -1719,6 +1761,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void applyRemoteLifecycle(SessionStatus remoteStatus) {
     if (!_isActive) return;
     if (state.status == remoteStatus) return;
+    _lastRemoteLifecycleAt = DateTime.now();
     switch (remoteStatus) {
       case SessionStatus.paused:
         if (state.status != SessionStatus.running) return;
@@ -2270,6 +2313,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           status: _deriveOverallStatus(statuses),
         );
       });
+
+      // Protocol Plus: the alarm-mute window is armed later, ~10s before
+      // protocol[0]'s predicted end (see _maybeArmPlusMute in _onTick) — NOT
+      // here, so protocol[0]'s own start chime is heard first.
+      _plusMuteArmed.clear();
 
       _beginRuntimeTimer();
     } finally {
@@ -3620,6 +3668,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     _isProtocolPlus = false;
     _protocolPlusDeviceIds.clear();
+    _plusMuteArmed.clear();
+    _lastRemoteLifecycleAt = null;
     _plusSegmentEndByDevice.clear();
     _plusBreakStartedAt.clear();
     _plusBreakHoldByDevice.clear();
@@ -3650,7 +3700,70 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     if (!_isActive || state.status != SessionStatus.running) return;
     _reconcileClockFromWall();
     _tickPlusRestartTimingOverrides();
+    _maybeArmPlusMute();
     _syncDisplayedTimerFromStopwatch();
+  }
+
+  /// Protocol Plus beep policy (firmware `{"muteSeconds": N}`): once per run,
+  /// ~10s before protocol[0]'s predicted end, arm ONE mute window that runs
+  /// until 15s before the whole stack's own end. That swallows every chime
+  /// EXCEPT the very first (protocol[0]'s start, already played) and the very
+  /// last (the final sub-protocol's own completion, in that trailing 15s
+  /// gap) — so a 3-stage run beeps twice instead of six times. Explicitly
+  /// includes the final sub-protocol's START chime in the muted span (it
+  /// lands ~finalProtocolDuration before the end, well inside the window).
+  ///
+  /// Only fires while a Plus run is actively RUNNING (mute is wall-clock and
+  /// does NOT pause with the session — arming during a pause would let it
+  /// drain uselessly). If the run is paused before the arm point and later
+  /// resumed, the ~10s-before-end check simply fires whenever it's next
+  /// reached. A long pause AFTER arming can still let the window expire
+  /// mid-stack (accepted — no re-arm on resume by request).
+  void _maybeArmPlusMute() {
+    if (!_isProtocolPlus) return;
+    if (state.transport != SessionTransport.ble) return;
+    const armLead = Duration(seconds: 10);
+    // Trailing gap left un-muted so the FINAL sub-protocol's own completion
+    // beep sounds. Only its END — its start (which lands ~its whole
+    // duration earlier) is still inside the muted window.
+    const endMargin = 15;
+    for (final mac in _plusDeviceIds()) {
+      if (_plusMuteArmed.contains(mac)) continue;
+      if (state.deviceStatuses[mac] != SessionStatus.running) continue;
+      // Nothing to mute if there's no stack after protocol[0].
+      if (_isPlusDeviceOnFinalProtocol(mac)) continue;
+      final seg = _plusSegmentEndByDevice[mac];
+      if (seg == null) continue;
+      // `seg` is protocol[0]'s runtime only — it does NOT include a Start
+      // Delay, but `_deviceElapsed` starts counting the moment the app's
+      // timer does, while the device is still in its sDelay wait. Add the
+      // delay back so the arm fires ~armLead before protocol[0]'s REAL end,
+      // not that much earlier. Zero delay → unchanged.
+      final startDelay = Duration(
+        seconds: state.advancedSettingsByDevice[mac]?.startDelay ?? 0,
+      );
+      final protocol0End = seg + startDelay;
+      // Wait until we're within the arm-lead of protocol[0]'s predicted end.
+      if (_deviceElapsed(mac) < protocol0End - armLead) continue;
+
+      final total = state.deviceTimers[mac]?.totalDuration;
+      if (total == null) {
+        _plusMuteArmed.add(mac); // give up quietly; don't retry every tick
+        continue;
+      }
+      final remaining = total.inSeconds - _deviceElapsed(mac).inSeconds;
+      // Cover everything from now until 15s before the WHOLE STACK ends —
+      // i.e. through the final sub-protocol's start and almost all of its
+      // run, leaving only its completion chime audible.
+      final n = remaining - endMargin;
+      _plusMuteArmed.add(mac);
+      if (n <= 0) continue; // stack too short to bother
+      appLogger.i(
+        'ProtocolPlus: arming muteSeconds=$n for $mac '
+        '(remaining=${remaining}s, endMargin=${endMargin}s)',
+      );
+      unawaited(_setDeviceMuteSeconds(mac, n));
+    }
   }
 
   void _syncDisplayedTimerFromStopwatch() {

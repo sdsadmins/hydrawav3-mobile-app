@@ -1695,6 +1695,14 @@ Future<void> launchSession(
           flipSettings: sel.advanced.flipSettings,
           hotPercent: sel.advanced.hotPercent,
           coldPercent: sel.advanced.coldPercent,
+          // Start Delay applies to the FIRST sub-protocol only (this is
+          // protocol[0]). It reaches the device as `sDelay` in the BLE
+          // config write, and the backend as `advancedSettings.startDelay`
+          // in POST /protocol-plus/start — the backend must add it to when
+          // it schedules the protocol[1] switch, or protocol[0] gets cut
+          // short by that many seconds. Later sub-protocols carry no
+          // startDelay (see _advancedFromProtocol / the switch handler).
+          startDelay: sel.advanced.startDelay,
         );
         protocolByDevice[sel.deviceId] = first;
         advancedByDevice[sel.deviceId] = advanced;
@@ -1766,7 +1774,14 @@ Future<void> launchSession(
           // finished, even though the sequence was still meant to continue.
           if (plusDeviceIds.contains(id)) {
             final plusTotal = durationsByDevice[id];
-            if (plusTotal != null && plusTotal > 0) return plusTotal;
+            if (plusTotal != null && plusTotal > 0) {
+              // A Plus Start Delay lengthens the whole run by that much (it
+              // sits before protocol[0]) — the backend adds it to when the
+              // protocol[1] switch fires, so the sequence total the
+              // watchdog checks must include it too.
+              final plusStartDelay = advancedByDevice[id]?.startDelay ?? 0;
+              return plusTotal + plusStartDelay;
+            }
           }
           final proto = protocolByDevice[id];
           final settings = advancedByDevice[id];

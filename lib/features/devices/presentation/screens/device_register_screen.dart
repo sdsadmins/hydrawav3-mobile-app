@@ -1215,7 +1215,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                               try {
                                 await ref
                                     .read(deviceRepositoryProvider)
-                                    .locateDevice(device.macAddress,
+                                    .locateDeviceViaMqtt(device.macAddress,
                                         beeping: beep);
                                 if (dialogContext.mounted) {
                                   Navigator.of(dialogContext).pop();
