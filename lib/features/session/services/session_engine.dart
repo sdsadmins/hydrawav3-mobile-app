@@ -15,6 +15,7 @@ import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
 import '../../auth/presentation/providers/auth_provider.dart';
 import '../../ble/services/ble_connector.dart';
+import '../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../intake/domain/intake_models.dart';
 import '../../protocols/domain/protocol_model.dart';
@@ -2833,6 +2834,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.start();
     }
     _initPlusSegmentEnds();
+    _cancelStalePlusMuteIfDisabled();
     _anchorWallClock();
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
@@ -3704,6 +3706,33 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _syncDisplayedTimerFromStopwatch();
   }
 
+  /// `{"muteSeconds": N}` is a firmware-side WALL-CLOCK window — once armed
+  /// (during a previous run with the Devices List mute switch ON), the
+  /// firmware honours it for the full N seconds regardless of what any later
+  /// app session does. Turning the switch OFF only stops [_maybeArmPlusMute]
+  /// from arming a NEW window going forward; it does nothing about one
+  /// already running on the device from an earlier ON run — which is why a
+  /// fresh run right after switching OFF could still play silently for a
+  /// while. Send an explicit cancel (`muteSeconds: 0`, which the firmware
+  /// contract defines as "cancel") at the start of every Plus/BLE run while
+  /// the switch is OFF, so OFF actually means "not muted," not just "won't
+  /// mute again." Cheap and safe to send even when nothing was ever armed.
+  Future<void> _cancelStalePlusMuteIfDisabled() async {
+    if (!_isProtocolPlus) return;
+    if (state.transport != SessionTransport.ble) return;
+    bool enabled;
+    try {
+      enabled = _ref.read(protocolPlusMuteEnabledProvider);
+    } catch (e) {
+      appLogger.w('Session: protocolPlusMuteEnabledProvider read failed: $e');
+      return;
+    }
+    if (enabled) return; // arming path (_maybeArmPlusMute) owns this case
+    for (final mac in _plusDeviceIds()) {
+      unawaited(_setDeviceMuteSeconds(mac, 0));
+    }
+  }
+
   /// Protocol Plus beep policy (firmware `{"muteSeconds": N}`): once per run,
   /// ~10s before protocol[0]'s predicted end, arm ONE mute window that runs
   /// until 15s before the whole stack's own end. That swallows every chime
@@ -3722,6 +3751,21 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void _maybeArmPlusMute() {
     if (!_isProtocolPlus) return;
     if (state.transport != SessionTransport.ble) return;
+    // Devices List screen global switch — opt-in, default OFF. Off means the
+    // firmware is left to beep on every sub-protocol switch as usual; nothing
+    // in this function runs (no {"muteSeconds"} write is ever sent).
+    //
+    // Defensive: this read must NEVER be allowed to throw out of _onTick — an
+    // uncaught exception there stops the periodic Timer's remaining work for
+    // that tick and can cascade into the run looking like it "just ends."
+    // Treat any read failure as "off" and keep the run alive; the tick loop
+    // (and this device's session) matters far more than one muted beep.
+    try {
+      if (!_ref.read(protocolPlusMuteEnabledProvider)) return;
+    } catch (e) {
+      appLogger.w('Session: protocolPlusMuteEnabledProvider read failed: $e');
+      return;
+    }
     const armLead = Duration(seconds: 10);
     // Trailing gap left un-muted so the FINAL sub-protocol's own completion
     // beep sounds. Only its END — its start (which lands ~its whole

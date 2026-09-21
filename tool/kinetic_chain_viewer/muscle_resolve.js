@@ -213,7 +213,14 @@ function getMeshSide(mesh) {
   const worldPos = new THREE.Vector3();
   mesh.getWorldPosition(worldPos);
   if (Math.abs(worldPos.x) < 0.01) return null;
-  return worldPos.x > 0 ? "left" : "right";
+  // right = +X, left = -X — matches the canonical convention in
+  // anatomy_landmarks.js (pairedLandmarks/sideSign: right=[absX,...],
+  // left=[-absX,...]). This was previously inverted here (+X returned
+  // "left"), which put a pad requested for "left" onto the mesh actually
+  // sitting on the model's anatomical right whenever it resolved through
+  // this muscle-anchor fallback (a pad naming real target_muscles) instead
+  // of the curated landmark table.
+  return worldPos.x > 0 ? "right" : "left";
 }
 
 function buildMeshSideMap(scene) {

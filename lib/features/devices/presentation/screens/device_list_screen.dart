@@ -27,6 +27,7 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../../devices/presentation/widgets/players_section.dart';
 import '../../../devices/presentation/widgets/find_pad_placements_card.dart';
+import '../../../devices/presentation/widgets/protocol_plus_mute_card.dart';
 import '../../../devices/presentation/widgets/session_music_card.dart';
 import '../../../devices/presentation/widgets/scan_units_section.dart';
 import '../../../devices/presentation/widgets/ref_palette.dart';
@@ -2224,12 +2225,40 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                         ),
                       ),
                     ),
-                    const SliverPadding(
-                      padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
                       sliver: SliverToBoxAdapter(
                         child: AnimatedEntrance(
                           index: 3,
-                          child: SessionMusicCard(),
+                          // One shared card, two stacked settings rows — a
+                          // side-by-side pair of cards squeezed each toggle's
+                          // label/subtitle into half-width and read as two
+                          // competing cards rather than one related pair.
+                          child: Builder(builder: (context) {
+                            final p = RefPalette.of(context);
+                            return Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 13, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: p.card,
+                                borderRadius: BorderRadius.circular(15),
+                                border:
+                                    Border.all(color: p.cardline, width: 1.5),
+                              ),
+                              child: Column(
+                                children: [
+                                  const SessionMusicRow(),
+                                  Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 12),
+                                    child: Divider(
+                                        height: 1, color: p.cardline),
+                                  ),
+                                  const ProtocolPlusMuteRow(),
+                                ],
+                              ),
+                            );
+                          }),
                         ),
                       ),
                     ),

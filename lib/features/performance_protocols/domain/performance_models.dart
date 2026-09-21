@@ -241,13 +241,23 @@ class Pad {
             json['render_both_sides'] == true || json['renderBothSides'] == true,
       );
 
-  /// "left" / "right" normalised for the 3D viewer, or null when unsided.
+  /// "left" / "right" normalised for the 3D viewer, or null when unsided OR
+  /// [isBilateralSide] (that case is split by role — see [PadPlacementViewData.markers] —
+  /// not collapsed to a single side here).
   String? get sideKey {
+    if (isBilateralSide) return null;
     final s = side.toLowerCase();
     if (s.contains('left')) return 'left';
     if (s.contains('right')) return 'right';
     return null;
   }
+
+  /// True when the engine marked this pad's `side` itself as "bilateral" —
+  /// e.g. a braced hinge hold or a lat pull, where the pad sits on the
+  /// midline/both sides by anatomy rather than one side by choice. This is a
+  /// STRING value on `side`, distinct from [renderBothSides] (a boolean the
+  /// user's own "Both" intake pick sets) — both can independently be true.
+  bool get isBilateralSide => side.toLowerCase().contains('bilateral');
 
   /// The written cue: everything the practitioner needs if 3D can't place it.
   String get cue {

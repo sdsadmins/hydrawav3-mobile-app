@@ -371,6 +371,15 @@ class PadPlacementViewData {
   ///
   /// Under [bilateral] each pad yields TWO markers whose `zone` keys carry the side; without that the
   /// pair collapses into one identity and only one of them renders.
+  ///
+  /// A pad whose `side` the engine itself marked "bilateral" (e.g. a braced
+  /// hinge hold, a lat pull) is a THIRD, separate case from [bilateral] above
+  /// (a boolean toggle) — it has no single side to place OR mirror, so
+  /// instead of falling through to a default+possibly-mirrored side (the bug:
+  /// it used to silently default to 'right' and then move with Mirror as if
+  /// it had a side), the pair is split by role — Sun on the right, Moon on
+  /// the left — matching the app-wide Sun/Moon legend and unaffected by
+  /// [mirrored] (there is no one side here to flip).
   List<Map<String, dynamic>> markers({
     int? focusSetIndex,
     bool mirrored = false,
@@ -380,6 +389,13 @@ class PadPlacementViewData {
     final out = <Map<String, dynamic>>[];
     for (final pad in padsFor(focusSetIndex, includeDeferred: includeDeferred)) {
       if (pad.isUnmapped) continue;
+      if (pad.pad.isBilateralSide) {
+        final marker = Map<String, dynamic>.of(pad.toMarker());
+        marker['side'] = pad.role == 'moon' ? 'left' : 'right';
+        marker['sideStrict'] = true;
+        out.add(marker);
+        continue;
+      }
       // The engine's own `render_both_sides` — set when the user asked for
       // "Both" at intake — is honoured here in addition to the manual toggle,
       // web parity: recoveryPadMarkers.js's padSides(), "so a bilateral

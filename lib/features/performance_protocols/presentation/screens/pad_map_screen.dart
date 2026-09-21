@@ -113,6 +113,30 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   String get _mirrorLabel =>
       _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
 
+  /// A "sling" chain (`directional_mode: "sling"`) authors its pads on
+  /// DELIBERATELY opposite sides of each other within the same set — e.g. a
+  /// diagonal oblique sling with the Sun pad on the right hip and the Moon
+  /// pad on the left lat, encoding one cross-body pattern, not "this whole
+  /// chain happens to be on the right." Mirror/Bilateral both act on every
+  /// pad's side uniformly (`_effectiveSide` flips each pad the same
+  /// direction; bilateral duplicates each pad to both sides) — either one
+  /// applied to a sling chain scrambles the authored cross-body relationship
+  /// rather than producing a meaningful mirrored/bilateral version of it. Every
+  /// other observed `directional_mode` ("anatomical", etc.) keeps every pad on
+  /// one consistent side, where a uniform flip/duplicate is exactly correct.
+  bool get _isSlingChain =>
+      widget.payload.chain?.directionalMode.toLowerCase() == 'sling';
+
+  /// [_mirrored] / [_bilateral] as actually applied to `markers()` — forced
+  /// off for a sling chain regardless of the raw toggle state, so a stray
+  /// `setState` (or the toggle being flipped before this getter's chip
+  /// disables it on the next frame) can never scramble a sling chain's
+  /// authored cross-body pattern. The UI chips in [_viewOptions] disable the
+  /// controls too, but resolving the effective value here as well means the
+  /// stage can never disagree with what the (disabled) chips say.
+  bool get _effectiveMirrored => _mirrored && !_isSlingChain;
+  bool get _effectiveBilateral => _bilateral && !_isSlingChain;
+
   /// One source of truth for which pads are visible, so the stage, legend and notes cannot disagree.
   int? get _visibleSetIndex => _showAllSets ? null : _focusSet;
 
@@ -125,11 +149,18 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     _data = PadPlacementViewData.from(widget.payload);
     _recovery = RecoveryPlacement.fromPayload(widget.payload);
     _view = _data.viewFor(null);
-    // Seed the toggle from the engine's own request rather than leaving it off
-    // while the stage draws bilaterally anyway (see `markers()`'s `padBoth`) —
-    // a "Both" pick at intake should read as BOTH here without the user having
-    // to separately find and tap this switch.
-    _bilateral = _data.pads.any((p) => p.pad.renderBothSides);
+    // Seed the toggle from the engine's own request ONLY when EVERY pad in
+    // the chain asked for both sides — that is the only case where "BOTH" is
+    // an honest description of the whole screen. A single bilateral pad in an
+    // otherwise one-sided chain used to force this true for the WHOLE chain,
+    // which (a) mislabelled the toggle "BOTH" when most pads were one-sided,
+    // and (b) disabled the Mirror control for the rest of the chain (see
+    // `_viewOptions`'s `enabled: !_bilateral`), silently defeating a
+    // practitioner's Left/Right pick. `markers()`'s own `padBoth` check
+    // already draws an individually-bilateral pad on both sides regardless of
+    // this toggle, so nothing is lost by not force-setting it here.
+    _bilateral = _data.pads.isNotEmpty &&
+        _data.pads.every((p) => p.pad.renderBothSides);
   }
 
   /// The set colour for chips, legend swatches and set-note badges.
@@ -818,8 +849,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }) _stageOptions() {
     final markers = _data.markers(
       focusSetIndex: _visibleSetIndex,
-      mirrored: _mirrored,
-      bilateral: _bilateral,
+      mirrored: _effectiveMirrored,
+      bilateral: _effectiveBilateral,
       includeDeferred: _showAllSets,
     );
     return (
@@ -847,8 +878,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     if (!kUseAnatomyScenePerformance) {
       final markers = _data.markers(
         focusSetIndex: _visibleSetIndex,
-        mirrored: _mirrored,
-        bilateral: _bilateral,
+        mirrored: _effectiveMirrored,
+        bilateral: _effectiveBilateral,
         includeDeferred: _showAllSets,
       );
       return PadAnatomyView(
@@ -963,7 +994,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// Mirror is DISABLED while Bilateral is on rather than silently doing nothing: bilateral already
   /// draws both sides, so mirroring it would be a no-op, and a control that looks live but changes
   /// nothing is worse than one that plainly says it does not apply.
+  ///
+  /// Both are ALSO disabled for a [_isSlingChain] chain: its pads are
+  /// authored on deliberately opposite sides of each other within one set, so
+  /// a uniform flip (Mirror) or duplicate-to-both-sides (Bilateral) would
+  /// scramble that authored cross-body relationship rather than producing a
+  /// meaningful mirrored/bilateral version of it.
   Widget _viewOptions(RefPalette p) {
+    final slingLocked = _isSlingChain;
     return Padding(
       padding: const EdgeInsets.only(top: HwSpace.s3),
       child: Wrap(
@@ -984,15 +1022,18 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           ),
           _optionChip(
             p,
-            label: 'Mirror: showing $_mirrorLabel',
-            active: _mirrored && !_bilateral,
-            enabled: !_bilateral,
+            label: slingLocked
+                ? 'Mirror: fixed pattern (sling)'
+                : 'Mirror: showing $_mirrorLabel',
+            active: _mirrored && !_bilateral && !slingLocked,
+            enabled: !_bilateral && !slingLocked,
             onTap: () => setState(() => _mirrored = !_mirrored),
           ),
           _optionChip(
             p,
             label: 'Bilateral, both sides at once',
-            active: _bilateral,
+            active: _bilateral && !slingLocked,
+            enabled: !slingLocked,
             onTap: () => setState(() => _bilateral = !_bilateral),
           ),
         ],
@@ -1894,16 +1935,16 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
 
   /// The notices that must sit ABOVE the placement, because they change what the
   /// placement means: a composed point, and a rerouted pathway.
+  ///
+  /// A composed placement is common enough (any tier-2/3 fallback) that a
+  /// full-width card for it reads as an alarm every time — it isn't one. It
+  /// gets a small inline symbol with the same explanation in a tooltip
+  /// instead of [_notice]'s big card. The rerouted-pathway notice is rarer
+  /// and genuinely changes what the practitioner is looking at, so it keeps
+  /// the full card.
   List<Widget> _recoveryNotices(RefPalette p, RecoveryPlacement r) {
     return [
-      if (r.isComposed)
-        _notice(
-          p,
-          'Composed placement, not authored',
-          'This placement was composed by the engine rather than taken from an '
-              'authored point. Read it as a starting position, not a prescription.',
-          tint: p.mid,
-        ),
+      if (r.isComposed) _composedBadge(p),
       if (r.pathwayRerouted)
         _notice(
           p,
@@ -1913,6 +1954,39 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               '${_humanizeKey(r.requestedPathway).toLowerCase()}.',
         ),
     ];
+  }
+
+  /// Small "composed, not authored" indicator — a symbol + label the
+  /// practitioner can tap/long-press for the full explanation, replacing what
+  /// used to be a full-width [_notice] card for this (common, non-alarming)
+  /// case.
+  Widget _composedBadge(RefPalette p) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: Tooltip(
+        message: 'This placement was composed by the engine rather than '
+            'taken from an authored point. Read it as a starting position, '
+            'not a prescription.',
+        triggerMode: TooltipTriggerMode.tap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome_outlined, size: 15, color: p.mid),
+            const SizedBox(width: 5),
+            Text(
+              'Composed placement',
+              style: TextStyle(
+                fontSize: HwType.eyebrow,
+                fontWeight: FontWeight.w700,
+                color: p.mid,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Icon(Icons.info_outline, size: 13, color: p.mid.withValues(alpha: 0.7)),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Everything below the pads.
