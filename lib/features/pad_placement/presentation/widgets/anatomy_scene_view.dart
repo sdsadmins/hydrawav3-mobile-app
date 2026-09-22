@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/utils/logger.dart';
 import '../../domain/anatomy_scene_marker.dart';
 import 'pad_anatomy_view.dart' show PadAnatomyFallback;
 
@@ -523,7 +524,12 @@ class _AnatomySceneViewState extends State<AnatomySceneView> {
               },
               onLoadStop: (c, url) => _injectWhenReady(),
               onConsoleMessage: (c, msg) {
-                debugPrint('[AnatomyScene] ${msg.messageLevel}: ${msg.message}');
+                // Bridged into appLogger (not just debugPrint) so the WebView's
+                // own JS console.log/warn/error calls reach the app's own log
+                // export — this is what let a Sun/Moon side-swap bug inside
+                // muscle_resolve.js be traced and fixed from an exported log
+                // instead of a plugged-in devtools session.
+                appLogger.i('[AnatomyScene JS] ${msg.messageLevel}: ${msg.message}');
               },
             ),
           ),

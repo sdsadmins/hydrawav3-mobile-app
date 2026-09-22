@@ -10,8 +10,35 @@ import 'ref_palette.dart';
 /// REAL session-music feature (`sessionMusicControllerProvider` +
 /// `musicListProvider`). Same functionality (pick / change / clear an
 /// Atmosphere track, looping while the session runs) — design only.
-class SessionMusicCard extends ConsumerWidget {
+///
+/// Thin wrapper around [SessionMusicRow] — its own full-width `.togglecard`.
+/// Kept for any caller that wants Music alone; the Devices List screen now
+/// instead stacks [SessionMusicRow] with [ProtocolPlusMuteRow] inside one
+/// shared card, since a bare `Row` per setting read as two competing cards.
+class SessionMusicCard extends StatelessWidget {
   const SessionMusicCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: p.cardline, width: 1.5),
+      ),
+      child: const SessionMusicRow(),
+    );
+  }
+}
+
+/// The Session music `.togglecard`'s CONTENT only — icon, label/subtitle,
+/// switch — with no outer card of its own, so it can be stacked with other
+/// rows inside a shared [Container]. See [SessionMusicCard] for the
+/// standalone card version.
+class SessionMusicRow extends ConsumerWidget {
+  const SessionMusicRow({super.key});
 
   void _openPicker(BuildContext context, WidgetRef ref, RefPalette p) {
     final controller = ref.read(sessionMusicControllerProvider.notifier);
@@ -141,94 +168,87 @@ class SessionMusicCard extends ConsumerWidget {
     final controller = ref.read(sessionMusicControllerProvider.notifier);
     final on = music.hasTrack;
 
-    // .togglecard
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: p.cardline, width: 1.5),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 26,
-            child: Icon(Icons.music_note_rounded, size: 18, color: p.copperInk),
-          ),
-          const SizedBox(width: 4),
-          // Tap the label to choose / change the track.
-          Expanded(
-            child: InkWell(
-              onTap: () => _openPicker(context, ref, p),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Session music',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      height: 1.3,
-                      color: p.ink,
-                    ),
+    // .togglecard content only — no outer Container (see [SessionMusicCard]
+    // for the standalone card wrapper).
+    return Row(
+      children: [
+        SizedBox(
+          width: 26,
+          child: Icon(Icons.music_note_rounded, size: 18, color: p.copperInk),
+        ),
+        const SizedBox(width: 4),
+        // Tap the label to choose / change the track.
+        Expanded(
+          child: InkWell(
+            onTap: () => _openPicker(context, ref, p),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Session music',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                    color: p.ink,
                   ),
-                  Text(
-                    on
-                        ? '${music.activeTrackName ?? 'Track'}, tap to change'
-                        : 'Off, tap to choose a track',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, height: 1.4, color: p.ink3),
-                  ),
-                ],
-              ),
+                ),
+                Text(
+                  on
+                      ? '${music.activeTrackName ?? 'Track'}, tap to change'
+                      : 'Off, tap to choose a track',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, height: 1.4, color: p.ink3),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          // .sw — on when a track is selected.
-          GestureDetector(
-            onTap: () {
-              if (on) {
-                controller.clear();
-              } else {
-                _openPicker(context, ref, p);
-              }
-            },
-            child: AnimatedContainer(
+        ),
+        const SizedBox(width: 8),
+        // .sw — on when a track is selected.
+        GestureDetector(
+          onTap: () {
+            if (on) {
+              controller.clear();
+            } else {
+              _openPicker(context, ref, p);
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 46,
+            height: 27,
+            decoration: BoxDecoration(
+              color: on ? p.copper : p.bg2,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: on ? p.copper : p.line),
+            ),
+            child: AnimatedAlign(
               duration: const Duration(milliseconds: 180),
-              width: 46,
-              height: 27,
-              decoration: BoxDecoration(
-                color: on ? p.copper : p.bg2,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: on ? p.copper : p.line),
-              ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 180),
-                alignment: on ? Alignment.centerRight : Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: Container(
-                    width: 19,
-                    height: 19,
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x47000000),
-                          blurRadius: 3,
-                          offset: Offset(0, 1),
-                        ),
-                      ],
-                    ),
+              alignment: on ? Alignment.centerRight : Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: Container(
+                  width: 19,
+                  height: 19,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x47000000),
+                        blurRadius: 3,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -271,9 +291,7 @@ class _TrackRow extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(icon,
-                    size: 18,
-                    color: selected ? p.copperInk : p.ink2),
+                Icon(icon, size: 18, color: selected ? p.copperInk : p.ink2),
                 const SizedBox(width: 11),
                 Expanded(
                   child: Text(

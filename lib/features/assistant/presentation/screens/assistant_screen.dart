@@ -14,6 +14,8 @@ import '../../../devices/presentation/widgets/ref_palette.dart';
 import '../../../intake/domain/intake_enums.dart';
 import '../../../intake/domain/intake_models.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
+import '../../data/assistant_chat_remote_source.dart';
+import '../../domain/assistant_chat_models.dart';
 import '../../../pad_placement/data/recovery_chat_remote_source.dart';
 import '../../../pad_placement/data/recovery_engine_remote_source.dart';
 import '../../../pad_placement/domain/recovery_chat_models.dart';
@@ -111,6 +113,12 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   // True while in the Recovery flow — after an area is picked it goes to the
   // Range-of-Motion step, then the guided-assessment questions. Performance is
   // untouched.
+  //
+  // Still SET by the Performance / Recovery mode buttons (`_onPerformance` /
+  // `_onRecovery`), left in place so those buttons and their guided chip flows
+  // are unchanged. Nothing READS it any more: typed free text now goes to the
+  // unified `POST chat` route, which classifies the lane itself.
+  // ignore: unused_field
   bool _recovery = false;
 
   // Guided-assessment chat state (recovery only). `_answers` is what the
@@ -194,6 +202,18 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// feeding one's memory to the other resolves nothing and confuses both.
   Map<String, dynamic> _recoverySlots = const {};
 
+  /// The conversation handle for the unified `POST chat` route — the typed
+  /// free-text path only (see [_assistantChat]). Threaded back on every following
+  /// turn so the backend keeps one conversation; null starts a fresh one, which
+  /// is what a rotated session / "Start over" wants.
+  String? _threadId;
+
+  /// The unified chat's slot memory. REPLACED wholesale by each reply's `slots`
+  /// and sent verbatim on the next turn — never merged into here. This is what
+  /// carries the performance walk (`perfAccept` → `perfChain`) to a placement.
+  /// Cleared with [_threadId] on "Start over".
+  Map<String, dynamic> _assistantSlots = const {};
+
   static const _greeting = 'Hi, what are we working on today?';
 
   bool get _isUniversity =>
@@ -257,9 +277,19 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       _chips = _padChips;
     } else {
       _messages.add(const _Msg(false, _greeting));
-      _chips = _homeChips;
+      // The assistant opens on the two lanes, like the web dock leads with its
+      // Performance / Recovery split. Tapping either runs the existing guided
+      // chip flow; typing instead goes to the unified `chat` route.
+      _chips = _openingChips;
     }
   }
+
+  /// The open-state chips: the two lanes and nothing else.
+  List<_ChipAction> get _openingChips => [
+        _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance,
+            hot: true),
+        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+      ];
 
   /// True between requesting a scroll and the post-frame callback running, so a
   /// burst of `_scrollToEnd()` calls in one turn produces ONE animation.
@@ -749,6 +779,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     resetPerformanceSessionFromWidget(ref);
     _slots = const {};
     _recoverySlots = const {};
+    // Drop the unified-chat conversation handle AND its slot memory, or the
+    // "new" chat keeps appending to the old thread — and resolving the old
+    // sport's chain — server-side.
+    _threadId = null;
+    _assistantSlots = const {};
     _resetRecovery();
     // The transcript is cleared, so the disclaimer goes with it and has to be
     // said again — a placement reached without it on screen is the one state
@@ -1495,16 +1530,390 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // menu matches nothing — a no-match dressed up as a question the user was
     // invited to answer. A typed message goes to the chat surface like any other.
     _me(text);
-    // Two chatbots, one input box. A typed message must reach the surface the
-    // conversation is actually on: the recovery corpus can't answer "hamstring
-    // chain for a sprinter" and the performance corpus can't answer "my low
-    // back is tight", so sending everything to one of them made half the
-    // messages unanswerable. Nothing chosen yet → performance, as before.
-    if (_recovery) {
-      _recoveryChat(text);
-    } else {
-      _perfChat(text);
+    // ONE DOOR FOR TYPED TEXT. The split `performance-chat/message` /
+    // `recovery-chat/message` pair is replaced here by the backend's unified
+    // `POST chat` route, which classifies each turn itself — so "hamstring chain
+    // for a sprinter" and "my low back is tight" both land on the lane that can
+    // answer them regardless of which mode button was last tapped. The
+    // chip-driven flows (mode buttons, catalogue pickers, pad map, guided
+    // recovery) are untouched and still use `_perfChat` / `_recoveryChat`.
+    _assistantChat(text);
+  }
+
+  // ── Typed text → the unified assistant route (`POST chat`) ─────────────────
+
+  /// The typed free-text path. Posts to [ApiEndpoints.assistantChat] and renders
+  /// the envelope's `reply` as a bubble plus its `chips` as tappable follow-ups;
+  /// tapping one replays its label as the next turn, carrying [_threadId] so the
+  /// backend keeps one conversation.
+  ///
+  /// Deliberately NOT wired to the catalogue position picker / ranked-chain /
+  /// pad-map behaviours that `_perfChat` has — this route does not return those
+  /// shapes, and the chip flows that do are reached from the mode buttons, which
+  /// this change leaves alone.
+  /// [slots] is the slot payload for THIS turn — a chip tap passes
+  /// `chip.nextSlots(_assistantSlots)`, typed text passes nothing and the
+  /// current [_assistantSlots] ride along unchanged (web parity:
+  /// `carried = nextSlots ?? slots`).
+  Future<void> _assistantChat(String text, {Map<String, dynamic>? slots}) async {
+    final sent = slots ?? _assistantSlots;
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final AssistantChatReply reply;
+    try {
+      reply = await ref.read(assistantChatRemoteSourceProvider).send(
+            message: text,
+            sessionId: ref.read(performanceSessionIdProvider),
+            threadId: _threadId,
+            slots: sent,
+          );
+    } catch (e) {
+      return _failStep('Couldn’t reach the assistant',
+          () => _assistantChat(text, slots: sent), e);
     }
+    if (!mounted) return;
+
+    // Keep the conversation handle for the next turn, and REPLACE the slot
+    // memory with whatever the server now holds (web: `if (reply.slots)
+    // setSlots(reply.slots)`).
+    if (reply.threadId != null) _threadId = reply.threadId;
+    _assistantSlots = reply.slots;
+
+    setState(() {
+      _typing = false;
+      final body = reply.reply.trim();
+      if (body.isNotEmpty) _messages.add(_Msg(false, body));
+      // The disclosed sources, as one compact line — the backend already
+      // decided what was safe to cite.
+      if (reply.sources.isNotEmpty) {
+        final names = reply.sources.map((s) => s.display).take(3).join(' · ');
+        _messages.add(_Msg(false, 'Source: $names'));
+      }
+    });
+    _scrollToEnd();
+
+    // A gate block (or a lane refusal). Show what it said and offer a way
+    // onward — never a placement, never a "start a session" chip.
+    if (reply.isRefusal) {
+      if (reply.reply.trim().isEmpty) return _refusal(null);
+      // The server's own chips win when it sent any (a rate-limited refusal
+      // still offers "Where is the discomfort?" → the placement lane). Only when
+      // it sent none do we fall back to the two lanes plus Start over.
+      _showChips(reply.chips.isNotEmpty
+          ? [
+              for (final c in reply.chips.take(12)) _assistantChip(c),
+              _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+            ]
+          : [
+              _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance),
+              _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+              _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+            ]);
+      return;
+    }
+
+    // A generated pad placement rides in the envelope as `placement` — the same
+    // card payload the Performance / Recovery chip flows land on. Render it
+    // INLINE as the same [PlacementCard] (kept in the conversation, never a
+    // redirect like the web's `/placement`). The 3D pad map is NOT opened
+    // automatically — the card's own "Open in 3D" button (wired to
+    // [_openPadMap]) is how the practitioner gets there, same as every other
+    // placement in this screen.
+    // Two envelope shapes carry a placement: the performance lane NESTS it under
+    // `placement`, the recovery lane puts `hasPlacement` / `point` / `sets` at
+    // the TOP LEVEL (lane == "placement"). Check both — reading only the nested
+    // key is why a recovery placement rendered as "just the questions".
+    final nested = reply.raw['placement'];
+    final rawPlacement = (nested is Map)
+        ? Map<String, dynamic>.from(nested)
+        : (reply.raw['hasPlacement'] == true || reply.raw['sets'] is List)
+            ? reply.raw
+            : null;
+    if (rawPlacement != null) {
+      // RECOVERY chat placements carry no thermal mode, driver or wellness
+      // claim — those exist only on `recovery-engine-v3/resolve`'s own
+      // response. The web gets them by navigating "Open in 3D" to `/placement`,
+      // which follows the card's `deepLink` back into that same resolve call
+      // (`RecoveryEngineFlow.jsx`'s deep-link effect). Do the same call here,
+      // from the params the chat envelope already gave us, instead of a
+      // redirect — then render through the SAME [_showRecoveryPlacement] the
+      // guided flow uses, so thermal / driver / cautions show identically.
+      if ((rawPlacement['source'] ?? reply.lane) == 'recovery') {
+        setState(() {
+          _typing = true;
+          _chipsVisible = false;
+        });
+        _scrollToEnd();
+        final full = await _resolveRecoveryFromChat(rawPlacement);
+        if (!mounted) return;
+        setState(() => _typing = false);
+        if (full != null && full.hasPads) {
+          await _showRecoveryPlacement(full);
+          return;
+        }
+        // Resolve failed or came back empty — fall through to the thin
+        // chat-only card below rather than losing the turn.
+      }
+
+      final json =
+          _chatPlacementJson(Map<String, dynamic>.from(rawPlacement));
+      if (json != null) {
+        final payload = PadSetPayload.fromJson(json);
+        if (!payload.isRefusal) {
+          setState(() => _messages.add(_Msg.card(payload)));
+          _scrollToEnd();
+          // Let the card land before the follow-up chips, same beat as the
+          // performance / recovery placement steps.
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          if (!mounted) return;
+          // The server's follow-up questions below the card, plus a way to
+          // start another prep.
+          _showChips([
+            for (final c in reply.chips.take(8)) _assistantChip(c),
+            _ChipAction(
+                Icons.autorenew_rounded, 'Prep another user', _onPerformance),
+          ]);
+          return;
+        }
+      }
+    }
+
+    // The assistant's own follow-up chips — tapping one is the next turn, with
+    // the chip's slot written into the payload.
+    if (reply.chips.isNotEmpty) {
+      _showChips([for (final c in reply.chips.take(12)) _assistantChip(c)]);
+      return;
+    }
+
+    // No chips came back — fall back to the two lanes so the conversation can
+    // still go somewhere.
+    if (reply.reply.trim().isEmpty) {
+      await _ai('I don’t have an answer for that yet. Try rephrasing, or pick '
+          'a suggestion below.');
+    }
+    _showChips(_openingChips);
+  }
+
+  /// One assistant follow-up chip as a tappable action. Tapping echoes the
+  /// chip's label as the next message and sends `chip.nextSlots(_assistantSlots)`
+  /// as the turn's slots — this is what advances `perfAccept` → `perfChain` →
+  /// placement. `likely` chips render hot.
+  _ChipAction _assistantChip(AssistantChip c) => _ChipAction(
+        Icons.chevron_right_rounded,
+        c.label,
+        () {
+          _me(c.label);
+          _assistantChat(c.label, slots: c.nextSlots(_assistantSlots));
+        },
+        hot: c.likely,
+      );
+
+  /// Re-resolves a RECOVERY chat placement against
+  /// `recovery-engine-v3/resolve`, using the params the envelope's own
+  /// `deepLink` carries (`region`, `goal`, `side`, `generation`,
+  /// `referral_target`, `referral_side`, `aspect`). That endpoint is the only
+  /// place thermal mode, the driver description, the wellness claim and
+  /// cautions live — the chat envelope's `sets[]` never carry them. Web parity:
+  /// `RecoveryEngineFlow.jsx`'s deep-link effect, reached there by navigating
+  /// "Open in 3D" to `/placement?…`; reached here by calling the same resolve
+  /// directly instead of a redirect.
+  ///
+  /// Returns null on anything that stops the call — no region/goal in the
+  /// deep link, an unreachable cutover, an unreachable resolve — so the caller
+  /// falls back to the thin chat-only card rather than losing the turn.
+  Future<RecoveryPlacement?> _resolveRecoveryFromChat(
+      Map<String, dynamic> placement) async {
+    String? str(dynamic v) {
+      final s = (v ?? '').toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    final deepLink = placement['deepLink'];
+    final params = (deepLink is Map && deepLink['params'] is Map)
+        ? Map<String, dynamic>.from(deepLink['params'] as Map)
+        : const <String, dynamic>{};
+    final point =
+        (placement['point'] is Map) ? placement['point'] as Map : const {};
+
+    final region = str(params['region']) ?? str(point['region']);
+    final goal = str(params['goal']) ?? str(point['goalPathway']);
+    if (region == null || goal == null) return null;
+
+    final generation = RecoveryGeneration.readFrom({
+          'generation': str(params['generation']) ?? str(placement['generation']),
+        }) ??
+        RecoveryGeneration.v3;
+
+    final RecoveryDispatch dispatch;
+    try {
+      dispatch = await _awaitDispatch();
+    } catch (_) {
+      return null;
+    }
+    if (!mounted) return null;
+
+    try {
+      return await ref.read(recoveryEngineRemoteSourceProvider).resolve(
+            generation: generation,
+            goal: goal,
+            region: region,
+            side: str(params['side']),
+            aspect: str(params['aspect']),
+            referralTarget: str(params['referral_target']),
+            referralSide: str(params['referral_side']),
+            redFlags: dispatch.screen.allFlagsNo,
+            sessionId: ref.read(performanceSessionIdProvider),
+          );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Pulls each pad's muscle list out of `presented.whereText`, one entry per
+  /// parenthetical, in the SAME order the pads appear in `sets[]` (sun, then
+  /// moon, set by set — the `whereText` sentence order and the `chunkIds` list
+  /// both confirm it). The sentence shape is authored, not typed, e.g.:
+  /// "...(Rectus femoris muscle and Vastus medialis muscle — Proximal quad and
+  /// rectus femoris, right)." → `["Rectus femoris muscle", "Vastus medialis
+  /// muscle"]`. Returns one (possibly empty) list per parenthetical found;
+  /// callers index past the end when the text is shorter than the pad count.
+  static List<List<String>> _muscleGroupsFromWhereText(String whereText) {
+    if (whereText.trim().isEmpty) return const [];
+    final groups = <List<String>>[];
+    for (final m in RegExp(r'\(([^()]*?)—[^()]*\)').allMatches(whereText)) {
+      final muscles = (m.group(1) ?? '')
+          .split(RegExp(r'\s+and\s+|,\s*'))
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      groups.add(muscles);
+    }
+    return groups;
+  }
+
+  /// Reshapes the unified `POST chat` envelope's `placement` block into the
+  /// JSON [PadSetPayload.fromJson] already understands (the performance
+  /// catalogue shape). The chat backend nests the point under `point` and lists
+  /// each set's pads as a flat `pads[]` array labelled "Sun" / "Moon"; the
+  /// catalogue shape wants top-level discipline/role, a `chain` object, and
+  /// `sun` / `moon` keys per set. Returns null when there is no drawable
+  /// placement to render.
+  Map<String, dynamic>? _chatPlacementJson(Map<String, dynamic> placement) {
+    if (placement['hasPlacement'] != true && placement['sets'] is! List) {
+      return null;
+    }
+    final rawSets = placement['sets'];
+    if (rawSets is! List || rawSets.isEmpty) return null;
+
+    final point = (placement['point'] is Map)
+        ? Map<String, dynamic>.from(placement['point'] as Map)
+        : const <String, dynamic>{};
+    final isRecovery = (placement['source'] ?? '').toString() == 'recovery' ||
+        (placement['generation'] ?? '').toString().startsWith('v');
+
+    Map<String, dynamic>? padOf(List pads, String label) {
+      for (final p in pads.whereType<Map>()) {
+        if ((p['padLabel'] ?? p['pad_label'] ?? '')
+                .toString()
+                .toLowerCase() ==
+            label) {
+          return Map<String, dynamic>.from(p);
+        }
+      }
+      return null;
+    }
+
+    // Recovery v3's chat shape names no `target_muscles` on the pad itself — the
+    // ONLY place the muscles are named is the prose in `presented.whereText`,
+    // one parenthetical per pad, in the exact sun-then-moon, set-by-set order
+    // the `chunkIds` list confirms. Without them the 3D mapper's tier-2
+    // (muscle-centroid) fallback is unavailable, and a landmark phrase that
+    // doesn't happen to hit the curated zone-synonym table (tier 1) draws
+    // NOTHING — which is why only some (or none) of a recovery card's pads were
+    // showing on the model. Parsed once per placement, consumed in order below.
+    final whereMuscleGroups = _muscleGroupsFromWhereText(
+        ((placement['presented'] as Map?)?['whereText'] ?? '').toString());
+    var whereIdx = 0;
+    List<String> nextMuscleGroup() {
+      if (whereIdx >= whereMuscleGroups.length) {
+        whereIdx++;
+        return const [];
+      }
+      return whereMuscleGroups[whereIdx++];
+    }
+
+    final sets = <Map<String, dynamic>>[];
+    for (final s in rawSets.whereType<Map>()) {
+      final m = Map<String, dynamic>.from(s);
+      final pads = (m['pads'] is List) ? m['pads'] as List : const [];
+      var sun = padOf(pads, 'sun');
+      var moon = padOf(pads, 'moon');
+
+      // Recovery v3's chat shape has NO `pads[]` — just `landmarks[]` (sun
+      // anchor, then moon anchor) and `bodySides[]`. Synthesize the pair from
+      // those, plus the muscles parsed above, so the card AND the 3D view have
+      // a Sun / Moon to place.
+      if (sun == null && moon == null && m['landmarks'] is List) {
+        final lm = List.from(m['landmarks'] as List);
+        final bs = (m['bodySides'] is List)
+            ? List.from(m['bodySides'] as List)
+            : const [];
+        if (lm.isNotEmpty) {
+          sun = {
+            'pad_label': 'Sun',
+            'side': bs.isNotEmpty ? bs.first.toString() : '',
+            'landmark_anchor': lm[0].toString(),
+            'target_muscles': nextMuscleGroup(),
+          };
+        }
+        if (lm.length > 1) {
+          moon = {
+            'pad_label': 'Moon',
+            'side': bs.isNotEmpty ? bs.last.toString() : '',
+            'landmark_anchor': lm[1].toString(),
+            'target_muscles': nextMuscleGroup(),
+          };
+        }
+      }
+
+      sets.add({
+        'set_index': m['setIndex'] ?? m['set_index'] ?? 0,
+        'role': m['role'] ?? '',
+        'placement_label': m['note'] ?? m['placementLabel'] ?? '',
+        'clinical_reasoning':
+            m['clinicalReasoning'] ?? m['clinical_reasoning'] ?? '',
+        'sun': sun,
+        'moon': moon,
+      });
+    }
+    if (sets.every((s) => s['sun'] == null && s['moon'] == null)) return null;
+
+    return {
+      'discipline':
+          point['discipline'] ?? (isRecovery ? 'recovery' : placement['source']) ??
+              '',
+      'display_name': point['displayName'] ?? point['display_name'] ?? '',
+      'role': point['role'] ?? '',
+      'subtype': point['subtype'],
+      'chain': {
+        'chain_id': point['chainId'] ??
+            point['chain_id'] ??
+            point['recoveryId'] ??
+            point['recovery_id'] ??
+            '',
+        'name': point['chainName'] ?? point['chain_name'] ?? '',
+        'movement': point['movement'] ?? '',
+        'directional_mode':
+            point['directionalMode'] ?? point['directional_mode'] ?? '',
+        'injury_risk_reduction': point['injuriesCommonlySeen'] ?? const [],
+        'performance_rom_benefits': point['romBenefits'] ?? const [],
+      },
+      'sets': sets,
+    };
   }
 
   // ── Typed text → performance-chat (the query path, conversationally) ────────
@@ -1534,6 +1943,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     return null;
   }
 
+  // Retained unchanged, but no longer the typed-text entry point — `_send` now
+  // routes free text to `_assistantChat` (`POST chat`). Kept because removing it
+  // would also mean unpicking the catalogue position-picker / pad-map helpers it
+  // shares with the mode-button flows, which this change must leave alone.
+  // ignore: unused_element
   Future<void> _perfChat(String text) async {
     // A bare sport name needs no chat turn: the catalogue already knows the
     // sport, and the position step is where this was always going to land. It
@@ -1757,6 +2171,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// citation — so the reply is rendered verbatim rather than re-formatted
   /// here. [slotPatch] carries an exact value from a tapped chip, so a chip
   /// answer doesn't have to survive a second round of text parsing.
+  ///
+  /// Retained unchanged, but no longer the typed-text entry point — `_send` now
+  /// routes free text to `_assistantChat` (`POST chat`). Its area-disambiguation
+  /// chips still call back into it, so the method stays self-contained.
+  // ignore: unused_element
   Future<void> _recoveryChat(
     String text, {
     Map<String, dynamic> slotPatch = const {},

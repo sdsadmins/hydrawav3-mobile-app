@@ -132,6 +132,17 @@ class ApiEndpoints {
   static const String perfQuery = 'performance-query/query';
   static const String perfChat = 'performance-chat/message';
 
+  /// The UNIFIED assistant route (`src/modules/pad-chat` on the Node backend) —
+  /// one door that routes each turn between a knowledge, placement or
+  /// performance lane and grounds the answer against the retrieved corpus.
+  /// Envelope: `{ ok, lane, kind, reply, chips[], sessionId, threadId }`.
+  ///
+  /// The Assistant's typed free-text path posts here instead of [perfChat] /
+  /// [recoveryChat]; the chip-driven catalogue / pad-map flows are unchanged and
+  /// still use those. Body `{ message, sessionId?, threadId? }` — `threadId` is
+  /// the multi-turn handle. Relative (no leading slash).
+  static const String assistantChat = 'chat';
+
   /// The RECOVERY conversational front door — the recovery v2 engine's own
   /// chatbot, not the performance one. Same envelope idea (reply + slots +
   /// options + render), different corpus and different slots (`region`, `side`,

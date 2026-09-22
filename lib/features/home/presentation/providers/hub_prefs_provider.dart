@@ -200,6 +200,30 @@ class LabsNotifier extends StateNotifier<bool> {
   }
 }
 
+/// Global switch (Devices List screen) for the Protocol Plus "2 beeps only"
+/// behaviour: while a Plus run is BLE and has more than one sub-protocol, the
+/// app arms the firmware's `{"muteSeconds": N}` window (~10s before
+/// protocol[0] ends) so every mid-stack stop/start chime is silenced and only
+/// the first start + last end beep sound. This is now OPT-IN — default OFF,
+/// so the firmware beeps normally (every sub-protocol switch) unless the
+/// practitioner turns this on. See [SessionEngine._maybeArmPlusMute].
+final protocolPlusMuteEnabledProvider =
+    StateNotifierProvider<ProtocolPlusMuteNotifier, bool>((ref) {
+  return ProtocolPlusMuteNotifier(ref.read(sharedPreferencesProvider));
+});
+
+class ProtocolPlusMuteNotifier extends StateNotifier<bool> {
+  static const _key = 'protocol_plus_mute_enabled';
+  final SharedPreferences _prefs;
+
+  ProtocolPlusMuteNotifier(this._prefs) : super(_prefs.getBool(_key) ?? false);
+
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(_key, enabled);
+  }
+}
+
 /// Game day is a per-day switch the practitioner flips; there is no backend
 /// concept for it, so it lives in preferences keyed by date. Flipping to a new
 /// calendar day clears it automatically.
