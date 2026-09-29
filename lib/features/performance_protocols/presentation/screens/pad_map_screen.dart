@@ -252,6 +252,26 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                     HwSpace.s4, 0, HwSpace.s4, HwSpace.s5),
                 children: [
                   _head(p, sets.length),
+                  // A single line directly under the title block explaining
+                  // where a NAMED travelling side actually landed — shown for
+                  // every card where the user asked the complaint travels
+                  // somewhere, whether the engine served that side or not.
+                  // Absent for every other card (most of them). `travel.reason`
+                  // (record ids, authoring terms) is NEVER rendered — only
+                  // `travel.plain`, the one sentence the API already wrote for
+                  // this.
+                  if (_recovery case final r?)
+                    if (r.travelPlain.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        r.travelPlain,
+                        style: TextStyle(
+                          fontSize: HwType.cap,
+                          height: 1.4,
+                          color: p.ink2,
+                        ),
+                      ),
+                    ],
                   const SizedBox(height: HwSpace.s3),
                   // A composed point or a rerouted pathway changes what the
                   // whole placement MEANS, so they sit above it, not below.

@@ -715,6 +715,19 @@ class RecoveryPlacement {
   final bool pathwayRerouted;
   final String requestedPathway;
 
+  /// A complaint that travels to a named side (e.g. "low back pain that
+  /// travels to the right glute") — the travelling pads can land on a
+  /// different side than the one the user named, because the authored record
+  /// is written that way or that side has no authored placement. [travelPlain]
+  /// is the ONE user-facing sentence explaining what happened either way; show
+  /// it verbatim directly under the card's title block, never render nothing
+  /// silently when it's set. Empty when no side was named (most cards).
+  ///
+  /// [travelReason] is operator/debug text (record ids, authoring terms) —
+  /// NEVER render it; it exists only for logs.
+  final String travelPlain;
+  final String travelReason;
+
   /// `authored` / `composed`. A COMPOSED placement must be impossible to mistake
   /// for an authored one — the web marks the whole frame, not a badge, because a
   /// badge is what gets cropped out of a screenshot.
@@ -773,6 +786,8 @@ class RecoveryPlacement {
     this.reassessmentTestsOffered = const [],
     this.pathwayRerouted = false,
     this.requestedPathway = '',
+    this.travelPlain = '',
+    this.travelReason = '',
     this.pointSource = '',
     this.pointVersion = '',
     this.reviewFlags = const [],
@@ -938,6 +953,13 @@ class RecoveryPlacement {
       pathwayRerouted: _map(data['pathwayRouting'])['rerouted'] == true,
       requestedPathway:
           (_map(data['pathwayRouting'])['requested'] ?? '').toString(),
+      // `travel.plain` is the only field of `travel` ever shown — `reason` is
+      // operator text (record ids, authoring terms). Absent `travel`, or a
+      // null/blank `plain`, is every card where no travelling side was named
+      // (most of them) — empty string here means "render nothing", matching
+      // the API's own "if travel is absent or plain is null, render nothing".
+      travelPlain: (_map(data['travel'])['plain'] ?? '').toString(),
+      travelReason: (_map(data['travel'])['reason'] ?? '').toString(),
       pointSource: (point['source'] ?? '').toString(),
       pointVersion: (point['version'] ?? '').toString(),
       reviewFlags: _reviewFlags(data['reviewFlags']),
