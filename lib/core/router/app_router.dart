@@ -10,6 +10,7 @@ import '../../features/auth/presentation/providers/client_auth_provider.dart';
 import '../../features/assistant/presentation/screens/assistant_screen.dart';
 import '../../features/performance_protocols/presentation/screens/performance_protocols_screen.dart';
 import '../../features/auth/presentation/screens/forgot_password_screen.dart';
+import '../../features/splash/presentation/screens/splash_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/signup_screen.dart';
 import '../../features/auth/presentation/screens/onboarding_screen.dart';
@@ -72,6 +73,7 @@ class _AuthRefreshNotifier extends ChangeNotifier {
   _AuthRefreshNotifier(Ref ref) {
     ref.listen(authStateProvider, (_, __) => notifyListeners());
     ref.listen(clientAuthProvider, (_, __) => notifyListeners());
+    ref.listen(splashHoldProvider, (_, __) => notifyListeners());
   }
 }
 
@@ -81,7 +83,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
-    initialLocation: RoutePaths.login,
+    initialLocation: RoutePaths.splash,
     refreshListenable: authRefresh,
     redirect: (context, state) {
       // Read (never watch) inside redirect — the refreshListenable above is
@@ -103,9 +105,20 @@ final routerProvider = Provider<GoRouter>((ref) {
       /// ✅ ONLY use local selection
       final hasSelectedOrg = authState.selectedOrgId != null;
 
-      // ⏳ Still checking the stored token → don't redirect yet. The user waits
-      // on the login screen (the initial route) until the check completes; an
-      // already-authenticated user is then sent straight to home below.
+      // 🌊 Splash (the initial route): stays up while the stored token is
+      // checked and for its minimum time, then hands off exactly as before —
+      // login, the client's home, organization picker, or the Session tab.
+      if (state.matchedLocation == RoutePaths.splash) {
+        if (!authState.isInitialized || ref.read(splashHoldProvider)) {
+          return null;
+        }
+        if (!isAuth && !isClientAuth) return RoutePaths.login;
+        if (isClientAuth && !isAuth) return RoutePaths.clientHome;
+        if (!hasSelectedOrg) return '/select-organization';
+        return RoutePaths.devices;
+      }
+
+      // ⏳ Still checking the stored token → don't redirect yet.
       if (!authState.isInitialized) {
         return null;
       }
@@ -138,6 +151,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
+      GoRoute(
+          path: RoutePaths.splash,
+          name: RouteNames.splash,
+          builder: (c, s) => const SplashScreen()),
       GoRoute(
           path: RoutePaths.login,
           name: RouteNames.login,
@@ -182,8 +199,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
               path: RoutePaths.assistant,
               name: RouteNames.assistant,
-              builder: (c, s) =>
-                  AssistantScreen(intent: s.uri.queryParameters['intent'])),
+              builder: (c, s) => AssistantScreen(
+                    intent: s.uri.queryParameters['intent'],
+                    goal: s.uri.queryParameters['goal'],
+                  )),
           // The pad_protocols catalogue as dropdowns — the browsing counterpart
           // to the Assistant's chip flow. Both end on the same pad map.
           GoRoute(

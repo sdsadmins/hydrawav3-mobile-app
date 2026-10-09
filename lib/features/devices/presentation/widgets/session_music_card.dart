@@ -37,6 +37,11 @@ class SessionMusicCard extends StatelessWidget {
 /// switch — with no outer card of its own, so it can be stacked with other
 /// rows inside a shared [Container]. See [SessionMusicCard] for the
 /// standalone card version.
+/// Opens the Session music track picker — the same sheet the music row's label
+/// opens (choose a track, or "No music" to clear it).
+void showSessionMusicPicker(BuildContext context, WidgetRef ref) =>
+    const SessionMusicRow()._openPicker(context, ref, RefPalette.of(context));
+
 class SessionMusicRow extends ConsumerWidget {
   const SessionMusicRow({super.key});
 

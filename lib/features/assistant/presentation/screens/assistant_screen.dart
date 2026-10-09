@@ -27,6 +27,8 @@ import '../../../performance_protocols/presentation/providers/performance_sessio
 import '../../../performance_protocols/presentation/screens/go_to_session.dart';
 import '../../../performance_protocols/presentation/screens/pad_map_screen.dart';
 import '../../../performance_protocols/presentation/widgets/placement_card.dart';
+import '../widgets/assistant_welcome_panel.dart';
+import '../../../../core/theme/widgets/hw_tablet.dart';
 
 /// The "Assistant" page — a port of the cowork-os handoff `scr-chat` chat.
 /// Suggestion-led: AI / user bubbles + tappable chips. `intent == "pads"` (from
@@ -34,7 +36,12 @@ import '../../../performance_protocols/presentation/widgets/placement_card.dart'
 /// / Recovery (pick a discomfort area from the org's body-part list).
 class AssistantScreen extends ConsumerStatefulWidget {
   final String? intent;
-  const AssistantScreen({super.key, this.intent});
+
+  /// With `intent == "recovery"`: a [RecoveryGoal.value] already picked on the
+  /// Hub's Support Recovery card, so the flow opens on that pathway's areas.
+  final String? goal;
+
+  const AssistantScreen({super.key, this.intent, this.goal});
 
   @override
   ConsumerState<AssistantScreen> createState() => _AssistantScreenState();
@@ -214,8 +221,6 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// Cleared with [_threadId] on "Start over".
   Map<String, dynamic> _assistantSlots = const {};
 
-  static const _greeting = 'Hi, what are we working on today?';
-
   bool get _isUniversity =>
       (ref.read(authStateProvider).user?.organizationType ?? '')
           .toUpperCase() ==
@@ -248,7 +253,10 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (widget.intent == 'performance' || widget.intent == 'recovery') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (widget.intent == 'recovery') {
+        final goal = RecoveryGoal.byValue(widget.goal);
+        if (widget.intent == 'recovery' && goal != null) {
+          _onRecoveryGoal(goal);
+        } else if (widget.intent == 'recovery') {
           _onRecovery();
         } else {
           _onPerformance();
@@ -276,11 +284,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       ));
       _chips = _padChips;
     } else {
-      _messages.add(const _Msg(false, _greeting));
-      // The assistant opens on the two lanes, like the web dock leads with its
-      // Performance / Recovery split. Tapping either runs the existing guided
-      // chip flow; typing instead goes to the unified `chat` route.
-      _chips = _openingChips;
+      // v5 `58-assistant`: an empty conversation opens on the welcome panel
+      // (greeting card, pick up, what I can do) — see the list in build. Its
+      // Prep a user / Recovery tiles run the same guided flows the opening
+      // chips did; typing still goes to the unified `chat` route.
+      _chips = const [];
     }
   }
 
@@ -368,31 +376,29 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         }, hot: true),
         _ChipAction(Icons.bolt_rounded, 'Prep a user', _onPerformance),
         _ChipAction(Icons.waves_rounded, 'Support Recovery', _onRecovery),
-        _ChipAction(Icons.grid_view_rounded, 'Find pad placements', () {
-          _me('Find pad placements');
-          _ai(
-            'Let’s find the right pad placement. Are we prepping for '
-            'performance, or working on recovery?',
-            rich: const [
-              TextSpan(
-                  text:
-                      'Let’s find the right pad placement. Are we prepping for '),
-              TextSpan(
-                  text: 'performance',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-              TextSpan(text: ', or working on '),
-              TextSpan(
-                  text: 'recovery',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-              TextSpan(text: '?'),
-            ],
-            then: _padChips,
-          );
-        }),
+        _ChipAction(
+            Icons.grid_view_rounded, 'Find pad placements', _onFindPads),
         // The catalogue as dropdowns, for browsing rather than conversing.
         _ChipAction(Icons.list_alt_rounded, 'Browse protocol chains',
             () => context.push(RoutePaths.performanceProtocols)),
       ];
+
+  void _onFindPads() {
+    _me('Find pad placements');
+    _ai(
+      'Let’s find the right pad placement. Are we prepping for '
+      'performance, or working on recovery?',
+      rich: const [
+        TextSpan(text: 'Let’s find the right pad placement. Are we prepping for '),
+        TextSpan(
+            text: 'performance', style: TextStyle(fontWeight: FontWeight.w700)),
+        TextSpan(text: ', or working on '),
+        TextSpan(text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
+        TextSpan(text: '?'),
+      ],
+      then: _padChips,
+    );
+  }
 
   List<_ChipAction> get _padChips => [
         _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance,
@@ -897,6 +903,22 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     _resetRecovery();
     _me('Support Recovery');
     _askGoal();
+  }
+
+  /// Recovery with the pathway already chosen (the Hub's focus tiles). The
+  /// disclaimer still goes up first — a placement is never reached without it.
+  Future<void> _onRecoveryGoal(RecoveryGoal goal) async {
+    _recovery = true;
+    _recoverySlots = const {};
+    _resetRecovery();
+    ref.read(recoveryDispatchProvider.future).ignore();
+    if (!_disclaimerShown) {
+      _disclaimerShown = true;
+      final screen = ref.read(recoveryDispatchProvider).valueOrNull?.screen;
+      await _ai((screen ?? const RecoverySafetyScreen()).disclaimerOrFallback);
+      if (!mounted) return;
+    }
+    await _pickGoal(goal);
   }
 
   void _resetRecovery() {
@@ -2434,6 +2456,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 // typing row and chip row carry their own const keys so they can
                 // never be confused with a message bubble.
                 children: [
+                  if (_messages.isEmpty && !_typing)
+                    AssistantWelcomePanel(
+                      key: const ValueKey('welcome'),
+                      university: _isUniversity,
+                      onPrepUser: _onPerformance,
+                      onRecovery: _onRecovery,
+                      onFindPads: _onFindPads,
+                    ),
                   for (var i = 0; i < _messages.length; i++)
                     if (_messages[i].placement != null)
                       PlacementCard(
@@ -2477,7 +2507,13 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 color: p.bg,
                 border: Border(top: BorderSide(color: p.line)),
               ),
-              child: Row(
+              // Tablet: the input sits in the centred 680px reading column.
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: HwTablet.of(context) ? HwTablet.read : double.infinity,
+                  ),
+                  child: Row(
                 children: [
                   Expanded(
                     child: TextField(
@@ -2501,6 +2537,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                   const SizedBox(width: 9),
                   _MicSendButton(palette: p, onTap: _send),
                 ],
+              ),
+                ),
               ),
             ),
           ],

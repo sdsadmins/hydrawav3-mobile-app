@@ -187,7 +187,7 @@ class _SessionOutcomeGateState extends ConsumerState<SessionOutcomeGate> {
       return;
     }
     for (final blocked in _blockedPrefixes) {
-      if (location.startsWith(blocked)) {
+      if (location == RoutePaths.splash || location.startsWith(blocked)) {
         appLogger.i(
           '🩺 OUTCOME-DEBUG: gate._present — location blocked by prefix '
           '"$blocked", deferring (will retry once off that screen)',

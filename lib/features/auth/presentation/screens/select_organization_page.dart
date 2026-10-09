@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/error/exceptions.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/network/dio_client.dart';
 import '../../../payments/data/payment_repository.dart';
 import '../../data/organization_repository.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/auth_ui.dart';
 
 /// Every organization the signed-in practitioner belongs to. Shared by this
 /// page and the More screen's org switcher — there is exactly one declaration.
@@ -88,166 +89,167 @@ class _SelectOrganizationPageState
   @override
   Widget build(BuildContext context) {
     final orgAsync = ref.watch(organizationProvider);
+    final p = RefPalette.of(context);
 
-    return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      body: Container(
-        decoration: BoxDecoration(color: ThemeConstants.background),
-        child: SafeArea(
-          child: orgAsync.when(
-            loading: () => const Center(
-              child: CircularProgressIndicator(),
-            ),
-            error: (e, _) => Center(
-              child: Text(
-                'Failed to load organizations\n$e',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: ThemeConstants.textPrimary),
-              ),
-            ),
-            data: (orgs) {
-              return SingleChildScrollView(
-                physics: const ClampingScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight: MediaQuery.of(context).size.height,
-                  ),
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        child: orgs.isEmpty || widget.startInCreateMode
-                            ? _buildCreateOrg()
-                            : _buildOrgList(orgs),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
+    return orgAsync.when(
+      loading: () => Scaffold(
+        backgroundColor: p.bg,
+        body: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(p.copper),
           ),
         ),
+      ),
+      error: (e, _) => AuthPage(
+        child: Column(
+          children: [
+            const AuthHeading('Select organization'),
+            const SizedBox(height: 14),
+            Text(
+              'Failed to load organizations\n$e',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: p.ink2, fontSize: 13.5),
+            ),
+            const SizedBox(height: 16),
+            AuthOutlineButton(
+              label: 'Retry',
+              onTap: () => ref.invalidate(organizationProvider),
+            ),
+          ],
+        ),
+      ),
+      data: (orgs) => AuthPage(
+        child: orgs.isEmpty || widget.startInCreateMode
+            ? _buildCreateOrg()
+            : _buildOrgList(orgs),
       ),
     );
   }
 
-  /// The organization picker (2+ orgs, or 1 after creation).
+  /// The organization picker (2+ orgs, or 1 after creation) — v6
+  /// `renderOrgSelect`: spaced heading, one card per organization.
   Widget _buildOrgList(List<Map<String, dynamic>> orgs) {
+    final p = RefPalette.of(context);
+    final name = (ref.watch(authStateProvider).user?.displayName ?? '').trim();
     return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        /// 🔥 TITLE
-        Text(
-          "Select Your Organization",
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: ThemeConstants.textPrimary,
-          ),
+        AuthHeading(
+          'Select organization',
+          subtitle: '${name.isEmpty ? 'One login' : '$name — one login'}, all '
+              "your organizations. Pick where you're working today.",
         ),
-
-        const SizedBox(height: 8),
-
-        Text(
-          "Choose the organization you want to work with.\nEasily collaborate, manage files, and stay in sync.",
-          style: TextStyle(
-            fontSize: 13,
-            color: ThemeConstants.textSecondary,
-          ),
-        ),
-
-        const SizedBox(height: 30),
-
-        /// 🔥 LIST
+        const SizedBox(height: 26),
         ...orgs.map((org) {
           final orgId = org['id'].toString();
           final isSelected = selectedOrgId == orgId;
+          final detail = [
+            for (final k in ['description', 'address'])
+              if ((org[k]?.toString().trim() ?? '').isNotEmpty)
+                org[k].toString().trim(),
+          ];
 
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.only(bottom: 16),
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              color: isSelected
-                  ? ThemeConstants.accent.withValues(alpha: 0.14)
-                  : ThemeConstants.surface,
-              border: Border.all(
-                color:
-                    isSelected ? ThemeConstants.accent : ThemeConstants.border,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: isSelected
-                      ? ThemeConstants.accent.withValues(alpha: 0.3)
-                      : Colors.black12,
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(18),
-              onTap: () async {
-                setState(() {
-                  selectedOrgId = orgId;
-                });
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () async {
+                  setState(() {
+                    selectedOrgId = orgId;
+                  });
 
-                await ref.read(authStateProvider.notifier).setOrganization(
-                      orgId,
-                      org['name'] ?? 'Organization', // ✅ PASS NAME
-                    );
+                  await ref.read(authStateProvider.notifier).setOrganization(
+                        orgId,
+                        org['name'] ?? 'Organization', // ✅ PASS NAME
+                      );
 
-                // Provision the org's free plan + starter tokens (web parity)
-                // so the token balance shows for first-time / newly onboarded
-                // accounts. Best-effort — never blocks nav.
-                await ref.read(paymentRepositoryProvider).ensureFreePlan(orgId);
+                  // Provision the org's free plan + starter tokens (web
+                  // parity) so the token balance shows for first-time /
+                  // newly onboarded accounts. Best-effort — never
+                  // blocks nav.
+                  await ref
+                      .read(paymentRepositoryProvider)
+                      .ensureFreePlan(orgId);
 
-                if (mounted) {
-                  context.go(RoutePaths.devices);
-                }
-              },
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.1),
+                  if (mounted) {
+                    context.go(RoutePaths.devices);
+                  }
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 240),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 12, 16),
+                  decoration: BoxDecoration(
+                    color: p.card,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isSelected ? p.copper : p.cardline,
+                      width: isSelected ? 1.6 : 1,
                     ),
-                    child: Icon(
-                      Icons.business,
-                      color: ThemeConstants.textPrimary,
-                      size: 26,
-                    ),
+                    boxShadow: p.shadow,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Text(
-                      org['name'] ?? 'Organization',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: ThemeConstants.textPrimary,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          gradient: p.sunGrad,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.apartment_rounded,
+                            color: Colors.white, size: 24),
                       ),
-                    ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              org['name'] ?? 'Organization',
+                              style: TextStyle(
+                                fontSize: 16.5,
+                                fontWeight: FontWeight.w700,
+                                color: p.ink,
+                              ),
+                            ),
+                            if (detail.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                detail.join(' · '),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  height: 1.35,
+                                  color: p.ink3,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 24,
+                        child: isSelected
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor:
+                                      AlwaysStoppedAnimation<Color>(p.copper),
+                                ),
+                              )
+                            : Icon(Icons.chevron_right_rounded,
+                                color: p.ink3, size: 24),
+                      ),
+                    ],
                   ),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    child: isSelected
-                        ? Icon(
-                            Icons.check_circle,
-                            color: ThemeConstants.textPrimary,
-                          )
-                        : Icon(
-                            Icons.arrow_forward_ios,
-                            color: ThemeConstants.textTertiary,
-                            size: 16,
-                          ),
-                  )
-                ],
+                ),
               ),
             ),
           );
@@ -260,50 +262,35 @@ class _SelectOrganizationPageState
   /// (web parity with `selectOrganizationPage.tsx`).
   Widget _buildCreateOrg() {
     return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          "Create Your Organization",
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: ThemeConstants.textPrimary,
-          ),
+        const AuthHeading(
+          'Create your organization',
+          subtitle: "You don't have any organizations yet. "
+              'Create one to get started.',
         ),
-        const SizedBox(height: 8),
-        Text(
-          "You don't have any organizations yet.\nCreate one to get started.",
-          style: TextStyle(
-            fontSize: 13,
-            color: ThemeConstants.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 24),
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            color: ThemeConstants.surface,
-            border: Border.all(color: ThemeConstants.border),
-          ),
+        const SizedBox(height: 22),
+        AuthCard(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _field(
                 controller: _nameCtrl,
-                label: 'Organization Name *',
+                label: 'Organization name',
+                required: true,
                 hint: 'Acme Wellness',
               ),
               _field(
                 controller: _mailCtrl,
-                label: 'Email *',
+                label: 'Email',
+                required: true,
                 hint: 'org@example.com',
                 keyboardType: TextInputType.emailAddress,
               ),
               _field(
                 controller: _addressCtrl,
-                label: 'Address *',
+                label: 'Address',
+                required: true,
                 hint: '123 Main St',
               ),
               _field(
@@ -314,50 +301,23 @@ class _SelectOrganizationPageState
               ),
               _field(
                 controller: _phoneCtrl,
-                label: 'Phone Number *',
+                label: 'Phone number',
+                required: true,
                 hint: '+1 555 000 0000',
                 keyboardType: TextInputType.phone,
               ),
-              if (_formError != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  _formError!,
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-                ),
-              ],
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: ThemeConstants.accent,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  onPressed: _isCreating ? null : _handleCreate,
-                  child: _isCreating
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text(
-                          'Create Organization',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                ),
-              ),
             ],
           ),
+        ),
+        if (_formError != null) ...[
+          const SizedBox(height: 8),
+          AuthError(_formError!),
+        ],
+        const SizedBox(height: 16),
+        AuthPrimaryButton(
+          label: 'Create organization',
+          busy: _isCreating,
+          onTap: _handleCreate,
         ),
       ],
     );
@@ -366,48 +326,23 @@ class _SelectOrganizationPageState
   Widget _field({
     required TextEditingController controller,
     required String label,
+    bool required = false,
     String? hint,
     TextInputType? keyboardType,
   }) {
+    final p = RefPalette.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: ThemeConstants.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 6),
+          AuthLabel(label, required: required),
           TextField(
             controller: controller,
             keyboardType: keyboardType,
             enabled: !_isCreating,
-            style: TextStyle(color: ThemeConstants.textPrimary),
-            decoration: InputDecoration(
-              hintText: hint,
-              hintStyle: TextStyle(color: ThemeConstants.textTertiary),
-              filled: true,
-              fillColor: ThemeConstants.background,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: ThemeConstants.border),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: ThemeConstants.accent),
-              ),
-              disabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: ThemeConstants.border),
-              ),
-            ),
+            style: TextStyle(color: p.ink, fontSize: 15),
+            decoration: authInputDecoration(context, hint: hint),
           ),
         ],
       ),

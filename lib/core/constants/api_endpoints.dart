@@ -10,6 +10,10 @@ class ApiEndpoints {
   static const String changePassword = "/profile/me/password";
   static const String forgotPassword = "/profile/me/forget-password";
 
+  // Signed-out "Forgot password?" — the web's `ForgotPasswordLink`: emails a
+  // reset link that opens the web's reset-password page.
+  static const String forgotPasswordRequest = '/auth/forgot-password';
+
   // Account management (admin user account resource).
   // PUT with `deleted: true` soft-deletes the account.
   static String userAccountById(String id) => '/admin/user/accounts/$id';
@@ -40,12 +44,11 @@ class ApiEndpoints {
   static const String proxyCreateUserUrl =
       'https://hydrawav3.app/proxy_create_user.php';
   static const String practitionerOnboarding = '/practitioners/onboarding';
-  // Subscription purchase happens on the web app only — Stripe isn't
-  // embedded in the mobile app (App Store/Play Store reject in-app purchase
-  // flows that route around their own IAP), so "Upgrade Now" opens this in
-  // an in-app browser instead (see subscription_screen.dart).
+  // The website's plan page. US storefront only: Plan & usage opens it in the
+  // phone's browser (see subscription_screen.dart). Website host for
+  // now: api.hydrawav3.studio (hydrawav3.app is the device/PHP server → 404).
   static const String practitionerSubscriptionUrl =
-      'https://hydrawav3.app/practitioner/subscription';
+      'https://api.hydrawav3.studio/practitioner/subscription';
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';

@@ -5,6 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../auth/presentation/widgets/auth_ui.dart';
+import '../../../devices/presentation/widgets/device_center_widgets.dart'
+    show SignalBars, UnitMark, signalOf;
 import '../../../ble/data/ble_repository.dart';
 import '../../../ble/services/ble_connector.dart';
 import '../../data/client_repository.dart';
@@ -167,8 +171,11 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
     unawaitedStart(repo);
     final result = await showModalBottomSheet<BluetoothDevice>(
       context: context,
-      backgroundColor: ThemeConstants.surface,
+      backgroundColor: RefPalette.of(context).card,
       isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
       builder: (_) => _DevicePickerSheet(repo: repo),
     );
     await repo.stopScan();
@@ -220,9 +227,8 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: ThemeConstants.surfaceVariant,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: ThemeConstants.border),
+          color: RefPalette.of(context).tanSoft,
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Row(children: [
           const SizedBox(
@@ -232,7 +238,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
           const SizedBox(width: 12),
           Expanded(
               child: Text(step ?? 'Working…',
-                  style: TextStyle(color: ThemeConstants.textSecondary))),
+                  style: TextStyle(color: RefPalette.of(context).ink2))),
         ]),
       );
 
@@ -241,7 +247,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: ThemeConstants.error.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(color: ThemeConstants.error.withValues(alpha: 0.4)),
         ),
         child: Row(children: [
@@ -283,7 +289,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('No lease registered for this client yet.',
-              style: TextStyle(color: ThemeConstants.textSecondary)),
+              style: TextStyle(color: RefPalette.of(context).ink2)),
           const SizedBox(height: 14),
           _primaryButton(
             icon: Icons.power_settings_new_rounded,
@@ -307,13 +313,15 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             enabled: !flow.busy,
             textCapitalization: TextCapitalization.characters,
             decoration: _fieldDecoration('AA:BB:CC:DD:EE:FF'),
-            style: TextStyle(color: ThemeConstants.textPrimary),
+            style: TextStyle(color: RefPalette.of(context).ink, fontSize: 15),
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
+          // v6 "Pick a unit to hand off" — the same Bluetooth scan sheet,
+          // which fills the unit's MAC above.
+          _softButton(
+            icon: Icons.bluetooth_searching_rounded,
+            label: 'Pick a unit to hand off',
             onPressed: flow.busy ? null : _scanFillMac,
-            icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
-            label: const Text('Scan device to fill MAC'),
           ),
           const SizedBox(height: 14),
           _label('Lease Username'),
@@ -329,7 +337,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             autocorrect: false,
             enableSuggestions: false,
             decoration: _fieldDecoration('No spaces allowed'),
-            style: TextStyle(color: ThemeConstants.textPrimary),
+            style: TextStyle(color: RefPalette.of(context).ink, fontSize: 15),
           ),
           const SizedBox(height: 14),
           _label('Lease Password'),
@@ -345,22 +353,25 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
                 onPressed: () => setState(() => _showPassword = !_showPassword),
               ),
             ),
-            style: TextStyle(color: ThemeConstants.textPrimary),
+            style: TextStyle(color: RefPalette.of(context).ink, fontSize: 15),
           ),
           const SizedBox(height: 6),
           Text('Hashed with bcrypt on the server, never shown again.',
               style: TextStyle(
-                  color: ThemeConstants.textTertiary, fontSize: 12)),
+                  color: RefPalette.of(context).ink3, fontSize: 12)),
           const SizedBox(height: 16),
           _primaryButton(
             label: 'Save Lease',
             onPressed: flow.busy ? null : _register,
           ),
           const SizedBox(height: 8),
-          TextButton(
-            onPressed:
-                flow.busy ? null : () => setState(() => _formOpen = false),
-            child: const Text('Cancel'),
+          Center(
+            child: AuthTextLink(
+              label: 'Cancel',
+              onTap: () {
+                if (!flow.busy) setState(() => _formOpen = false);
+              },
+            ),
           ),
         ],
       ),
@@ -378,7 +389,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         children: [
           Text('Connect to the matching device over Bluetooth to load this '
               'lease ID onto it.',
-              style: TextStyle(color: ThemeConstants.textSecondary)),
+              style: TextStyle(color: RefPalette.of(context).ink2)),
           const SizedBox(height: 14),
           _readonlyRow('Lease ID', client.leaseId ?? '--', copyable: true),
           const SizedBox(height: 10),
@@ -390,12 +401,12 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
             onPressed: flow.busy ? null : _loadToDevice,
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
+          _outlineButton(
+            icon: Icons.edit_rounded,
+            label: 'Change device / re-enter details',
             onPressed: flow.busy
                 ? null
                 : () => _openRegisterForm(mac: client.macAddress),
-            icon: const Icon(Icons.edit_rounded, size: 18),
-            label: const Text('Change device / re-enter details'),
           ),
         ],
       ),
@@ -426,7 +437,7 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
               enabled: !flow.busy,
               obscureText: true,
               decoration: _fieldDecoration('Min 6 characters'),
-              style: TextStyle(color: ThemeConstants.textPrimary),
+              style: TextStyle(color: RefPalette.of(context).ink, fontSize: 15),
             ),
             const SizedBox(height: 12),
             Row(children: [
@@ -437,32 +448,30 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
                 ),
               ),
               const SizedBox(width: 10),
-              TextButton(
-                onPressed:
-                    flow.busy ? null : () => setState(() => _resetMode = false),
-                child: const Text('Cancel'),
+              AuthTextLink(
+                label: 'Cancel',
+                onTap: () {
+                  if (!flow.busy) setState(() => _resetMode = false);
+                },
               ),
             ]),
           ] else
             Row(children: [
               Expanded(
-                child: OutlinedButton.icon(
+                child: _outlineButton(
+                  icon: Icons.key_rounded,
+                  label: 'Reset Password',
                   onPressed:
                       flow.busy ? null : () => setState(() => _resetMode = true),
-                  icon: const Icon(Icons.key_rounded, size: 18),
-                  label: const Text('Reset Password'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: OutlinedButton.icon(
+                child: _outlineButton(
+                  icon: Icons.power_off_rounded,
+                  label: 'Deactivate',
+                  danger: true,
                   onPressed: flow.busy ? null : _deactivate,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: ThemeConstants.error,
-                    side: BorderSide(color: ThemeConstants.error),
-                  ),
-                  icon: const Icon(Icons.power_off_rounded, size: 18),
-                  label: const Text('Deactivate'),
                 ),
               ),
             ]),
@@ -478,24 +487,24 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
     required Widget child,
     Widget? badge,
   }) {
+    final p = RefPalette.of(context);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       decoration: BoxDecoration(
-        color: ThemeConstants.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: ThemeConstants.border),
+        color: p.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: p.cardline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            Text(title,
-                style: TextStyle(
-                    color: ThemeConstants.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800)),
-            const Spacer(),
+            Expanded(
+              child: Text(title,
+                  style: TextStyle(
+                      color: p.ink, fontSize: 17, fontWeight: FontWeight.w800)),
+            ),
             if (badge != null) badge,
           ]),
           const SizedBox(height: 14),
@@ -513,82 +522,143 @@ class _ClientLeaseSectionState extends ConsumerState<ClientLeaseSection> {
         ),
         child: Text(text,
             style: TextStyle(
-                color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+                color: color, fontSize: 12, fontWeight: FontWeight.w800)),
       );
 
-  Widget _label(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(text,
-            style: TextStyle(
-                color: ThemeConstants.textSecondary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600)),
-      );
+  Widget _label(String text) => AuthLabel(text);
 
   Widget _readonlyRow(String label, String value, {bool copyable = false}) {
+    final p = RefPalette.of(context);
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         SizedBox(
           width: 96,
           child: Text(label,
               style: TextStyle(
-                  color: ThemeConstants.textSecondary, fontSize: 13)),
+                  color: p.ink2, fontSize: 13.5, fontWeight: FontWeight.w700)),
         ),
         Expanded(
           child: Text(value,
               style: TextStyle(
-                  color: ThemeConstants.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600)),
+                  color: p.ink,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()])),
         ),
         if (copyable && value != '--')
-          InkWell(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: value));
-              _snack('Copied');
-            },
-            child: Icon(Icons.copy_rounded,
-                size: 16, color: ThemeConstants.textTertiary),
+          Semantics(
+            button: true,
+            label: 'Copy $label',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: value));
+                _snack('Copied');
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Icon(Icons.copy_rounded, size: 17, color: p.copperInk),
+              ),
+            ),
           ),
       ],
     );
   }
 
-  InputDecoration _fieldDecoration(String hint) => InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: ThemeConstants.textTertiary),
-        filled: true,
-        fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.7),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: ThemeConstants.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: ThemeConstants.border),
-        ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      );
+  InputDecoration _fieldDecoration(String hint) =>
+      authInputDecoration(context, hint: hint);
 
   Widget _primaryButton({
     IconData? icon,
     required String label,
     required VoidCallback? onPressed,
+  }) =>
+      AuthPrimaryButton(
+        label: label,
+        icon: icon ?? Icons.check_rounded,
+        onTap: onPressed,
+      );
+
+  /// v6 tan action ("Pick a unit to hand off").
+  Widget _softButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
   }) {
-    return ElevatedButton.icon(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: ThemeConstants.navBackground,
-        foregroundColor: ThemeConstants.onNav,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        minimumSize: const Size.fromHeight(48),
+    final p = RefPalette.of(context);
+    return Opacity(
+      opacity: onPressed == null ? .55 : 1,
+      child: Material(
+        color: p.tanSoft,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onPressed,
+          child: SizedBox(
+            height: 50,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: p.copperInk),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(label,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: p.copperInk)),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      icon: Icon(icon ?? Icons.check_rounded, size: 18),
-      label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+
+  /// White outline action; [danger] for Deactivate.
+  Widget _outlineButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool danger = false,
+  }) {
+    final p = RefPalette.of(context);
+    final fg = danger ? p.low : p.ink;
+    return Opacity(
+      opacity: onPressed == null ? .55 : 1,
+      child: Material(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onPressed,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: danger ? p.low : p.cardline),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: fg),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(label,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w800,
+                          color: fg)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -689,35 +759,51 @@ class _DevicePickerSheetState extends ConsumerState<_DevicePickerSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4.5,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: p.line,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+            ),
             Row(
               children: [
                 Expanded(
-                  child: Text('Select a device',
+                  child: Text('Pick a unit to hand off',
                       style: TextStyle(
-                          color: ThemeConstants.textPrimary,
-                          fontSize: 16,
+                          color: p.ink,
+                          fontSize: 19,
                           fontWeight: FontWeight.w800)),
                 ),
                 Text('Hydrawav only',
-                    style: TextStyle(
-                        color: ThemeConstants.textSecondary, fontSize: 12)),
+                    style: TextStyle(color: p.ink3, fontSize: 12)),
                 Switch(
                   value: _hydraOnly,
-                  activeThumbColor: ThemeConstants.accent,
+                  activeThumbColor: Colors.white,
+                  activeTrackColor: p.copper,
                   onChanged: (v) => setState(() => _hydraOnly = v),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            Text(
+              'Connect to the matching unit to load its MAC ID.',
+              style: TextStyle(color: p.ink3, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
             SizedBox(
-              height: 320,
+              height: 340,
               child: StreamBuilder<List<ScanResult>>(
                 stream: widget.repo.scanResults,
                 initialData: widget.repo.currentScanResults,
@@ -734,40 +820,38 @@ class _DevicePickerSheetState extends ConsumerState<_DevicePickerSheet> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const SizedBox(
+                          SizedBox(
                               width: 22,
                               height: 22,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2)),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor:
+                                      AlwaysStoppedAnimation<Color>(p.copper))),
                           const SizedBox(height: 12),
                           Text(
                               _hydraOnly
                                   ? 'Scanning for Hydrawav devices…'
                                   : 'Scanning for devices…',
-                              style: TextStyle(
-                                  color: ThemeConstants.textSecondary)),
+                              style: TextStyle(color: p.ink2)),
                         ],
                       ),
                     );
                   }
                   return ListView.separated(
                     itemCount: results.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, i) {
                       final r = results[i];
                       final rawName = _nameOf(r);
                       final name =
                           rawName.isEmpty ? 'Unknown device' : rawName;
-                      return ListTile(
-                        leading: Icon(Icons.bluetooth_rounded,
-                            color: ThemeConstants.accent),
-                        title: Text(name,
-                            style:
-                                TextStyle(color: ThemeConstants.textPrimary)),
-                        subtitle: Text(r.device.remoteId.str,
-                            style: TextStyle(
-                                color: ThemeConstants.textTertiary,
-                                fontSize: 12)),
+                      // Already-connected units are folded in with rssi 0.
+                      final connected = r.rssi == 0;
+                      return _UnitRow(
+                        name: name,
+                        id: r.device.remoteId.str,
+                        rssi: connected ? null : r.rssi,
+                        connected: connected,
                         onTap: () => Navigator.of(context).pop(r.device),
                       );
                     },
@@ -776,6 +860,95 @@ class _DevicePickerSheetState extends ConsumerState<_DevicePickerSheet> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// v6 hand-off unit row: the unit tile, name, how it's reached + signal, and
+/// "Available".
+class _UnitRow extends StatelessWidget {
+  final String name;
+  final String id;
+  final int? rssi;
+  final bool connected;
+  final VoidCallback onTap;
+  const _UnitRow({
+    required this.name,
+    required this.id,
+    required this.rssi,
+    required this.connected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final meta = TextStyle(fontSize: 13, color: p.ink3);
+    return Semantics(
+      button: true,
+      label: '$name, ${connected ? 'connected' : 'available'}',
+      child: Material(
+        color: p.card,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: p.cardline),
+            ),
+            child: ExcludeSemantics(
+              child: Row(
+                children: [
+                  const UnitMark(connected: true, size: 42),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            style: TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w800,
+                                color: p.ink)),
+                        const SizedBox(height: 2),
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 5,
+                          children: [
+                            Text(connected ? 'Bluetooth · connected' : id,
+                                style: meta),
+                            if (rssi != null) ...[
+                              Text('·', style: meta),
+                              SignalBars(signalOf(rssi!).bars),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: p.goodSoft,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text('Available',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: p.good)),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

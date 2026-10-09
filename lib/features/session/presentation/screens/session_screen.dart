@@ -11,6 +11,7 @@ import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/services/local_notification_service.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../../../core/theme/widgets/hw_info_dialog.dart';
+import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -20,6 +21,7 @@ import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../musics/presentation/providers/music_provider.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../../services/session_engine.dart';
+import '../widgets/live_dial.dart';
 import '../widgets/smoothed_countdown.dart';
 import '../../services/protocol_plus_controller.dart';
 import '../../../protocols/presentation/providers/protocol_plus_detail_provider.dart';
@@ -29,6 +31,7 @@ import '../../../ble/data/ble_repository.dart';
 import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../ble/services/auto_connect_manager.dart';
+import '../../../devices/data/device_repository.dart';
 import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart' as session_model;
@@ -2129,51 +2132,66 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       );
     }
 
-    return Scaffold(
-      backgroundColor: pal.bg,
-      appBar: AppBar(
-        // The spec's live header (app.js:1260): "Live: N device(s)" with a
-        // reassurance line, rather than "Session(N Devices)".
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Live: ${(widget.remoteView ? engine.deviceIds.length : widget.deviceIds.length)} device(s)',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: pal.ink,
-              ),
-            ),
-            Text(
-              'sessions keep running if you leave',
-              style: TextStyle(fontSize: 11, color: pal.ink3),
-            ),
-          ],
-        ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_rounded),
-          onPressed: () async {
-            // Save or update session to active sessions before going back.
-            // Remote view owns no local session, so there's nothing to sync.
-            if (!widget.remoteView && status != SessionStatus.idle) {
-              await _syncCurrentSessionToActiveSessions();
-            }
+    final liveCount =
+        widget.remoteView ? engine.deviceIds.length : widget.deviceIds.length;
+    final tablet = HwTablet.of(context);
 
-            if (!mounted) return;
-            context.pop();
-          },
-        ),
-        actions: [
+    Future<void> goBack() async {
+      // Save or update session to active sessions before going back.
+      // Remote view owns no local session, so there's nothing to sync.
+      if (!widget.remoteView && status != SessionStatus.idle) {
+        await _syncCurrentSessionToActiveSessions();
+      }
+
+      if (!mounted) return;
+      context.pop();
+    }
+
+    // The v6 live header (`.ry-ses-lvhead`): round back button, "Live: N
+    // devices" with its reassurance line, and round buttons for the layout,
+    // mute and session music. Same actions the app bar carried before.
+    final header = Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 14),
+      child: Row(
+        children: [
+          LiveHeaderButton(
+            tooltip: 'Back, sessions keep running',
+            onTap: goBack,
+            icon: const Icon(Icons.chevron_left_rounded, size: 24),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Live: $liveCount device${liveCount == 1 ? '' : 's'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: pal.ink,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'sessions keep running if you leave',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: pal.ink3),
+                ),
+              ],
+            ),
+          ),
           // Toggle between the vertical list (all cards in one scroll) and the
           // horizontal pager (swipe + dots). Only useful with >1 device.
-          if (orderedDeviceIds.length > 1)
-            IconButton(
-              tooltip: verticalLayout
-                  ? 'Switch to swipe view'
-                  : 'Switch to list view',
-              onPressed: () =>
+          if (orderedDeviceIds.length > 1 && !tablet)
+            LiveHeaderButton(
+              tooltip:
+                  verticalLayout ? 'Switch to swipe view' : 'Switch to list view',
+              onTap: () =>
                   ref.read(sessionDevicesVerticalProvider.notifier).toggle(),
               icon: Icon(verticalLayout
                   ? Icons.view_carousel_outlined
@@ -2187,29 +2205,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Mute toggle Ã¢â‚¬â€ visible top-level control while a track is
-                  // active (mirrors the web's Mute button).
+                  // Mute toggle — visible while a track is active (mirrors the
+                  // web's Mute button).
                   if (music.hasTrack)
-                    IconButton(
+                    LiveHeaderButton(
                       tooltip: music.isMuted ? 'Unmute' : 'Mute',
-                      onPressed: () => controller.toggleMute(),
-                      icon: Icon(
-                        music.isMuted
-                            ? Icons.volume_off_rounded
-                            : Icons.volume_up_rounded,
-                        color: music.isMuted ? pal.ink2 : pal.copperInk,
-                      ),
+                      onTap: () => controller.toggleMute(),
+                      icon: Icon(music.isMuted
+                          ? Icons.volume_off_rounded
+                          : Icons.volume_up_rounded),
                     ),
-                  // Session "Atmosphere" music Ã¢â‚¬â€ accent when a track is active.
-                  IconButton(
+                  // Session "Atmosphere" music — lit while a track is active.
+                  LiveHeaderButton(
                     tooltip: 'Session music',
-                    onPressed: _showAtmosphereSheet,
-                    icon: Icon(
-                      music.hasTrack
-                          ? Icons.music_note_rounded
-                          : Icons.music_note_outlined,
-                      color: music.hasTrack ? pal.copperInk : null,
-                    ),
+                    onTap: _showAtmosphereSheet,
+                    on: music.hasTrack,
+                    icon: const Icon(Icons.music_note_outlined),
                   ),
                 ],
               );
@@ -2217,11 +2228,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           ),
         ],
       ),
+    );
+
+    return Scaffold(
+      backgroundColor: pal.bg,
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          // 18px on a phone; the centred 786px "wide" column on a tablet.
+          padding: EdgeInsets.symmetric(
+              horizontal: HwTablet.sidePadding(context)),
           children: [
-            const SizedBox(height: 8),
+            header,
             if (status == SessionStatus.idle) ...[
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
@@ -2233,7 +2250,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               if (showTopControl)
                 _buildTopControlCard(
                     status, ctrl, liveSessions, orderedDeviceIds.length),
-              if (verticalLayout) ...[
+              if (tablet) ...[
+                // Tablet: all the units at once, side by side — as many
+                // columns as fit at 340px each.
+                HwAutoGrid(
+                  children: [
+                    for (final id in orderedDeviceIds)
+                      buildDeviceCard(id, scrollable: false),
+                  ],
+                ),
+                const SizedBox(height: 24),
+              ] else if (verticalLayout) ...[
                 // Vertical: every device card stacked in one scroll (the body
                 // ListView scrolls), so all devices are visible without swiping.
                 for (final id in orderedDeviceIds) ...[
@@ -2246,8 +2273,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                   // Plus devices render an extra progress card inside the device
                   // card, so give the page more height when any device is Plus.
                   height: (engine.protocolPlusSequenceByDevice.isNotEmpty
-                          ? 560
-                          : 420) +
+                          ? 860
+                          : 680) +
                       (hasTelemetryExtras ? 130 : 0),
                   child: PageView.builder(
                     itemCount: orderedDeviceIds.length,
@@ -2290,36 +2317,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             // (Session-wide Pause/Resume/Stop All now live in the top control
             // card above the device cards Ã¢â‚¬â€ see _buildTopControlCard.)
 
-            // Device status
-            if (widget.deviceIds.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                    color: pal.card,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: pal.line)),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                            color: pal.good, shape: BoxShape.circle)),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.transport == 'wifi'
-                          ? '${widget.deviceIds.length} WiFi device(s) selected'
-                          : '${widget.deviceIds.length} device(s) connected',
-                      style: TextStyle(
-                        color: pal.ink2,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             const SizedBox(height: 16),
           ],
         ),
@@ -2967,16 +2964,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 text: deviceLabel,
                 style: TextStyle(
                   fontSize: 13,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w800,
                   color: pal.ink,
                 ),
               ),
               if (protocolName.trim().isNotEmpty)
                 TextSpan(
-                  text: ' $protocolName',
+                  text: '  $protocolName',
                   style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
                     color: pal.ink3,
                   ),
                 ),
@@ -3099,48 +3096,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// The spec's `.btn` in its three session flavours: solid copper (primary),
-  /// soft outline (secondary) and solid danger.
-  Widget _sessionButton({
-    required String label,
-    required VoidCallback? onTap,
-    bool filled = true,
-    bool danger = false,
-  }) {
-    final enabled = onTap != null;
-    final bg = danger ? pal.low : (filled ? pal.copperInk : pal.card);
-    final fg = danger || filled ? Colors.white : pal.copperInk;
-    return Opacity(
-      opacity: enabled ? 1 : 0.45,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(HwRadius.sm),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(HwRadius.sm),
-            border: filled || danger
-                ? null
-                : Border.all(color: pal.copper, width: 1.5),
-          ),
-          child: Center(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: fg,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   // -- UI handoff `liveCard` parts (app.js:1342-1352) ------------------------
 
   static String _mmss(Duration d) {
@@ -3154,43 +3109,50 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// sequence context belongs; only the current stage name goes below.
   Widget _lcStackHeader({
     required String plusName,
+    required String protocolName,
     required List<String> plusSequence,
     required int plusIndex,
     required bool plusOnBreak,
     required bool paused,
   }) {
-    if (plusSequence.length < 2) return const SizedBox.shrink();
-    final next =
-        plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)];
-    final sub = paused
-        ? 'paused'
-        : plusOnBreak
-            ? 'Break next: $next'
-            : 'Stage ${plusIndex + 1} of ${plusSequence.length}';
+    final isPlus = plusSequence.length >= 2;
+    final title =
+        isPlus && plusName.trim().isNotEmpty ? plusName : protocolName;
+    String? sub;
+    if (isPlus) {
+      final next =
+          plusSequence[(plusIndex + 1).clamp(0, plusSequence.length - 1)];
+      sub = paused
+          ? 'paused'
+          : plusOnBreak
+              ? 'Break next: $next'
+              : 'Stage ${plusIndex + 1} of ${plusSequence.length}';
+    } else if (paused) {
+      sub = 'paused';
+    }
+    if (title.trim().isEmpty && sub == null) return const SizedBox.shrink();
 
     return Column(
       children: [
-        if (plusName.trim().isNotEmpty)
+        if (title.trim().isNotEmpty)
           Text(
-            plusName,
+            title,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 19,
-              fontWeight: FontWeight.w800,
-              height: 1.1,
-              color: pal.copperInk,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              height: 1.2,
+              color: pal.ink,
             ),
           ),
-        const SizedBox(height: 2),
-        Text(
-          sub,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: pal.ink3,
+        if (sub != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            sub,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: pal.ink2),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -3203,6 +3165,47 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// [ProtocolPlusController.restartCurrentProtocol]) — this toast only
   /// confirms the server accepted the request, not that the firmware has
   /// finished restarting.
+  /// Devices with a Locate chime in flight, so the pill can't be spammed.
+  final Set<String> _locatingDeviceIds = {};
+
+  /// Plays the unit's chime so the practitioner can find it — the same
+  /// command the Devices screens send: over Bluetooth for a BLE run (the
+  /// firmware handles it alongside a running protocol), over the server's
+  /// MQTT bridge for a WiFi unit.
+  Future<void> _locateDevice(String deviceId, String label) async {
+    if (_locatingDeviceIds.contains(deviceId)) return;
+    setState(() => _locatingDeviceIds.add(deviceId));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text('Locating $label: listen for the chime'),
+        duration: const Duration(seconds: 2),
+      ));
+    try {
+      final repo = ref.read(deviceRepositoryProvider);
+      if (widget.transport == 'wifi') {
+        await repo.locateDeviceViaMqtt(deviceId, beeping: true);
+      } else {
+        await repo.locateDeviceViaBle(deviceId, beeping: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text('Locate failed: $e')));
+      }
+    } finally {
+      // Hold the pill briefly so one tap reads as one chime.
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      if (mounted) {
+        setState(() => _locatingDeviceIds.remove(deviceId));
+      } else {
+        _locatingDeviceIds.remove(deviceId);
+      }
+    }
+  }
+
   Future<void> _restartStage(String deviceId, String stageLabel) async {
     if (_restartingStageDeviceIds.contains(deviceId)) return;
     setState(() => _restartingStageDeviceIds.add(deviceId));
@@ -3280,6 +3283,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     VoidCallback? onRestart,
     bool restartEnabled = false,
     bool restarting = false,
+    // Locate sits right after Restart, on every device card.
+    VoidCallback? onLocate,
+    String locateLabel = 'Locate',
+    bool locating = false,
   }) {
     final isPlus = plusSequence.length > 1;
     final name = !isPlus
@@ -3287,74 +3294,126 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         : plusOnBreak
             ? 'Break'
             : plusSequence[plusIndex.clamp(0, plusSequence.length - 1)];
-    if (name.trim().isEmpty) return const SizedBox.shrink();
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final nameText = Text(
       name,
       textAlign: TextAlign.center,
       style: TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.w800,
-        height: 1.1,
-        color: plusOnBreak ? _kBreakColor : gc,
+        fontSize: 18,
+        fontWeight: FontWeight.w700,
+        height: 1.2,
+        color: plusOnBreak
+            ? (isDark ? const Color(0xFF8FB4C2) : _kBreakColor)
+            : pal.ink,
       ),
     );
 
-    if (!isPlus || plusOnBreak || onRestart == null) return nameText;
+    final showRestart = isPlus && !plusOnBreak && onRestart != null;
+    final fg = isDark ? const Color(0xFFE7D3C0) : pal.ink2;
 
-    final tappable = restartEnabled && !restarting;
-    final fg = tappable ? pal.ink2 : pal.ink3;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        nameText,
-        const SizedBox(height: 6),
-        // Small pill affordance — quiet enough not to compete with the bold
-        // Pause/Stop row below, but with enough of its own shape (outline +
-        // fill) to read as tappable rather than as more label text.
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: tappable ? onRestart : null,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: fg.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: fg.withValues(alpha: 0.25)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (restarting)
-                    SizedBox(
-                      width: 13,
-                      height: 13,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: fg,
-                      ),
-                    )
-                  else
-                    Icon(Icons.replay_rounded, size: 15, color: fg),
-                  const SizedBox(width: 5),
-                  Text(
-                    restarting ? 'Restarting…' : 'Restart this stage',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: fg,
-                    ),
+    // `.v5l-restart` — an outlined pill, quiet next to the round controls.
+    Widget pill({
+      required Widget icon,
+      required String label,
+      required bool enabled,
+      required VoidCallback? onTap,
+    }) {
+      return Opacity(
+        opacity: enabled ? 1 : .5,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: enabled ? onTap : null,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Center(
+              widthFactor: 1,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: isDark
+                        ? const Color.fromRGBO(192, 157, 132, .3)
+                        : pal.line,
+                    width: 1.5,
                   ),
-                ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    icon,
+                    const SizedBox(width: 6),
+                    // Never cut short: a label too long for its half of
+                    // the row wraps onto a second line inside the pill.
+                    Flexible(
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          height: 1.25,
+                          color: fg,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
+      );
+    }
+
+    Widget spinner() => SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+        );
+
+    final actions = <Widget>[
+      if (showRestart)
+        pill(
+          icon: restarting
+              ? spinner()
+              : Icon(Icons.replay_rounded, size: 16, color: fg),
+          label: restarting ? 'Restarting…' : 'Restart this stage',
+          enabled: restartEnabled && !restarting,
+          onTap: onRestart,
+        ),
+      if (onLocate != null)
+        pill(
+          icon: locating
+              ? spinner()
+              : Icon(Icons.my_location_rounded, size: 16, color: fg),
+          label: locateLabel,
+          enabled: !locating,
+          onTap: onLocate,
+        ),
+    ];
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (name.trim().isNotEmpty) nameText,
+        if (actions.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          // Side by side, always: each pill may narrow, and a long label
+          // (e.g. a long device name on Locate) wraps inside its pill.
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              for (var i = 0; i < actions.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                Flexible(child: actions[i]),
+              ],
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -3382,104 +3441,133 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       plusIndex: plusIndex,
       onBreak: plusOnBreak,
     );
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // `.lc-step` is a COLUMN â€” name above duration â€” not a row. Active steps go
-    // white-on-copper-gradient with no border; breaks carry their own tinted
-    // scheme; completed steps just drop to 50% opacity.
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      alignment: WrapAlignment.center,
-      children: [
-        for (var i = 0; i < segments.length; i++)
-          () {
-            final seg = segments[i];
-            final done = i < activeIdx;
-            final active = i == activeIdx;
-            final label = seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
-            final dur = Duration(seconds: seg.seconds.round());
+    // `.v5l-chips`: every stage and break as a chip (name over duration),
+    // joined by arrows that turn copper once passed. The current chip is
+    // filled; breaks carry their own blue.
+    Widget chip(int i) {
+      final seg = segments[i];
+      final active = i == activeIdx;
+      final label = seg.isBreak ? 'Break' : plusSequence[i ~/ 2];
+      final dur = Duration(seconds: seg.seconds.round());
 
-            final Color fg;
-            final Color bg;
-            final Color? borderColor;
-            if (seg.isBreak) {
-              fg = active ? Colors.white : _kBreakColor;
-              bg = active ? _kBreakColor : _kBreakColor.withValues(alpha: 0.12);
-              borderColor =
-                  active ? null : _kBreakColor.withValues(alpha: 0.32);
-            } else if (active) {
-              fg = Colors.white;
-              bg = gc;
-              borderColor = null;
-            } else {
-              fg = pal.ink3;
-              bg = pal.card2;
-              borderColor = pal.line;
-            }
+      final Color fg;
+      final Color bg;
+      final Color border;
+      if (seg.isBreak) {
+        if (active) {
+          fg = Colors.white;
+          bg = _kBreakColor;
+          border = _kBreakColor;
+        } else {
+          fg = isDark ? const Color(0xFF8FB4C2) : _kBreakColor;
+          bg = _kBreakColor.withValues(alpha: isDark ? .18 : .1);
+          border = _kBreakColor.withValues(alpha: .3);
+        }
+      } else if (active) {
+        fg = Colors.white;
+        bg = gc;
+        border = gc;
+      } else {
+        fg = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF475569);
+        bg = isDark ? const Color(0xFF2A1F16) : Colors.white;
+        border = isDark
+            ? const Color.fromRGBO(192, 157, 132, .25)
+            : const Color(0xFFE2E8F0);
+      }
 
-            return Opacity(
-              opacity: done ? 0.5 : 1,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(HwRadius.sm),
-                  border: borderColor == null
-                      ? null
-                      : Border.all(color: borderColor),
-                  boxShadow: active ? pal.shadow : null,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 11,
-                        height: 1.15,
-                        fontWeight: FontWeight.w700,
-                        color: fg,
-                      ),
-                    ),
-                    Text(
-                      seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
-                      style: TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        color: fg.withValues(alpha: 0.8),
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ],
-                ),
+      return AnimatedOpacity(
+        duration: const Duration(milliseconds: 280),
+        opacity: i < activeIdx ? .5 : 1,
+        child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        padding: HwTablet.of(context)
+            ? const EdgeInsets.symmetric(horizontal: 9, vertical: 5)
+            : const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border),
+          boxShadow: active && !seg.isBreak
+              ? const [
+                  BoxShadow(
+                    color: Color.fromRGBO(198, 158, 131, .35),
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: fg,
               ),
-            );
-          }(),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: fg.withValues(alpha: .8),
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+      );
+    }
+
+    Widget arrow(bool done) => Icon(
+          Icons.arrow_forward_rounded,
+          size: 14,
+          color: done
+              ? (isDark ? LiveTones.copper : const Color(0xFFB27D5C))
+              : (isDark ? const Color(0xFF4B5563) : const Color(0xFFC9B8A6)),
+        );
+
+    return Wrap(
+      spacing: HwTablet.of(context) ? 3 : 4,
+      runSpacing: HwTablet.of(context) ? 5 : 7,
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (var i = 0; i < segments.length; i++) ...[
+          if (i > 0) arrow(i <= activeIdx),
+          chip(i),
+        ],
       ],
     );
   }
 
-  /// `.lc-legend` â€” the swatch is a 14Ã—5 rounded bar, not a square.
+  /// `.ry-ses-legend` — 12×4 swatches, protocol copper and break blue.
   Widget _lcLegend(Color gc) {
     Widget item(Color c, String label) => Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 14,
-              height: 5,
+              width: 12,
+              height: 4,
               decoration: BoxDecoration(
                 color: c,
                 borderRadius: BorderRadius.circular(99),
               ),
             ),
-            const SizedBox(width: 5),
+            const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
-                fontSize: 10.5,
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
-                color: pal.ink3,
+                color: pal.ink2,
               ),
             ),
           ],
@@ -3488,19 +3576,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         item(gc, 'Protocol'),
-        const SizedBox(width: 14),
+        const SizedBox(width: 16),
         item(_kBreakColor, 'Break'),
       ],
     );
   }
 
-  /// `.lc-bar` â€” 5px tall on a `bg2` track, filled in the goal colour.
+  /// `.ry-ses-lbar` — 6px, slate track, copper fill.
   Widget _lcBar(double progress, Color gc) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      height: 5,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
+      height: 6,
       decoration: BoxDecoration(
-        color: pal.bg2,
+        color: isDark
+            ? const Color.fromRGBO(0, 0, 0, .4)
+            : const Color(0xFFE2E8F0),
         borderRadius: BorderRadius.circular(99),
       ),
       clipBehavior: Clip.antiAlias,
@@ -3520,24 +3610,33 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     );
   }
 
-  /// `.lc-elapsed` â€” 12.5px/700 in ink2, with the times themselves in full ink.
+  /// `m:ss` — the elapsed line reads "0:07 elapsed of 9:00 total".
+  static String _mss(Duration d) {
+    final s = d.inSeconds < 0 ? 0 : d.inSeconds;
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  /// `.ry-ses-lel` — 12px/600 in ink2.
   Widget _lcElapsed({required Duration elapsed, required Duration total}) {
-    final base = TextStyle(
-      fontSize: 12.5,
-      fontWeight: FontWeight.w700,
-      color: pal.ink2,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    final bold = base.copyWith(color: pal.ink);
-    return Text.rich(
-      TextSpan(style: base, children: [
-        TextSpan(text: _mmss(elapsed), style: bold),
-        const TextSpan(text: ' elapsed of '),
-        TextSpan(text: _mmss(total), style: bold),
-        const TextSpan(text: ' total'),
-      ]),
+    return Text(
+      '${_mss(elapsed)} elapsed of ${_mss(total)} total',
       textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: pal.ink2,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
     );
+  }
+
+  /// Pad state → how its mark in the dial is tinted. The colours themselves
+  /// are resolved exactly as before (backend feed / live telemetry): red is
+  /// the heating tone, blue the cooling one, and a neutral pad rests copper.
+  PadTone _padTone(Color c) {
+    if (c == Colors.red) return PadTone.sun;
+    if (c == Colors.blue) return PadTone.moon;
+    return PadTone.rest;
   }
 
   Widget _buildDeviceSessionCard({
@@ -3790,19 +3889,36 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+      // Clips the dial's ripples at the card edge, as the prototype's
+      // `overflow: hidden` does.
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(14),
+        color: isDark ? LiveTones.cardBg(true) : cardColor,
+        borderRadius: BorderRadius.circular(28),
         // Web parity: red border on fault, orange on warning, default otherwise.
         border: Border.all(
           color: isFault
               ? Colors.red
               : isWarning
                   ? Colors.orange
-                  : pal.line2,
-          width: isFault ? 2 : 1,
+                  : LiveTones.cardBorder,
+          width: 2,
         ),
+        boxShadow: [
+          isDark
+              ? const BoxShadow(
+                  color: Color.fromRGBO(192, 157, 132, .45),
+                  blurRadius: 32,
+                  spreadRadius: -6,
+                )
+              : const BoxShadow(
+                  color: Color.fromRGBO(192, 157, 132, .4),
+                  blurRadius: 28,
+                  spreadRadius: -8,
+                  offset: Offset(0, 8),
+                ),
+        ],
       ),
       // In the pager each card has a fixed height, so make its content scroll
       // within (Plus devices add a progress card, and small screens may not fit
@@ -3842,19 +3958,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             // old `_buildProtocolPlusSequence` progress card: the spec shows the
             // sequence as the chip strip BELOW the ring, so keeping both would
             // state the same thing twice in two different visual languages.
-            if (isProtocolPlusDevice && plusSequence.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _lcStackHeader(
-                plusName: plusName,
-                plusSequence: plusSequence,
-                plusIndex: plusIndex,
-                plusOnBreak: visualOnBreak,
-                paused: status == SessionStatus.paused,
-              ),
-            ],
+            const SizedBox(height: 8),
+            _lcStackHeader(
+              plusName: plusName,
+              protocolName: protocolName,
+              plusSequence: plusSequence,
+              plusIndex: plusIndex,
+              plusOnBreak: visualOnBreak,
+              paused: status == SessionStatus.paused,
+            ),
             // The protocol name is no longer repeated here â€” `_lcHeader` shows
             // it beside the device, and `.lc-active` shows the running stage.
-            const SizedBox(height: 10),
+            // 40px clears the dial's ripples (`.v5l .ry-ses-ltitle`).
+            const SizedBox(height: 40),
             // No halo behind the ring either â€” this was a 26px blurred circle
             // shadow while running (the spec's `.lc-halo`). Removed together
             // with the arc glow so the ring reads as a clean, flat arc.
@@ -3892,82 +4008,65 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 // instead of centered in the card.
                 return Column(
                   children: [
-                    SizedBox(
-                      // `.lc-ringwrap` is 190Ã—190.
-                      width: 190,
-                      height: 190,
-                      child: CustomPaint(
-                        painter: _TimerRing(
-                          progress: liveProgress,
-                          active: status == SessionStatus.running,
-                          trackColor: pal.ringTrack,
-                          accentColor: gc,
-                          // Drives the active arc's growth.
-                          elapsedSeconds: (displayTotal - liveRemaining)
-                              .inSeconds
-                              .toDouble(),
-                          // A break knows its own progress exactly, from the engine's
-                          // countdown â€” more reliable than inferring it from the
-                          // whole-run clock, which a Plus run resets per sub-protocol.
-                          activeFill: (plusOnBreak &&
-                                  plusDelaySeconds > 0 &&
-                                  plusBreakRemaining >= 0)
-                              ? (1 - plusBreakRemaining / plusDelaySeconds)
-                                  .clamp(0.0, 1.0)
-                              : null,
-                          segments: _plusRingSegments(
-                            plusSequence: plusSequence,
-                            plusDurations: plusDurations,
-                            breakSeconds: plusDelaySeconds,
-                          ),
-                          activeIndex: _plusRingActiveIndex(
-                            sequenceLength: plusSequence.length,
-                            plusIndex: plusIndex,
-                            onBreak: visualOnBreak,
-                          ),
+                    // The v6 dial: ripples, glow, the segmented ring with its
+                    // continuous progress arc, the time and both pad marks.
+                    LiveDial(
+                      diameter: HwTablet.of(context) ? 196 : LiveDial.size,
+                      timeSize: HwTablet.of(context) ? 34 : 46,
+                      // The segmented ring, unchanged: every stage and break
+                      // as its own arc in the protocol's goal colour / the
+                      // break blue, completed stages filled, the active one
+                      // filling as it runs.
+                      ring: _TimerRing(
+                        progress: liveProgress,
+                        active: status == SessionStatus.running,
+                        trackColor: pal.ringTrack,
+                        accentColor: gc,
+                        // Drives the active arc's growth.
+                        elapsedSeconds:
+                            (displayTotal - liveRemaining).inSeconds.toDouble(),
+                        // A break knows its own progress exactly, from the
+                        // engine's countdown.
+                        activeFill: (plusOnBreak &&
+                                plusDelaySeconds > 0 &&
+                                plusBreakRemaining >= 0)
+                            ? (1 - plusBreakRemaining / plusDelaySeconds)
+                                .clamp(0.0, 1.0)
+                            : null,
+                        segments: _plusRingSegments(
+                          plusSequence: plusSequence,
+                          plusDurations: plusDurations,
+                          breakSeconds: plusDelaySeconds,
                         ),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // `.lc-time` â€” 50px/900, tabular, tight tracking. Paused
-                              // drops it to opacity .45 (app.js:1336); a disconnected
-                              // Plus device gets the same fade while it's frozen.
-                              Opacity(
-                                opacity: status == SessionStatus.paused ||
-                                        plusDisconnectedNotTerminal
-                                    ? _TimerRing._pausedFade
-                                    : 1,
-                                child: Text(
-                                  liveRemaining.formatted,
-                                  style: TextStyle(
-                                    fontSize: 50,
-                                    fontWeight: FontWeight.w900,
-                                    height: 0.92,
-                                    color: pal.ink,
-                                    letterSpacing: -1.5,
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures()
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              // `.lc-mod` â€” both pads 22px, 9px apart.
-                              const SizedBox(height: 8),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.dark_mode_rounded,
-                                      size: 22, color: effectiveMoonColor),
-                                  const SizedBox(width: 9),
-                                  Icon(Icons.wb_sunny_rounded,
-                                      size: 22, color: effectiveSunColor),
-                                ],
-                              ),
-                            ],
-                          ),
+                        activeIndex: _plusRingActiveIndex(
+                          sequenceLength: plusSequence.length,
+                          plusIndex: plusIndex,
+                          onBreak: visualOnBreak,
                         ),
                       ),
+                      progress: liveProgress,
+                      arcs: [
+                        for (final seg in _plusRingSegments(
+                          plusSequence: plusSequence,
+                          plusDurations: plusDurations,
+                          breakSeconds: plusDelaySeconds,
+                        ))
+                          (seconds: seg.seconds, isBreak: seg.isBreak),
+                      ],
+                      running: status == SessionStatus.running &&
+                          !plusDisconnectedNotTerminal,
+                      padsWorking: status == SessionStatus.running &&
+                          !plusDisconnectedNotTerminal &&
+                          !visualOnBreak,
+                      onBreak: visualOnBreak,
+                      // Paused drops the time to half strength (app.js:1336);
+                      // a disconnected Plus device gets the same fade while
+                      // it's frozen.
+                      dimmed: status == SessionStatus.paused ||
+                          plusDisconnectedNotTerminal,
+                      time: liveRemaining.formatted,
+                      moon: _padTone(effectiveMoonColor),
+                      sun: _padTone(effectiveSunColor),
                     ),
                     // -- The UI handoff's `liveCard` block (app.js:1342-1352) --
                     // Active stage name, stage strip, progress bar,
@@ -3975,7 +4074,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                     // scope as the ring/digits above, so the bar and the
                     // "elapsed of total" text tick in lockstep with them
                     // instead of only refreshing on the next backend poll.
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 44),
                     _lcActiveName(
                       plusSequence: plusSequence,
                       plusIndex: plusIndex,
@@ -3995,9 +4094,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                                         0, plusSequence.length - 1)]
                                     : protocolName,
                               )),
+                      onLocate: () => unawaited(_locateDevice(id, label)),
+                      locateLabel: 'Locate $label',
+                      locating: _locatingDeviceIds.contains(id),
                     ),
                     if (plusSequence.length > 1) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       _lcSteps(
                         plusSequence: plusSequence,
                         plusDurations: plusDurations,
@@ -4006,10 +4108,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         plusOnBreak: visualOnBreak,
                         gc: gc,
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       _lcLegend(gc),
                     ],
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 14),
                     _lcBar(liveProgress, gc),
                     const SizedBox(height: 8),
                     _lcElapsed(
@@ -4021,7 +4123,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               },
             ),
             if (totalCycles > 0 && padCycleIdx >= 0) ...[
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               Text(
                 'Cycle ${padCycleIdx + 1}/$totalCycles',
                 style: TextStyle(
@@ -4038,7 +4140,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             //   const SizedBox(height: 10),
             //   _buildSensorReadouts(telemetry.sensorReadouts),
             // ],
-            const SizedBox(height: 16),
             _buildPerDeviceControls(id, status, ctrl,
                 isProtocolPlusDevice: isProtocolPlusDevice,
                 plusOnBreak: plusOnBreak),
@@ -4056,7 +4157,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     bool plusOnBreak = false,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final softSurface = isDark ? pal.card2 : Colors.white;
 
     // REMOTE VIEW: drive the device over the cloud broker + backend instead of
     // the local engine. Resolve the live session for this run; if it's gone from
@@ -4148,80 +4248,83 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // they stay gated on the connection.
     final blockPauseResume = disconnected;
 
+    // `.ry-ses-lctl.v5s-lctl`: a hairline, then round Pause / Resume and Stop
+    // with their captions. Same handlers and gates as before.
+    final Widget controls;
     if (status == SessionStatus.running) {
-      return Row(
+      controls = Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: SizedBox(
-              height: 44,
-              child: OutlinedButton(
-                onPressed: blockPauseResume ? null : pauseFn,
-                style: OutlinedButton.styleFrom(
-                  backgroundColor: softSurface,
-                  foregroundColor: pal.ink,
-                  side: BorderSide(color: pal.line2),
-                ),
-                child: const Text('Pause'),
-              ),
-            ),
+          LiveRoundButton(
+            kind: RoundKind.pause,
+            caption: 'Pause',
+            semanticLabel: 'Pause',
+            onTap: blockPauseResume ? null : pauseFn,
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: SizedBox(
-              height: 44,
-              child: ElevatedButton(
-                onPressed: blockStop ? null : stopFn,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: pal.low,
-                  foregroundColor: pal.ink,
-                ),
-                child: const Text('Stop'),
-              ),
-            ),
+          const SizedBox(width: 34),
+          LiveRoundButton(
+            kind: RoundKind.stop,
+            caption: 'Stop',
+            semanticLabel: 'Stop',
+            onTap: blockStop ? null : stopFn,
           ),
         ],
       );
-    }
-    if (status == SessionStatus.paused) {
-      return Row(
+    } else if (status == SessionStatus.paused) {
+      controls = Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: SizedBox(
-              height: 44,
-              child: ElevatedButton(
-                onPressed: blockPauseResume ? null : resumeFn,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: pal.copperInk,
-                  foregroundColor: pal.ink,
-                ),
-                child: const Text('Resume'),
-              ),
-            ),
+          LiveRoundButton(
+            kind: RoundKind.resume,
+            caption: 'Resume',
+            semanticLabel: 'Resume',
+            onTap: blockPauseResume ? null : resumeFn,
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: SizedBox(
-              height: 44,
-              child: ElevatedButton(
-                onPressed: blockStop ? null : stopFn,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: pal.low,
-                  foregroundColor: pal.ink,
-                ),
-                child: const Text('Stop'),
-              ),
-            ),
+          const SizedBox(width: 34),
+          LiveRoundButton(
+            kind: RoundKind.stop,
+            caption: 'Stop',
+            semanticLabel: 'Stop',
+            onTap: blockStop ? null : stopFn,
           ),
         ],
       );
+    } else {
+      // Ready / stopped / completed: a quiet status line, nothing to press.
+      controls = Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: _statusColor(status).withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            _statusLabel(status),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: _statusColor(status),
+            ),
+          ),
+        ),
+      );
     }
-    return SizedBox(
-      height: 44,
-      width: double.infinity,
-      child: OutlinedButton(
-        onPressed: null,
-        child: Text(_statusLabel(status)),
+
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.only(top: 16),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: isDark
+                ? const Color.fromRGBO(192, 157, 132, .2)
+                : const Color.fromRGBO(220, 210, 196, .7),
+          ),
+        ),
       ),
+      child: controls,
     );
   }
 
@@ -4305,78 +4408,67 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       }
     }
 
+    // The v6 "All devices" bar (`.ry-ses-allbar`): a copper badge, the device
+    // count, and round Pause/Resume all + Stop all.
+    final statusNote =
+        status == SessionStatus.running ? '' : ' · ${_statusLabel(status)}';
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: pal.line2),
+        color: isDark ? LiveTones.cardBg(true) : cardColor,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: LiveTones.cardBorder, width: 2),
+        boxShadow: pal.shadow,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Icon(
-                isWifi ? Icons.wifi_rounded : Icons.bluetooth_rounded,
-                size: 18,
-                color: pal.copperInk,
+          Container(
+            width: 32,
+            height: 32,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFC9A788), Color(0xFFA9825F)],
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '$deviceCount ${isWifi ? 'WiFi' : 'Bluetooth'} '
-                  'device${deviceCount == 1 ? '' : 's'}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: pal.ink,
-                  ),
-                ),
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _statusColor(status).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  _statusLabel(status),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: _statusColor(status),
-                  ),
-                ),
-              ),
-            ],
+            ),
+            child: Icon(
+              isWifi ? Icons.wifi_rounded : Icons.track_changes_rounded,
+              size: 16,
+              color: Colors.white,
+            ),
           ),
-          const SizedBox(height: 12),
-          // The spec's `.btnrow`: a soft Pause All beside a solid danger Stop
-          // All (app.js:1265). Previously both were solid ElevatedButtons with
-          // ink-on-copper labels, which read as two equally destructive actions.
-          Row(
-            children: [
-              Expanded(
-                child: _sessionButton(
-                  label: paused ? 'Resume All' : 'Pause All',
-                  onTap: canPause ? onPauseResume : null,
-                  filled: false,
-                ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'All $deviceCount device${deviceCount == 1 ? '' : 's'}'
+                      '$statusNote'
+                  .toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .88,
+                color: pal.ink3,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _sessionButton(
-                  label: 'Stop All',
-                  onTap: onStopAll,
-                  danger: true,
-                ),
-              ),
-            ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          LiveRoundButton(
+            kind: paused ? RoundKind.resume : RoundKind.pause,
+            size: 48,
+            semanticLabel: paused ? 'Resume all' : 'Pause all',
+            onTap: canPause ? onPauseResume : null,
+          ),
+          const SizedBox(width: 10),
+          LiveRoundButton(
+            kind: RoundKind.stop,
+            size: 48,
+            semanticLabel: 'Stop all',
+            onTap: onStopAll,
           ),
         ],
       ),
@@ -4638,11 +4730,16 @@ class _TimerRing extends CustomPainter {
     // this stroke and radius), which is what the old gap was compensating for.
     // Arcs butt hard against each other â€” no gap. The colour change at each
     // straight edge is the divider, so the ring stays a solid unbroken circle.
-    const segmentCap = StrokeCap.butt;
+    // The track is one continuous ring: sections butt straight against each
+    // other with no gap. Only the FILLS are rounded — each filled section
+    // starts and ends on a curve, and because they're drawn in order the next
+    // section's round start overlaps the previous one's end, so every joint in
+    // the filled progress reads as a curve while the ring stays unbroken.
+    const trackCap = StrokeCap.butt;
+    const fillCap = StrokeCap.round;
 
-    // PASS 1 â€” every segment's empty track. The spec draws all tracks first,
-    // then the fills over them, so a partially-filled arc still shows the rest
-    // of its own stage waiting behind it.
+    // PASS 1 — every segment's empty track, drawn first so a partly-filled
+    // section still shows the rest of its own stage waiting behind it.
     var startFraction = 0.0;
     final starts = <double>[];
     final sweeps = <double>[];
@@ -4660,26 +4757,30 @@ class _TimerRing extends CustomPainter {
         false,
         stroke(
           seg.isBreak ? _kBreakColor.withValues(alpha: 0.28) : trackColor,
-          cap: segmentCap,
+          cap: trackCap,
         ),
       );
       startFraction += span;
     }
 
-    // PASS 2 â€” the fills. Completed stages are fully filled but dimmed; the
-    // ACTIVE stage fills proportionally to how far into it we are, which is what
-    // makes the ring grow through the run instead of snapping stage to stage.
-    // Breaks fill exactly the same way, in the break colour.
+    // PASS 2 — the fills. Completed stages are fully filled but dimmed; the
+    // ACTIVE stage fills proportionally to how far into it we are, which is
+    // what makes the ring grow through the run instead of snapping stage to
+    // stage. Breaks fill exactly the same way, in the break colour.
     var elapsedBefore = 0.0;
     for (var i = 0; i < segments.length; i++) {
       final seg = segments[i];
       final fill = seg.isBreak ? _kBreakColor : accentColor;
 
       if (activeIndex >= 0 && i < activeIndex) {
+        // Solid, not see-through: the same shade .55 of the colour gives over
+        // the track, but opaque, so where two rounded ends overlap the colour
+        // doesn't double up into a dark spot.
         canvas.drawArc(rect, starts[i], sweeps[i], false,
-            stroke(fill.withValues(alpha: 0.55), cap: segmentCap));
+            stroke(Color.alphaBlend(fill.withValues(alpha: 0.55), trackColor),
+                cap: fillCap));
       } else if (i == activeIndex) {
-        // `sp` â€” the spec's per-segment progress. Prefer the caller's exact
+        // `sp` — the spec's per-segment progress. Prefer the caller's exact
         // value (breaks report their own countdown); otherwise derive it from
         // elapsed time against this segment's own start and duration.
         final sp = (activeFill ??
@@ -4689,7 +4790,7 @@ class _TimerRing extends CustomPainter {
             .clamp(0.0, 1.0);
         if (sp > 0) {
           canvas.drawArc(rect, starts[i], sweeps[i] * sp, false,
-              stroke(fill, cap: segmentCap));
+              stroke(fill, cap: fillCap));
         }
       }
       elapsedBefore += seg.seconds;

@@ -176,6 +176,27 @@ class AuthRemoteSource {
     }
   }
 
+  /// Emails a password-reset link to [email] (signed out; web parity).
+  Future<void> requestPasswordReset(String email) async {
+    try {
+      await _dio.post(
+        ApiEndpoints.forgotPasswordRequest,
+        data: {'email': email},
+      );
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final msg = data is Map ? data['message'] : null;
+      throw ServerException(
+        msg?.toString() ??
+            (e.type == DioExceptionType.connectionError ||
+                    e.type == DioExceptionType.connectionTimeout
+                ? 'Unable to reach the server. Please check your connection.'
+                : 'Could not send the reset link. Please try again.'),
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<void> forgotPassword(String userId) async {
     final response = await _dio.put(
       "/api/v1/profile/me/forget-password/$userId",

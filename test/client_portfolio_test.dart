@@ -58,9 +58,10 @@ void main() {
   Future<void> pump(
     WidgetTester tester, {
     List<SessionHistoryItem> history = const [],
+    double width = 390,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    tester.view.physicalSize = const Size(390 * 3, 2400 * 3);
+    tester.view.physicalSize = Size(width * 3, 2400 * 3);
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
 
@@ -88,12 +89,31 @@ void main() {
     await pump(tester);
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Tyreek Hall'), findsOneWidget);
-    // Sport · #jersey · age — none of which the old screen displayed.
-    expect(find.text('Football · #10 · 27 yrs'), findsOneWidget);
-    expect(find.text('⚡ Performance'), findsOneWidget);
-    expect(find.text('〰 Recovery'), findsOneWidget);
+    // v6 header: name with the jersey beside it, then sport · age.
+    expect(find.textContaining('Tyreek Hall', findRichText: true),
+        findsOneWidget);
+    expect(find.textContaining('#10', findRichText: true), findsOneWidget);
+    expect(find.textContaining('Football · 27 yrs', findRichText: true),
+        findsOneWidget);
+    expect(find.text('Performance'), findsOneWidget);
+    expect(find.text('Recovery'), findsOneWidget);
     expect(find.text('Sessions'), findsOneWidget);
+    // Lease moved behind a button to the existing lease screen; a new
+    // report starts the existing guided assessment.
+    await tester.ensureVisible(find.text('Hand off a unit'));
+    expect(find.text('Hand off a unit'), findsOneWidget);
+    expect(find.text('New Mobility Report'), findsOneWidget);
+    expect(find.text('Session & outcome history'), findsOneWidget);
+  });
+
+  testWidgets('lays out on a tablet in the wide column', (tester) async {
+    await pump(tester, width: 834);
+    expect(tester.takeException(), isNull);
+    final tile = tester.getSize(find.ancestor(
+        of: find.text('Performance'), matching: find.byType(Container)).first);
+    expect(tile.height, lessThan(140)); // tiles keep the phone height
+    final card = tester.getRect(find.text('Hand off a unit'));
+    expect(card.left, greaterThan(0));
   });
 
   testWidgets('an unassessed client reads em-dash, not a fabricated 0%',
