@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:collection';
+
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/error/exceptions.dart';
@@ -15,6 +17,7 @@ import '../../../intake/domain/intake_enums.dart';
 import '../../../intake/domain/intake_models.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../data/assistant_chat_remote_source.dart';
+import '../../data/rag_chat_history_repository.dart';
 import '../../domain/assistant_chat_models.dart';
 import '../../../pad_placement/data/recovery_chat_remote_source.dart';
 import '../../../pad_placement/data/recovery_engine_remote_source.dart';
@@ -28,6 +31,7 @@ import '../../../performance_protocols/presentation/screens/go_to_session.dart';
 import '../../../performance_protocols/presentation/screens/pad_map_screen.dart';
 import '../../../performance_protocols/presentation/widgets/placement_card.dart';
 import '../widgets/assistant_welcome_panel.dart';
+import '../widgets/chat_history_sheet.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 
 /// The "Assistant" page — a port of the cowork-os handoff `scr-chat` chat.
@@ -113,7 +117,70 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
 
-  final List<_Msg> _messages = [];
+  // Every bubble goes through this list; adding one also saves it to the
+  // client's RAG chat history (see `_record`).
+  late final _RecordingList _messages =
+      _RecordingList(onAdd: _record, onClear: _ragNewThread);
+
+  // ── RAG chat history (`rag-chat-history`) ──────────────────────────────────
+  // One thread per conversation. A thread starts on the first message the
+  // user sends (opening AI lines wait until then, so just opening the
+  // Assistant saves nothing) and ends on Start over or a change of person.
+  _RagThread _ragThread = _RagThread();
+  Future<void> _ragQueue = Future<void>.value();
+
+  /// Who this chat is saved under: the person picked in the Assistant's own
+  /// flow, else the client selected for the session (Client mode), else guest.
+  Client? get _historyClient =>
+      _perfClient ??
+      (ref.read(sessionClientModeProvider) == ClientMode.client
+          ? ref.read(selectedClientProvider)
+          : null);
+
+  void _ragNewThread() => _ragThread = _RagThread();
+
+  void _record(_Msg m) {
+    final text = m.placement != null
+        ? 'Pad placement: ${m.placement!.displayName}'
+        : m.text.trim();
+    if (text.isEmpty) return;
+    final client = _historyClient;
+    final who = client == null ? 'guest' : 'client:${client.id}';
+    var t = _ragThread;
+    if (t.who != null && t.who != who) {
+      // A different person is a different conversation.
+      _ragNewThread();
+      t = _ragThread;
+    }
+    t.who = who;
+    if (!t.started && !m.isMe) {
+      t.pending.add((false, text));
+      return;
+    }
+    final batch = [...t.pending, (m.isMe, text)];
+    t.pending.clear();
+    t.started = true;
+    final repo = ref.read(ragChatHistoryRepositoryProvider);
+    final clientId = client?.id;
+    // Sequential, so the server keeps the order and every message after the
+    // first carries the conversation id the first one got back.
+    _ragQueue = _ragQueue.then((_) async {
+      for (final (isUser, msg) in batch) {
+        try {
+          final id = await repo.addMessage(
+            isGuest: clientId == null,
+            clientId: clientId,
+            conversationId: t.id,
+            isUser: isUser,
+            message: msg,
+          );
+          t.id ??= id;
+        } catch (_) {
+          // History is best-effort: a failed save never interrupts the chat.
+        }
+      }
+    });
+  }
   List<_ChipAction> _chips = const [];
   bool _chipsVisible = true;
   bool _typing = false;
@@ -433,8 +500,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           () => _pickUser('Guest'),
           hot: true),
       for (final m in members)
-        _ChipAction(Icons.person_outline_rounded, m.clientName,
-            () => _pickUser(m.clientName, client: m)),
+        _ChipAction(Icons.person_outline_rounded, m.displayName,
+            () => _pickUser(m.displayName, client: m)),
       _ChipAction(
         uni ? Icons.person_add_alt_1_rounded : Icons.person_add_alt_1_rounded,
         uni ? 'Add player' : 'Add client',
@@ -2435,6 +2502,28 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                       ],
                     ),
                   ),
+                  Builder(builder: (context) {
+                    // Past conversations: the selected client's, or — in
+                    // Guest mode — the guest chats this practitioner started.
+                    ref.watch(sessionClientModeProvider);
+                    ref.watch(selectedClientProvider);
+                    final c = _historyClient;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Tooltip(
+                        message: 'Past conversations',
+                        child: _IconBtn(
+                          palette: p,
+                          icon: Icons.history_rounded,
+                          onTap: () => showChatHistorySheet(
+                            context,
+                            clientId: c?.id,
+                            clientName: c?.displayName ?? 'Guest chats',
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
                   _IconBtn(
                     palette: p,
                     icon: Icons.refresh_rounded,
@@ -2914,5 +3003,48 @@ class _DisciplineSheetState extends State<_DisciplineSheet> {
         ),
       ),
     );
+  }
+}
+
+/// One saved conversation in `rag-chat-history`.
+class _RagThread {
+  String? id;
+  String? who;
+  bool started = false;
+  final List<(bool, String)> pending = [];
+}
+
+/// The transcript list: behaves like a plain `List<_Msg>`, and reports each
+/// added message (and a clear) so the chat can be saved without touching the
+/// flows that add bubbles.
+class _RecordingList extends ListBase<_Msg> {
+  final void Function(_Msg) onAdd;
+  final VoidCallback onClear;
+  _RecordingList({required this.onAdd, required this.onClear});
+
+  final List<_Msg> _inner = [];
+
+  @override
+  int get length => _inner.length;
+
+  @override
+  set length(int n) => _inner.length = n;
+
+  @override
+  _Msg operator [](int i) => _inner[i];
+
+  @override
+  void operator []=(int i, _Msg v) => _inner[i] = v;
+
+  @override
+  void add(_Msg element) {
+    _inner.add(element);
+    onAdd(element);
+  }
+
+  @override
+  void clear() {
+    _inner.clear();
+    onClear();
   }
 }

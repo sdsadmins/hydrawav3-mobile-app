@@ -189,6 +189,8 @@ class ClientDetailScreen extends ConsumerWidget {
   static String? _subtitle(Client? c) {
     if (c == null) return null;
     final bits = <String>[
+      // The full stored name, under the nickname (profile only).
+      if (c.displayName != c.fullName) c.fullName,
       if (c.sport?.isNotEmpty == true) c.sport!,
       if (c.age != null) '${c.age} yrs',
       if (c.gender?.isNotEmpty == true) c.gender!,

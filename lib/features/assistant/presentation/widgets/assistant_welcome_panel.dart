@@ -318,7 +318,7 @@ class _PickUpRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    final initials = client.clientName
+    final initials = client.displayName
         .split(RegExp(r'\s+'))
         .where((w) => w.isNotEmpty)
         .take(2)

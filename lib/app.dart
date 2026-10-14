@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/config/app_config_gate.dart';
 import 'core/router/app_router.dart';
 import 'core/constants/theme_constants.dart';
 import 'core/theme/app_theme.dart';
@@ -44,9 +45,13 @@ class HydrawavApp extends ConsumerWidget {
         data: MediaQuery.of(context).copyWith(
           textScaler: TextScaler.linear(textScale),
         ),
-        child: SessionOutcomeGate(
-          child: PlusReconnectWatchdog(
-            child: child ?? const SizedBox.shrink(),
+        // Update required / maintenance (server mobile-app-config) cover
+        // everything below them.
+        child: AppConfigGate(
+          child: SessionOutcomeGate(
+            child: PlusReconnectWatchdog(
+              child: child ?? const SizedBox.shrink(),
+            ),
           ),
         ),
       ),

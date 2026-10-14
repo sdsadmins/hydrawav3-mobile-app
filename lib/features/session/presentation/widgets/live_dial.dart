@@ -114,9 +114,10 @@ class LiveDial extends StatefulWidget {
 }
 
 class _LiveDialState extends State<LiveDial> with TickerProviderStateMixin {
-  // One 9s loop drives three ripples offset by 3s each (`rySesDRip`).
+  // One 12s loop drives three ripples offset by 4s each — `rySesDRip`
+  // slowed from 9s on request.
   late final AnimationController _ripple =
-      AnimationController(vsync: this, duration: const Duration(seconds: 9));
+      AnimationController(vsync: this, duration: const Duration(seconds: 12));
 
   // Pad marks breathe while the pads work (`v5lMod`, 3s).
   late final AnimationController _pulse =
@@ -129,11 +130,17 @@ class _LiveDialState extends State<LiveDial> with TickerProviderStateMixin {
 
   bool get _still => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
+  static bool _lit(PadTone t) => t == PadTone.sun || t == PadTone.moon;
+
   void _sync() {
     final ripple = widget.running && !_still;
     if (ripple && !_ripple.isAnimating) _ripple.repeat();
     if (!ripple && _ripple.isAnimating) _ripple.stop();
-    final pulse = widget.padsWorking && widget.running && !_still;
+    // Breathe only while at least one mark is actually lit (red or blue).
+    final pulse = widget.padsWorking &&
+        widget.running &&
+        !_still &&
+        (_lit(widget.sun) || _lit(widget.moon));
     if (pulse && !_pulse.isAnimating) _pulse.repeat();
     if (!pulse && _pulse.isAnimating) {
       _pulse.stop();
@@ -169,9 +176,15 @@ class _LiveDialState extends State<LiveDial> with TickerProviderStateMixin {
                 child: AnimatedBuilder(
                   animation: _ripple,
                   builder: (context, _) => CustomPaint(
+                    // Each side copies the mark on that side, live: the left
+                    // (Moon) mark's colour on the left half, the right (Sun)
+                    // mark's on the right — so when the device switches the
+                    // pad colours, the rings switch with them. A mark that
+                    // isn't lit, a break or a pause → copper.
                     painter: _RipplePainter(
                       t: _ripple.value,
-                      dual: widget.padsWorking,
+                      left: widget.padsWorking ? widget.moon : PadTone.rest,
+                      right: widget.padsWorking ? widget.sun : PadTone.rest,
                     ),
                   ),
                 ),
@@ -187,47 +200,27 @@ class _LiveDialState extends State<LiveDial> with TickerProviderStateMixin {
               duration: const Duration(milliseconds: 700),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: widget.onBreak
-                      ? const [
-                          Color.fromRGBO(59, 159, 224, .16),
-                          Color.fromRGBO(59, 159, 224, 0),
-                        ]
-                      : const [
-                          Color.fromRGBO(201, 167, 136, .22),
-                          Color.fromRGBO(201, 167, 136, 0),
-                        ],
-                  stops: const [0, .7],
+                // Copper base — also on a break (no blue tint), matching the
+                // copper rings there.
+                gradient: const RadialGradient(
+                  colors: [
+                    Color.fromRGBO(201, 167, 136, .22),
+                    Color.fromRGBO(201, 167, 136, 0),
+                  ],
+                  stops: [0, .7],
                 ),
               ),
-              child: widget.padsWorking
-                  ? const DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: RadialGradient(
-                          center: Alignment(.44, 0),
-                          radius: .62,
-                          colors: [
-                            Color.fromRGBO(224, 97, 63, .16),
-                            Color.fromRGBO(224, 97, 63, 0),
-                          ],
-                        ),
-                      ),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: RadialGradient(
-                            center: Alignment(-.44, 0),
-                            radius: .62,
-                            colors: [
-                              Color.fromRGBO(59, 130, 246, .15),
-                              Color.fromRGBO(59, 130, 246, 0),
-                            ],
-                          ),
-                        ),
-                      ),
-                    )
-                  : null,
+              // A pad's warm/cool halo shows only while that pad is lit,
+              // same rule as the rings.
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (widget.padsWorking) ...[
+                    _SideHalo(tone: widget.sun, x: .44),
+                    _SideHalo(tone: widget.moon, x: -.44),
+                  ],
+                ],
+              ),
             ),
           ),
           // The ring.
@@ -290,13 +283,18 @@ class _LiveDialState extends State<LiveDial> with TickerProviderStateMixin {
                   return Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // A mark that isn't lit stays still.
                       Transform.scale(
-                        scale: _pulse.isAnimating ? beat(0) : 1,
+                        scale: _pulse.isAnimating && _lit(widget.moon)
+                            ? beat(0)
+                            : 1,
                         child: PadMark(tone: widget.moon, isSun: false),
                       ),
                       const SizedBox(width: 10),
                       Transform.scale(
-                        scale: _pulse.isAnimating ? beat(.5) : 1,
+                        scale: _pulse.isAnimating && _lit(widget.sun)
+                            ? beat(.5)
+                            : 1,
                         child: PadMark(tone: widget.sun, isSun: true),
                       ),
                     ],
@@ -419,19 +417,34 @@ class _PadGlyph extends CustomPainter {
 
 class _RipplePainter extends CustomPainter {
   final double t;
-  final bool dual;
-  _RipplePainter({required this.t, required this.dual});
 
-  // Right (sun) red, left (moon) blue, meeting through copper top and bottom.
-  static const _dualColors = [
-    Color.fromRGBO(198, 158, 131, .95),
-    Color.fromRGBO(224, 97, 63, .97),
-    Color.fromRGBO(224, 97, 63, .97),
-    Color.fromRGBO(198, 158, 131, .95),
-    Color.fromRGBO(59, 130, 246, .95),
-    Color.fromRGBO(59, 130, 246, .95),
-    Color.fromRGBO(198, 158, 131, .95),
-  ];
+  /// The colour each half takes: the tone of the mark on that side.
+  final PadTone left;
+  final PadTone right;
+  _RipplePainter({required this.t, required this.left, required this.right});
+
+  static const _copper = Color.fromRGBO(198, 158, 131, .95);
+  static const _red = Color.fromRGBO(224, 97, 63, .97);
+  static const _blue = Color.fromRGBO(59, 130, 246, .95);
+
+  static Color _of(PadTone tone) => switch (tone) {
+        PadTone.sun => _red,
+        PadTone.moon => _blue,
+        _ => _copper,
+      };
+
+  bool get dual => _of(left) != _copper || _of(right) != _copper;
+
+  // Right half, then left half, meeting through copper top and bottom.
+  List<Color> get _dualColors => [
+        _copper,
+        _of(right),
+        _of(right),
+        _copper,
+        _of(left),
+        _of(left),
+        _copper,
+      ];
   static const _dualStops = [
     0.0,
     62 / 360,
@@ -447,7 +460,7 @@ class _RipplePainter extends CustomPainter {
     final c = size.center(Offset.zero);
     final base = size.shortestSide / 2;
     for (final shift in const [0.0, 1 / 3, 2 / 3]) {
-      final k = (t + shift) % 1; // 0 → 1 over 9s
+      final k = (t + shift) % 1; // 0 → 1 over 12s
       final scale = 1 + .52 * k;
       final opacity = .9 * (1 - k);
       if (opacity <= 0.01) continue;
@@ -483,7 +496,8 @@ class _RipplePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_RipplePainter old) => old.t != t || old.dual != dual;
+  bool shouldRepaint(_RipplePainter old) =>
+      old.t != t || old.left != left || old.right != right;
 }
 
 /// The dial ring (`.ry-ses-dialsvg`): a beige track, each break as a pale blue
@@ -783,6 +797,34 @@ class LiveHeaderButton extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The faint halo inside the dial on one side, in the colour of that side's
+/// mark (none when the mark isn't lit).
+class _SideHalo extends StatelessWidget {
+  final PadTone tone;
+  final double x;
+  const _SideHalo({required this.tone, required this.x});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color? c = switch (tone) {
+      PadTone.sun => const Color.fromRGBO(224, 97, 63, .16),
+      PadTone.moon => const Color.fromRGBO(59, 130, 246, .15),
+      _ => null,
+    };
+    if (c == null) return const SizedBox.shrink();
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          center: Alignment(x, 0),
+          radius: .62,
+          colors: [c, c.withValues(alpha: 0)],
         ),
       ),
     );

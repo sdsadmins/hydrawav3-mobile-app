@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/api_endpoints.dart';
+import '../../../../core/storage/secure_storage.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
@@ -400,17 +401,48 @@ class _ProductCard extends StatelessWidget {
 /// US storefront only: opens the website's plan page in the phone's browser
 /// to buy tokens or change plan. New credits reach the app through the live
 /// balance socket; pull down here to refresh the plan details.
-class _BuyOnWebCard extends StatelessWidget {
+class _BuyOnWebCard extends ConsumerWidget {
   const _BuyOnWebCard();
 
+  /// The website's login handoff, which saves this login as the website's
+  /// cookies and forwards to the plan page:
+  /// `<site>/auth/handoff?token=<Bearer access>&refreshToken=<Bearer refresh>`
+  /// `&orgId=<org>&redirect=/practitioner/subscription`.
+  /// Tokens carry the "Bearer " prefix, as the website's own login stores
+  /// them. Without a stored login it falls back to the plan page itself.
+  static Future<Uri> _planLink(WidgetRef ref) async {
+    final plan = Uri.parse(ApiEndpoints.practitionerSubscriptionUrl);
+    final storage = ref.read(secureStorageProvider);
+    final access = await storage.getAccessToken();
+    final refresh = await storage.getRefreshToken();
+    final org = ref.read(authStateProvider).selectedOrgId ??
+        await storage.getSelectedOrgId();
+    if (access == null || access.isEmpty) return plan;
+    String bearer(String t) => t.startsWith('Bearer ') ? t : 'Bearer $t';
+    return Uri(
+      scheme: plan.scheme,
+      host: plan.host,
+      port: plan.hasPort ? plan.port : null,
+      path: '/auth/handoff',
+      queryParameters: {
+        'token': bearer(access),
+        if (refresh != null && refresh.isNotEmpty)
+          'refreshToken': bearer(refresh),
+        if (org != null && org.isNotEmpty) 'orgId': org,
+        'redirect': plan.path.isEmpty ? '/practitioner/subscription' : plan.path,
+      },
+    );
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final p = RefPalette.of(context);
     return HwCard(
       accented: true,
       onTap: () async {
+        final link = await _planLink(ref);
         final ok = await launchUrl(
-          Uri.parse(ApiEndpoints.practitionerSubscriptionUrl),
+          link,
           // Same as More → Buy More Products: a Chrome Custom Tab /
           // Safari sheet over the app.
           mode: LaunchMode.inAppBrowserView,

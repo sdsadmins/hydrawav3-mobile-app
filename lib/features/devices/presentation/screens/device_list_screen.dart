@@ -27,6 +27,7 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../widgets/plan_sheet.dart';
+import '../../../session_coach/presentation/widgets/session_coach_card.dart';
 import '../widgets/session_plan_widgets.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../widgets/session_music_card.dart' show showSessionMusicPicker;
@@ -550,25 +551,33 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       unitName: unitName,
     );
     if (!mounted || picked == null) return;
+    await _applyProtocolToDevice(deviceId, picked);
+  }
 
+  /// Puts [protocolId] on one unit exactly as the unit's protocol picker does
+  /// (also used by the Session Coach's "Use this set"). True on success.
+  Future<bool> _applyProtocolToDevice(String deviceId, String protocolId) async {
     try {
-      final protocol = await ref.read(protocolDetailProvider(picked).future);
-      if (!mounted) return;
+      final protocol =
+          await ref.read(protocolDetailProvider(protocolId).future);
+      if (!mounted) return false;
       setState(() {
-        _protocolIdByDeviceId[deviceId] = picked;
+        _protocolIdByDeviceId[deviceId] = protocolId;
         _selectedProtocolByDeviceId[deviceId] = protocol;
         _settingsByDeviceId[deviceId] = _advancedDefaultsFromProtocol(protocol);
         _showAdvancedByDeviceId[deviceId] = false;
       });
       // Persist the explicit choice so it survives leaving/returning to the tab.
       ref.read(selectedProtocolIdByDeviceProvider.notifier).update(
-            (m) => {...m, deviceId: picked},
+            (m) => {...m, deviceId: protocolId},
           );
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to load protocol details: $e')),
       );
+      return false;
     }
   }
 
@@ -871,7 +880,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         SizedBox(
           width: double.infinity,
           child: PlanSummaryStrip(
-            who: guest ? 'Guest' : client.clientName,
+            who: guest ? 'Guest' : client.displayName,
             units: runIds.length,
             longest: longest,
             protocols: names,
@@ -1647,6 +1656,22 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     ),
                                   ],
                                 ),
+                              ),
+                              // v6 Session Coach: body → goal → the admin's
+                              // sets, applied to the units below.
+                              const SizedBox(height: 12),
+                              SessionCoachCard(
+                                units: [
+                                  for (final id in currentSessionDeviceIds)
+                                    CoachUnit(
+                                      id: id,
+                                      name: currentLabelsById[id] ?? 'Unit',
+                                      canLocate: target.transport ==
+                                          SessionTransport.ble,
+                                    ),
+                                ],
+                                onApply: _applyProtocolToDevice,
+                                onLocate: _sendLocate,
                               ),
                             ],
                           ),

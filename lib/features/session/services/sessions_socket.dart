@@ -12,12 +12,9 @@ import '../../../core/constants/api_endpoints.dart';
 class SessionsSocket {
   SessionsSocket._();
 
-  /// Origin (`scheme://host[:port]`) derived from [ApiEndpoints.nodeBaseUrl].
-  static String get _origin {
-    final restUri = Uri.parse(ApiEndpoints.nodeBaseUrl);
-    return '${restUri.scheme}://${restUri.host}'
-        '${restUri.hasPort ? ':${restUri.port}' : ''}';
-  }
+  /// Origin (`scheme://host[:port]`): the config's `socketUrl`, or the Node
+  /// host when the config doesn't name one.
+  static String get _origin => ApiEndpoints.socketOrigin;
 
   /// Any path segment BEFORE `hydrawav/v1` (e.g. `/api`) is a reverse-proxy
   /// prefix that also fronts socket.io, so the external socket path is

@@ -68,8 +68,8 @@ class PlayersSection extends ConsumerWidget {
       onAdd: () => university
           ? showAddPlayerSheet(context, ref)
           : showNewClientSheet(context, ref),
-      name: isGuest ? 'Guest' : client.clientName,
-      initials: isGuest ? null : _initials(client.clientName),
+      name: isGuest ? 'Guest' : client.displayName,
+      initials: isGuest ? null : _initials(client.displayName),
       subline: isGuest
           ? 'Anonymous session, no profile saved'
           : (university ? _playerSubline(client) : _clientSubline(client)),
@@ -237,7 +237,7 @@ class _WhoPickerState extends ConsumerState<_WhoPicker> {
     String subOf(Client c) => playersOnly
         ? PlayersSection._playerSubline(c)
         : PlayersSection._clientSubline(c);
-    String nameOf(Client c) => playersOnly ? c.clientName : c.displayName;
+    String nameOf(Client c) => c.displayName;
 
     Widget message(String text) => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
@@ -284,13 +284,17 @@ class _WhoPickerState extends ConsumerState<_WhoPicker> {
               ? all
               : all
                   .where((c) =>
-                      '${nameOf(c)} ${subOf(c)}'.toLowerCase().contains(q))
+                      // shows the nickname, but search matches the full
+                      // name and nickname too
+                      '${nameOf(c)} ${c.clientName} ${c.nickname ?? ''} ${subOf(c)}'
+                          .toLowerCase()
+                          .contains(q))
                   .toList();
           if (list.isEmpty) return [message('No match.')];
           return [
             for (final c in list)
               _WhoRow(
-                initials: PlayersSection._initials(c.clientName),
+                initials: PlayersSection._initials(c.displayName),
                 name: nameOf(c),
                 subline: subOf(c),
                 selected: !isGuest && selected.id == c.id,

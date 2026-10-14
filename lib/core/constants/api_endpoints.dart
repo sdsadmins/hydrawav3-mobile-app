@@ -1,3 +1,5 @@
+import '../config/app_config_store.dart';
+
 class ApiEndpoints {
   ApiEndpoints._();
 
@@ -22,33 +24,39 @@ class ApiEndpoints {
 // static const String login = '/auth/login';
   static const String login = '/auth/login';
   // Base URLs
-  static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
+  // Base URLs come from the server's `mobile-app-config` (loaded in main()
+  // before the app starts; see core/config). The built-in values live in
+  // AppConfig.defaults and are used offline / for any invalid field.
+  static String get djangoBaseUrl => AppConfigStore.current.djangoBaseUrl;
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
   //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
-  static const String nodeBaseUrl =
-      'https://api.hydrawav3.studio/api/hydrawav/v1/';
+  static String get nodeBaseUrl => AppConfigStore.current.nodeBaseUrl;
+
+  /// Socket.IO origin (`scheme://host[:port]`).
+  static String get socketOrigin => AppConfigStore.current.socketOrigin;
 
   // static const String nodeBaseUrl = 'http://192.168.31.92:5000/hydrawav/v1/';
-  static const String deviceControlUrl = 'https://hydrawav3.app';
+  static String get deviceControlUrl => AppConfigStore.current.deviceControlUrl;
 
   // Auth
 
   static const String refreshToken = '/auth/refreshToken';
-  static const String baseUrl = "http://54.241.236.53:8080";
+  static String get baseUrl =>
+      AppConfigStore.current.djangoBaseUrl.replaceFirst(RegExp(r'/api/v1$'), '');
 
   // Practitioner onboarding (native "Create account" flow, parity with web).
   // The submit needs an admin token from this public proxy (the user isn't
   // logged in yet), then a multipart POST to the onboarding endpoint.
-  static const String proxyCreateUserUrl =
-      'https://hydrawav3.app/proxy_create_user.php';
+  static String get proxyCreateUserUrl =>
+      AppConfigStore.current.onboardingProxyUrl;
   static const String practitionerOnboarding = '/practitioners/onboarding';
   // The website's plan page. US storefront only: Plan & usage opens it in the
   // phone's browser (see subscription_screen.dart). Website host for
   // now: api.hydrawav3.studio (hydrawav3.app is the device/PHP server → 404).
-  static const String practitionerSubscriptionUrl =
-      'https://api.hydrawav3.studio/practitioner/subscription';
+  static String get practitionerSubscriptionUrl =>
+      AppConfigStore.current.websitePlanUrl;
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';
@@ -297,6 +305,22 @@ class ApiEndpoints {
 
   // Body Parts & Muscles
   static const String bodyParts = '/body-part';
+
+  // Session Coach (Node `session-coach`): the admin-authored sets for a body
+  // part — default + secondary protocols and Sun/Moon pads per support type.
+  static String sessionCoachByBodyPart(String bodyPartId) =>
+      'session-coach/body-part/${Uri.encodeComponent(bodyPartId)}';
+
+  // RAG chat history (Node `rag-chat-history`): Assistant transcripts saved
+  // per client (or as guest), listed and read back per client.
+  static const String ragChatHistory = 'rag-chat-history';
+  static const String ragChatConversations = 'rag-chat-history/conversations';
+  // Guest chats started by the logged-in practitioner (server filters by
+  // createdBy = the caller).
+  static const String ragChatGuestConversations =
+      'rag-chat-history/conversation/guest';
+  static String ragChatConversation(String conversationId) =>
+      'rag-chat-history/${Uri.encodeComponent(conversationId)}';
   static const String muscles = '/muscle';
 
   // ROM body parts (for the Range of Motion intake step; parity with web getRoms).

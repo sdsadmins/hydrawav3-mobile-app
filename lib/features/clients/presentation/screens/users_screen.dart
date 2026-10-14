@@ -605,7 +605,7 @@ class _UserGroupCard extends StatelessWidget {
             _UserRow(
               palette: p,
               client: clients[i],
-              initials: _initials(clients[i].clientName),
+              initials: _initials(clients[i].displayName),
               subline: _subline(clients[i]),
               sessions: sessionCounts[clients[i].id],
               prepped: prepped.contains(clients[i].id),

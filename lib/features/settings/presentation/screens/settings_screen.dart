@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/config/app_config_store.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -1119,9 +1120,10 @@ Future<void> _openLink(BuildContext context, String url) async {
 class _ResourcesSection extends ConsumerWidget {
   const _ResourcesSection();
 
-  static const _helpCenter = 'https://www.hydrawav3.com/help-center';
-  static const _buy = 'https://www.hydrawav3.com/buy';
-  static const _economics = 'https://www.hydrawav3.com/economics';
+  // From the server's mobile-app-config (built-in defaults when unset).
+  static String get _helpCenter => AppConfigStore.current.links.helpCenter;
+  static String get _buy => AppConfigStore.current.links.buy;
+  static String get _economics => AppConfigStore.current.links.economics;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1780,7 +1782,7 @@ class _LabsSection extends ConsumerWidget {
         final match = last.isGuest || last.clientId == null
             ? null
             : clients?.where((c) => c.id == last.clientId).firstOrNull;
-        final name = match?.clientName ?? 'Guest';
+        final name = match?.displayName ?? 'Guest';
         final initials = name
             .split(RegExp(r'\s+'))
             .where((w) => w.isNotEmpty)

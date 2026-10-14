@@ -2898,7 +2898,7 @@ class _PrepCard extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        c.clientName.split(RegExp(r'\s+')).first,
+                        c.displayName.split(RegExp(r'\s+')).first,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

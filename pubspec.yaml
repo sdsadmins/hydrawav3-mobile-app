@@ -115,6 +115,8 @@ flutter:
     # Offline 3D kinetic-chain viewer (three.js bundle + GLB + Draco decoder).
     - assets/3d/
     - assets/3d/draco/
+    # Session Coach viewer (web admin's Z-Anatomy build) keeps its own decoder.
+    - assets/3d/coach_draco/
     # iOS background keep-alive ambient loop, played by SessionMusicController
     # when a session is running but no Atmosphere track is selected — keeps
     # the app alive in the background so Protocol Plus switching / BLE

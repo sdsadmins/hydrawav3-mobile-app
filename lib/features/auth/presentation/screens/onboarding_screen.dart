@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/config/app_config_store.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -683,7 +684,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       children: [
         const SizedBox(height: 4),
         InkWell(
-          onTap: () => _launch('https://www.hydrawav3.com/privacy'),
+          onTap: () => _launch(AppConfigStore.current.links.privacy),
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
