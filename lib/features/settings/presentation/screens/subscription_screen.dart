@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../../../../core/constants/api_endpoints.dart';
-import '../../../../core/storage/secure_storage.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../payments/data/payment_repository.dart';
-import '../../../payments/data/store_region.dart';
 import '../../../payments/domain/plan_model.dart';
 import '../../../payments/presentation/providers/token_balance_provider.dart';
 
@@ -17,16 +13,16 @@ import '../../../payments/presentation/providers/token_balance_provider.dart';
 /// usage plus every purchasable tier, pulled from the same backend the web
 /// app uses (`GET /payments/current-plan/:org`, `GET /products/subscriptions`).
 ///
-/// Outside the US this stays information only — no Stripe SDK, no card
-/// fields, no "Upgrade" button, no purchase link: Apple's Guideline 3.1.1 and
-/// Google Play's billing policy reject any call-to-action that sends a
-/// purchase anywhere but their own billing there.
-///
-/// US storefront only ([isUsStorefrontProvider]): the Epic v. Apple and Epic
-/// v. Google court orders let US apps send users to the website to buy, so a
-/// "Buy tokens" card opens the website's plan page in a Chrome Custom Tab /
-/// Safari sheet (like More → Buy More Products) — the browser's own page,
-/// not an app web view.
+/// Information only, identically on both platforms — no Stripe SDK, no card
+/// fields, no native payment sheet, no "Upgrade" button, and no purchase
+/// link/redirect of any kind anywhere in this file. Apple's Guideline 3.1.1
+/// (In-App Purchase) treats ANY button, link, or call-to-action — even
+/// plain, non-tappable text — that points a purchase of in-app functionality
+/// anywhere other than Apple's own In-App Purchase as a rejection; Netflix
+/// and Spotify's iOS apps don't even mention where to sign up for exactly
+/// this reason. Rather than have iOS and Android diverge, this screen simply
+/// never offers a way to buy anything on either platform until real StoreKit
+/// (iOS) and a matching purchase flow (Android) are built.
 class SubscriptionScreen extends ConsumerWidget {
   const SubscriptionScreen({super.key});
 
@@ -56,10 +52,6 @@ class SubscriptionScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(16),
           children: [
             _CurrentPlanCard(plan: plan, tokens: tokens, grant: grant),
-            if (ref.watch(isUsStorefrontProvider)) ...[
-              const SizedBox(height: HwSpace.s3),
-              const _BuyOnWebCard(),
-            ],
             const SizedBox(height: HwSpace.s4),
             const HwEyebrow('Compare plans'),
             switch (productsAsync) {
@@ -392,93 +384,6 @@ class _ProductCard extends StatelessWidget {
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-/// US storefront only: opens the website's plan page in the phone's browser
-/// to buy tokens or change plan. New credits reach the app through the live
-/// balance socket; pull down here to refresh the plan details.
-class _BuyOnWebCard extends ConsumerWidget {
-  const _BuyOnWebCard();
-
-  /// The website's login handoff, which saves this login as the website's
-  /// cookies and forwards to the plan page:
-  /// `<site>/auth/handoff?token=<Bearer access>&refreshToken=<Bearer refresh>`
-  /// `&orgId=<org>&redirect=/practitioner/subscription`.
-  /// Tokens carry the "Bearer " prefix, as the website's own login stores
-  /// them. Without a stored login it falls back to the plan page itself.
-  static Future<Uri> _planLink(WidgetRef ref) async {
-    final plan = Uri.parse(ApiEndpoints.practitionerSubscriptionUrl);
-    final storage = ref.read(secureStorageProvider);
-    final access = await storage.getAccessToken();
-    final refresh = await storage.getRefreshToken();
-    final org = ref.read(authStateProvider).selectedOrgId ??
-        await storage.getSelectedOrgId();
-    if (access == null || access.isEmpty) return plan;
-    String bearer(String t) => t.startsWith('Bearer ') ? t : 'Bearer $t';
-    return Uri(
-      scheme: plan.scheme,
-      host: plan.host,
-      port: plan.hasPort ? plan.port : null,
-      path: '/auth/handoff',
-      queryParameters: {
-        'token': bearer(access),
-        if (refresh != null && refresh.isNotEmpty)
-          'refreshToken': bearer(refresh),
-        if (org != null && org.isNotEmpty) 'orgId': org,
-        'redirect': plan.path.isEmpty ? '/practitioner/subscription' : plan.path,
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final p = RefPalette.of(context);
-    return HwCard(
-      accented: true,
-      onTap: () async {
-        final link = await _planLink(ref);
-        final ok = await launchUrl(
-          link,
-          // Same as More → Buy More Products: a Chrome Custom Tab /
-          // Safari sheet over the app.
-          mode: LaunchMode.inAppBrowserView,
-        );
-        if (!ok && context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't open the browser.")),
-          );
-        }
-      },
-      child: Row(
-        children: [
-          Icon(Icons.shopping_bag_outlined, color: p.copperInk),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Buy tokens or change plan',
-                  style: TextStyle(
-                    fontSize: HwType.md,
-                    fontWeight: FontWeight.w700,
-                    color: p.ink,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Opens your plan page on '
-                  '${Uri.parse(ApiEndpoints.practitionerSubscriptionUrl).host}',
-                  style: TextStyle(fontSize: HwType.eyebrow, color: p.ink3),
-                ),
-              ],
-            ),
-          ),
-          Icon(Icons.open_in_new_rounded, size: 20, color: p.ink3),
         ],
       ),
     );

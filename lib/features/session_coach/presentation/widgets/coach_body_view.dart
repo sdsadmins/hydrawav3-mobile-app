@@ -39,8 +39,9 @@ class CoachBodyView extends StatefulWidget {
   /// The Front/Back/Left/Right strip (off on the card's small view).
   final bool showViewSwitch;
 
-  /// Canvas colour (`#rrggbb`); the viewer's own navy when null.
-  final String? background;
+  /// The prototype's light stage (`.v6pg-3d`): a soft vertical gradient
+  /// behind the body (navy-dark in dark mode). Off = the viewer's own navy.
+  final bool lightStage;
 
   final CoachBodyController? controller;
 
@@ -52,7 +53,7 @@ class CoachBodyView extends StatefulWidget {
     this.onAction,
     this.showControls = true,
     this.showViewSwitch = true,
-    this.background,
+    this.lightStage = false,
     this.controller,
   });
 
@@ -127,9 +128,11 @@ class _CoachBodyViewState extends State<CoachBodyView> {
       if (raw is String && raw.contains('"ready":true')) {
         await _eval('window.setReadOnly(true)');
         await _eval('window.setPalette(false)');
-        if (widget.background != null) {
+        if (widget.lightStage) {
+          final dark =
+              mounted && Theme.of(context).brightness == Brightness.dark;
           await _eval(
-              "window.setBackground && window.setBackground('${widget.background}')");
+              "window.setBackground && window.setBackground('${stageCss(dark)}')");
         }
         if (!mounted) return;
         setState(() => _ready = true);
@@ -150,17 +153,28 @@ class _CoachBodyViewState extends State<CoachBodyView> {
     if (_ready) _eval("window.setView('$v')");
   }
 
-  Color get _bg {
-    final hex = widget.background;
-    if (hex == null || hex.length != 7) return const Color(0xFF0A192F);
-    return Color(int.parse('FF${hex.substring(1)}', radix: 16));
-  }
+  /// `.v6pg-3d` / `.v6mx-stage` background, as CSS for the viewer page.
+  static String stageCss(bool dark) => dark
+      ? 'linear-gradient(180deg,#1C2731,#111A21)'
+      : 'linear-gradient(180deg,#FBF7F2,#EFE3D8)';
+
+  /// The same gradient for the box behind the WebView (seen while loading).
+  static LinearGradient stageGradient(bool dark) => LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: dark
+            ? const [Color(0xFF1C2731), Color(0xFF111A21)]
+            : const [Color(0xFFFBF7F2), Color(0xFFEFE3D8)],
+      );
 
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    return ColoredBox(
-      color: _bg,
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return DecoratedBox(
+      decoration: widget.lightStage
+          ? BoxDecoration(gradient: stageGradient(dark))
+          : const BoxDecoration(color: Color(0xFF0A192F)),
       child: Stack(
         children: [
           if (_serverReady && _error == null)
@@ -247,25 +261,31 @@ class _CoachBodyViewState extends State<CoachBodyView> {
               Positioned(
                 right: 10,
                 top: 10,
+                // `.v6pg-3d .max`: 42px, 13 radius, 60% black, faint border,
+                // and the prototype's "open full" mark.
                 child: Semantics(
                   button: true,
                   label: widget.actionLabel,
                   child: Material(
-                    color: const Color(0xB3606060),
-                    borderRadius: BorderRadius.circular(14),
+                    color: const Color.fromRGBO(26, 26, 26, .6),
+                    borderRadius: BorderRadius.circular(13),
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(13),
                       onTap: widget.onAction,
                       child: Container(
-                        width: 44,
-                        height: 44,
+                        width: 42,
+                        height: 42,
+                        alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(13),
                           border: Border.all(
-                              color: Colors.white.withValues(alpha: .25)),
+                              color: const Color.fromRGBO(255, 255, 255, .24)),
                         ),
-                        child: Icon(widget.actionIcon,
-                            size: 20, color: Colors.white),
+                        child: widget.actionIcon == Icons.open_in_full_rounded
+                            ? const CustomPaint(
+                                size: Size(22, 22), painter: _MaxGlyph())
+                            : Icon(widget.actionIcon,
+                                size: 20, color: Colors.white),
                       ),
                     ),
                   ),
@@ -464,7 +484,7 @@ class _CoachBodyFullScreenState extends State<CoachBodyFullScreen> {
                               CoachBodyView(
                                 markers: set.markers,
                                 showControls: false,
-                                background: '#F4EEE8',
+                                lightStage: true,
                                 controller: _body,
                               ),
                         ),
@@ -735,4 +755,36 @@ class _PadText extends StatelessWidget {
       ),
     );
   }
+}
+
+/// `.v6pg-3d .max span`: a 15px rounded square outline with a corner bracket
+/// sticking out of its top-right.
+class _MaxGlyph extends CustomPainter {
+  const _MaxGlyph();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final white = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.square;
+    // the square, nudged down-left so the bracket fits in the box
+    const sq = Rect.fromLTWH(2, 5, 15, 15);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(sq.deflate(1), const Radius.circular(3)),
+        white);
+    // the bracket: 7px, its corner 5px outside the square's top-right
+    final x = sq.right + 5 - 1;
+    final y = sq.top - 5 + 1;
+    canvas.drawPath(
+        Path()
+          ..moveTo(x - 6, y)
+          ..lineTo(x, y)
+          ..lineTo(x, y + 6),
+        white);
+  }
+
+  @override
+  bool shouldRepaint(_MaxGlyph old) => false;
 }

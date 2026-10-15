@@ -15,6 +15,8 @@ import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../auth/presentation/widgets/org_switch_sheet.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../devices/presentation/providers/players_provider.dart'
+    show orgSportsProvider;
 import '../../../history/data/history_repository.dart';
 import '../../../notifications/presentation/providers/notification_provider.dart';
 import '../../../payments/presentation/widgets/token_balance_badge.dart';
@@ -350,7 +352,7 @@ class _GreetingBar extends ConsumerWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      DateFormat('EEEE, MMMM d').format(DateTime.now()),
+                      DateFormat('EEEE d MMMM').format(DateTime.now()),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -507,6 +509,16 @@ class _OrgChip extends ConsumerWidget {
     final p = RefPalette.of(context);
     final org = ref.watch(authStateProvider).selectedOrgName;
     if (org == null || org.isEmpty) return const SizedBox.shrink();
+    // "Gulf Coast Tarpons · Pro Football": the org's sport when it has one
+    // (or "N sports"); nothing extra for orgs without sports.
+    final sports = (ref.watch(orgSportsProvider).valueOrNull ?? const [])
+        .where((s) => s.isActive && s.name.trim().isNotEmpty)
+        .toList();
+    final label = switch (sports.length) {
+      0 => org,
+      1 => '$org · ${sports.first.name.trim()}',
+      _ => '$org · ${sports.length} sports',
+    };
 
     return HwPress(
       // Switching happens right here in a sheet — the practitioner stays on
@@ -517,12 +529,17 @@ class _OrgChip extends ConsumerWidget {
         child: Align(
           alignment: Alignment.centerLeft,
           widthFactor: 1,
+          // `.org-chip`: white, 44 tall, a faint line, copper dot
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: p.chipBg,
+              color: p.card,
               borderRadius: BorderRadius.circular(HwRadius.pill),
-              border: Border.all(color: p.line),
+              border: Border.all(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? p.line
+                      : const Color.fromRGBO(26, 26, 26, .08)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -531,17 +548,17 @@ class _OrgChip extends ConsumerWidget {
                   width: 7,
                   height: 7,
                   decoration:
-                      BoxDecoration(color: p.good, shape: BoxShape.circle),
+                      BoxDecoration(color: p.copper, shape: BoxShape.circle),
                 ),
                 const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    org,
+                    label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: HwType.cap,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                       color: p.ink2,
                     ),
                   ),

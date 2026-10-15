@@ -27,6 +27,8 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../widgets/plan_sheet.dart';
+import '../widgets/device_center_widgets.dart'
+    show SignalBars, signalOf, unitRssiProvider;
 import '../../../session_coach/presentation/widgets/session_coach_card.dart';
 import '../widgets/session_plan_widgets.dart';
 import '../../../musics/services/session_music_controller.dart';
@@ -556,7 +558,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
 
   /// Puts [protocolId] on one unit exactly as the unit's protocol picker does
   /// (also used by the Session Coach's "Use this set"). True on success.
-  Future<bool> _applyProtocolToDevice(String deviceId, String protocolId) async {
+  Future<bool> _applyProtocolToDevice(
+      String deviceId, String protocolId) async {
     try {
       final protocol =
           await ref.read(protocolDetailProvider(protocolId).future);
@@ -830,9 +833,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   }) {
     final enabled = !_starting && canStart;
     final client = ref.watch(selectedClientProvider);
-    final guest =
-        ref.watch(sessionClientModeProvider) == ClientMode.guest ||
-            client == null;
+    final guest = ref.watch(sessionClientModeProvider) == ClientMode.guest ||
+        client == null;
     final music = ref.watch(sessionMusicControllerProvider);
 
     var longest = Duration.zero;
@@ -1253,10 +1255,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final selectedProtocol = _selectedProtocolByDeviceId[data.id];
     final settings = _settingsByDeviceId[data.id];
     final showAdvanced = _showAdvancedByDeviceId[data.id] ?? false;
-    final canEditAdvanced = isIncluded &&
-        selectedProtocol != null &&
-        settings != null &&
-        !isBusy;
+    final canEditAdvanced =
+        isIncluded && selectedProtocol != null && settings != null && !isBusy;
     // A busy device has no protocol of its own to show (it's running one we
     // didn't launch) — leave the protocol row blank rather than prompting to
     // pick, which it can't do while in use.
@@ -1271,6 +1271,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
               ].join(' · ');
 
     return _SessionDeviceSetupCard(
+      bleId: data.transportLabel == 'BLE' ? data.id : null,
       icon: data.icon,
       transportLabel: data.transportLabel,
       name: data.name,
@@ -1301,19 +1302,17 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             }
           : null,
       onToggleInUse: (value) => _setDeviceIncluded(data.id, value),
-      onSelectProtocol:
-          isIncluded
-              ? () => _selectProtocolForDevice(data.id, unitName: data.name)
-              : null,
+      onSelectProtocol: isIncluded
+          ? () => _selectProtocolForDevice(data.id, unitName: data.name)
+          : null,
       onDisconnect: data.onDisconnect,
       // Locate is offered only for a BLE-connected unit (WiFi units locate
       // from the Devices Fleet screen). data.id is the BLE remoteId — the
       // exact key locateDeviceViaBle / bleRepository.isConnected use, and
       // works on iOS (UUID) as well as Android (MAC). One tap fires it
       // straight away (beep on) — no popup.
-      onLocate: data.transportLabel == 'BLE'
-          ? () => _sendLocate(data.id)
-          : null,
+      onLocate:
+          data.transportLabel == 'BLE' ? () => _sendLocate(data.id) : null,
       onToggleAdvanced: canEditAdvanced
           ? () {
               setState(() {
@@ -1541,1055 +1540,575 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         child: Stack(
           children: [
             Column(
-          children: [
-            Expanded(
-              child: CustomScrollView(
-                physics: const ClampingScrollPhysics(),
-                slivers: [
-                  // The Hydrawav3 wordmark over the plan (`.v5s-brand`).
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 14, 0, 4),
-                      child: Center(
-                        child: SizedBox(
-                          width: 236,
-                          child: ClipRect(
-                            child: Align(
-                              heightFactor: 0.62,
-                              child: SvgPicture.asset(
-                                Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? 'assets/images/Hydrawav3_White_Logo.svg'
-                                    : 'assets/images/Hydrawav3_Black_Logo.svg',
-                                fit: BoxFit.fitWidth,
+              children: [
+                Expanded(
+                  child: CustomScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    slivers: [
+                      // The Hydrawav3 wordmark over the plan (`.v5s-brand`).
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(0, 14, 0, 4),
+                          child: Center(
+                            child: SizedBox(
+                              width: 236,
+                              child: ClipRect(
+                                child: Align(
+                                  heightFactor: 0.62,
+                                  child: SvgPicture.asset(
+                                    Theme.of(context).brightness ==
+                                            Brightness.dark
+                                        ? 'assets/images/Hydrawav3_White_Logo.svg'
+                                        : 'assets/images/Hydrawav3_Black_Logo.svg',
+                                    fit: BoxFit.fitWidth,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: SafeArea(
-                      bottom: false,
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(side + 2, 12, side, 16),
-                        child: AnimatedEntrance(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                      SliverToBoxAdapter(
+                        child: SafeArea(
+                          bottom: false,
+                          child: Padding(
+                            padding:
+                                EdgeInsets.fromLTRB(side + 2, 12, side, 16),
+                            child: AnimatedEntrance(
+                              child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(top: 2),
-                                      child: Text(
-                                        'Session Plan',
-                                        style: TextStyle(
-                                          fontSize: 23,
-                                          fontWeight: FontWeight.w700,
-                                          color: ThemeConstants.textPrimary,
-                                          letterSpacing: -0.23,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 4),
-                                    child: TokenBalanceBadge(),
-                                  ),
-                                  // "Add a unit" now lives at the bottom of the
-                                  // "Your other units" scan section for everyone.
-                                  if (_showLegacyDeviceManager) ...[
-                                    const SizedBox(width: 10),
-                                    _HeaderBtn(
-                                      icon: Icons.add_rounded,
-                                      filled: true,
-                                      onTap: () => context
-                                          .push(RoutePaths.deviceRegister),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                'Connect your device and customize your protocols',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  height: 1.35,
-                                  color: PlanTones.sub(context),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (_showNewDesign) ...[
-                    SliverPadding(
-                      padding: EdgeInsets.fromLTRB(side, 0, side, 4),
-                      sliver: SliverToBoxAdapter(
-                        child: AnimatedEntrance(
-                          index: 0,
-                          // Live runs surface here (above Select User) rather
-                          // than in Session History — the banner collapses to
-                          // nothing when no session is running. Below it, the
-                          // v6 duo: Select User beside Find Pad Placements.
-                          child: Column(
-                            children: [
-                              const LiveSessionsBanner(),
-                              IntrinsicHeight(
-                                child: Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const Expanded(child: PlayersSection()),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: FindPadPlacementsCard(
-                                        onTap: () => context.go(
-                                            '${RoutePaths.assistant}?intent=pads'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              // v6 Session Coach: body → goal → the admin's
-                              // sets, applied to the units below.
-                              const SizedBox(height: 12),
-                              SessionCoachCard(
-                                units: [
-                                  for (final id in currentSessionDeviceIds)
-                                    CoachUnit(
-                                      id: id,
-                                      name: currentLabelsById[id] ?? 'Unit',
-                                      canLocate: target.transport ==
-                                          SessionTransport.ble,
-                                    ),
-                                ],
-                                onApply: _applyProtocolToDevice,
-                                onLocate: _sendLocate,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: EdgeInsets.fromLTRB(side, 14, side, 4),
-                      sliver: SliverToBoxAdapter(
-                        child: AnimatedEntrance(
-                          index: 2,
-                          child: Builder(builder: (context) {
-                            final p = RefPalette.of(context);
-                            // Build the REAL connected-device cards (same
-                            // callbacks as the standard manager) in the copper
-                            // reference design.
-                            final cards = <Widget>[];
-                            if (target.transport == SessionTransport.ble) {
-                              for (final device in bleConnectedDevices) {
-                                cards.add(Padding(
-                                  padding: EdgeInsets.only(
-                                      bottom: tablet ? 0 : 10),
-                                  child: _buildSessionSetupCard(
-                                    data: _DeviceSessionCardData(
-                                      id: device.id,
-                                      icon: Icons.bluetooth_rounded,
-                                      transportLabel: 'BLE',
-                                      name: device.name,
-                                      subtitle: isIos
-                                          ? 'Connected Device'
-                                          : 'MAC: ${device.id}',
-                                      onDisconnect: () async {
-                                        await _handleDeviceDisconnect(
-                                          deviceId: device.id,
-                                          disconnect: () async {
-                                            await ref
-                                                .read(bleRepositoryProvider)
-                                                .disconnectDevice(device.id);
-                                            ref
-                                                .read(sessionTargetProvider
-                                                    .notifier)
-                                                .ensureDeselected(device.id);
-                                          },
-                                        );
-                                      },
-                                    ),
-                                    currentRunIds: runIds,
-                                    currentLabelsById: currentLabelsById,
-                                    busyDeviceIds: inUseDeviceIds,
-                                    pendingStopDeviceIds:
-                                        pendingBackendStopDeviceIds,
-                                    refDesign: true,
-                                  ),
-                                ));
-                              }
-                            } else {
-                              for (final device in selectedWifiDevices) {
-                                cards.add(Padding(
-                                  padding: EdgeInsets.only(
-                                      bottom: tablet ? 0 : 10),
-                                  child: _buildSessionSetupCard(
-                                    data: _DeviceSessionCardData(
-                                      id: device.macAddress,
-                                      icon: Icons.wifi_rounded,
-                                      transportLabel: 'WiFi',
-                                      name: device.name,
-                                      subtitle: 'MAC: ${device.macAddress}',
-                                      onDisconnect: () async {
-                                        ref
-                                            .read(
-                                                sessionTargetProvider.notifier)
-                                            .toggleDevice(device.macAddress);
-                                        setState(() => _clearDeviceSessionState(
-                                            device.macAddress));
-                                      },
-                                    ),
-                                    currentRunIds: runIds,
-                                    currentLabelsById: currentLabelsById,
-                                    busyDeviceIds: inUseDeviceIds,
-                                    pendingStopDeviceIds:
-                                        pendingBackendStopDeviceIds,
-                                    refDesign: true,
-                                  ),
-                                ));
-                              }
-                            }
-
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // `.ry-ses-sechead`: eyebrow + mute, Auto-connect
-                                // and Connection pills.
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(2, 0, 2, 6),
-                                  child: Row(
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      const Expanded(
-                                        child: PlanEyebrow('Session setup'),
-                                      ),
-                                      // The Protocol Plus "2 beeps only"
-                                      // switch, as the v6 mute pill.
-                                      PlanPill(
-                                        icon: plusMute
-                                            ? Icons.volume_off_rounded
-                                            : Icons.volume_up_rounded,
-                                        on: plusMute,
-                                        tooltip: 'Protocol Plus: 2 beeps only',
-                                        onTap: () {
-                                          final next = !plusMute;
-                                          ref
-                                              .read(
-                                                  protocolPlusMuteEnabledProvider
-                                                      .notifier)
-                                              .setEnabled(next);
-                                          ScaffoldMessenger.of(context)
-                                            ..clearSnackBars()
-                                            ..showSnackBar(SnackBar(
-                                              duration:
-                                                  const Duration(seconds: 2),
-                                              content: Text(next
-                                                  ? 'Protocol Plus: 2 beeps only — muted between stages'
-                                                  : 'Protocol Plus: beeps at every stage change'),
-                                            ));
-                                        },
-                                      ),
-                                      const SizedBox(width: 6),
-                                      PlanPill(
-                                        label: 'Auto-connect',
-                                        on: autoConnectEnabled,
-                                        onTap: () => ref
-                                            .read(autoConnectEnabledProvider
-                                                .notifier)
-                                            .setEnabled(!autoConnectEnabled),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      PlanPill(
-                                        icon: target.transport ==
-                                                SessionTransport.wifi
-                                            ? Icons.wifi_rounded
-                                            : Icons.bluetooth_rounded,
-                                        label: target.transport ==
-                                                SessionTransport.wifi
-                                            ? 'WiFi'
-                                            : 'BLE',
-                                        caret: true,
-                                        onTap: () => _showConnectionSheet(
-                                            context, p, target.transport),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (cards.isEmpty)
-                                  PlanCard(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 16, vertical: 22),
-                                    child: Text(
-                                      target.transport == SessionTransport.ble
-                                          ? 'No Bluetooth units connected. Scan below or connect an available unit.'
-                                          : 'No WiFi units selected. Set up WiFi from the Device Center.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          height: 1.45,
-                                          color: p.ink2),
-                                    ),
-                                  )
-                                else if (tablet)
-                                  // Tablet: units two across
-                                  // (97-tablet §2b).
-                                  HwAutoGrid(gap: 14, children: cards)
-                                else
-                                  ...cards,
-                              ],
-                            );
-                          }),
-                        ),
-                      ),
-                    ),
-                    // Session music is the small round button above Start,
-                    // and the Protocol Plus mute is the pill in the Session
-                    // setup header (v6) — the card that held both is gone.
-                    SliverPadding(
-                      padding: EdgeInsets.fromLTRB(side, 8, side, 24),
-                      sliver: SliverToBoxAdapter(
-                        child: AnimatedEntrance(
-                          index: 4,
-                          // BLE → live scan + connect; WiFi → registered-unit
-                          // list with Select/Selected (same as the old flow).
-                          child: target.transport == SessionTransport.ble
-                              ? const ScanUnitsSection()
-                              : Builder(builder: (context) {
-                                  return _buildWifiUnits(
-                                    RefPalette.of(context),
-                                    wifiDeviceList,
-                                    target,
-                                    inUseDeviceIds,
-                                    deviceLimitReached,
-                                    deviceLimit,
-                                  );
-                                }),
-                        ),
-                      ),
-                    ),
-                  ],
-                  // University shows only the clean reference design above;
-                  // the standard device manager below is hidden for it.
-                  if (_showLegacyDeviceManager)
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      sliver: SliverToBoxAdapter(
-                        child: AnimatedEntrance(
-                          index: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: ThemeConstants.surface,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: ThemeConstants.border),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.20),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: _SegmentBtn(
-                                    active: target.transport ==
-                                        SessionTransport.ble,
-                                    icon: Icons.bluetooth_rounded,
-                                    label: 'Bluetooth',
-                                    onTap: () {
-                                      ref
-                                          .read(sessionTargetProvider.notifier)
-                                          .setTransport(
-                                              SessionTransport.ble, ref);
-                                      Future.delayed(
-                                        const Duration(milliseconds: 100),
-                                        () => ref.read(startScanProvider)(),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: _SegmentBtn(
-                                    active: target.transport ==
-                                        SessionTransport.wifi,
-                                    icon: Icons.wifi_rounded,
-                                    label: 'WiFi',
-                                    onTap: () => ref
-                                        .read(sessionTargetProvider.notifier)
-                                        .setTransport(
-                                            SessionTransport.wifi, ref),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (_showLegacyDeviceManager)
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      sliver: SliverToBoxAdapter(
-                        child: Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            if (target.transport == SessionTransport.ble) ...[
-                              Container(
-                                height: 34,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 6),
-                                decoration: BoxDecoration(
-                                  color: ThemeConstants.surface,
-                                  borderRadius: BorderRadius.circular(10),
-                                  border:
-                                      Border.all(color: ThemeConstants.border),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.verified_rounded,
-                                      size: 14,
-                                      color: hydrawaveOnly
-                                          ? ThemeConstants.accent
-                                          : ThemeConstants.textTertiary,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Hydrawav3',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: hydrawaveOnly
-                                            ? ThemeConstants.accent
-                                            : ThemeConstants.textSecondary,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    SizedBox(
-                                      height: 22,
-                                      child: Center(
-                                        child: Transform.scale(
-                                          scale: 0.68,
-                                          child: Switch.adaptive(
-                                            value: hydrawaveOnly,
-                                            activeColor: ThemeConstants.accent,
-                                            materialTapTargetSize:
-                                                MaterialTapTargetSize
-                                                    .shrinkWrap,
-                                            onChanged: (value) => ref
-                                                .read(_hydrawaveOnlyProvider
-                                                    .notifier)
-                                                .state = value,
+                                      Expanded(
+                                        child: Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 2),
+                                          child: Text(
+                                            'Session Plan',
+                                            style: TextStyle(
+                                              fontSize: 23,
+                                              fontWeight: FontWeight.w700,
+                                              color: ThemeConstants.textPrimary,
+                                              letterSpacing: -0.23,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (hydrawaveOnly)
-                                GestureDetector(
-                                  onTap: () async {
-                                    await ref
-                                        .read(
-                                            autoConnectEnabledProvider.notifier)
-                                        .setEnabled(!autoConnectEnabled);
-                                    if (!autoConnectEnabled) {
-                                      await _connectAllHydrawaveDevices(
-                                        bleScanResultsAsync:
-                                            bleScanResultsAsync,
-                                        hydrawaveOnly: hydrawaveOnly,
-                                        connectingIds: connectingIds,
-                                      );
-                                    }
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: autoConnectEnabled
-                                          ? ThemeConstants.accent
-                                          : ThemeConstants.surface,
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                        color: autoConnectEnabled
-                                            ? ThemeConstants.accent
-                                            : ThemeConstants.border,
+                                      const SizedBox(width: 10),
+                                      const Padding(
+                                        padding: EdgeInsets.only(top: 4),
+                                        child: TokenBalanceBadge(),
                                       ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.usb_rounded,
-                                          size: 16,
-                                          color: autoConnectEnabled
-                                              ? ThemeConstants.textPrimary
-                                              : ThemeConstants.textSecondary,
+                                      // "Add a unit" now lives at the bottom of the
+                                      // "Your other units" scan section for everyone.
+                                      if (_showLegacyDeviceManager) ...[
+                                        const SizedBox(width: 10),
+                                        _HeaderBtn(
+                                          icon: Icons.add_rounded,
+                                          filled: true,
+                                          onTap: () => context
+                                              .push(RoutePaths.deviceRegister),
                                         ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Auto-connect',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: autoConnectEnabled
-                                                ? ThemeConstants.textPrimary
-                                                : ThemeConstants.textSecondary,
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    'Connect your device and customize your protocols',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      height: 1.35,
+                                      color: PlanTones.sub(context),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (_showNewDesign) ...[
+                        SliverPadding(
+                          padding: EdgeInsets.fromLTRB(side, 0, side, 4),
+                          sliver: SliverToBoxAdapter(
+                            child: AnimatedEntrance(
+                              index: 0,
+                              // Live runs surface here (above Select User) rather
+                              // than in Session History — the banner collapses to
+                              // nothing when no session is running. Below it, the
+                              // v6 duo: Select User beside Find Pad Placements.
+                              child: Column(
+                                children: [
+                                  const LiveSessionsBanner(),
+                                  IntrinsicHeight(
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        const Expanded(child: PlayersSection()),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: FindPadPlacementsCard(
+                                            onTap: () => context.go(
+                                                '${RoutePaths.assistant}?intent=pads'),
+                                            // tablet "PICK A FOCUS": the same
+                                            // recovery deep link the Hub uses
+                                            onFocus: (goal) => context.go(
+                                                '${RoutePaths.assistant}?intent=recovery&goal=$goal'),
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                ),
-                            ],
-                            _ScanButton(
-                              visible: target.transport == SessionTransport.ble,
-                              onTap: () => ref.read(startScanProvider)(),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  if (_showLegacyDeviceManager &&
-                      target.transport == SessionTransport.wifi) ...[
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      sliver: const SliverToBoxAdapter(
-                        child: AnimatedEntrance(
-                          index: 0,
-                          child: SectionHeader(title: 'Session Setup'),
-                        ),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                      sliver: (() {
-                        if (wifiFirstLoading) {
-                          return const SliverToBoxAdapter(
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                        if (wifiAsync.hasError && !wifiAsync.hasValue) {
-                          return SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Text(
-                                'Failed to load WiFi devices: ${wifiAsync.error}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: ThemeConstants.textSecondary,
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                        final list = wifiDeviceList;
-                        if (list.isEmpty) {
-                          return SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 8, bottom: 8),
-                              child: Text(
-                                'No registered devices.',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: ThemeConstants.textSecondary,
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-
-                        if (selectedWifiDevices.isEmpty) {
-                          return const SliverToBoxAdapter(
-                            child: _EmptyDashed(
-                              icon: Icons.wifi_rounded,
-                              title: 'No devices selected',
-                              subtitle:
-                                  'Select a WiFi device below to configure it.',
-                            ),
-                          );
-                        }
-
-                        return SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (ctx, index) {
-                              final device = selectedWifiDevices[index];
-                              return AnimatedEntrance(
-                                index: index + 1,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: _buildSessionSetupCard(
-                                    data: _DeviceSessionCardData(
-                                      id: device.macAddress,
-                                      icon: Icons.wifi_rounded,
-                                      transportLabel: 'WiFi',
-                                      name: device.name,
-                                      subtitle: 'MAC: ${device.macAddress}',
-                                      onDisconnect: () async {
-                                        await _handleDeviceDisconnect(
-                                          deviceId: device.macAddress,
-                                          disconnect: () async {
-                                            await ref
-                                                .read(bleRepositoryProvider)
-                                                .disconnectDevice(
-                                                    device.macAddress);
-                                            ref
-                                                .read(sessionTargetProvider
-                                                    .notifier)
-                                                .ensureDeselected(
-                                                    device.macAddress);
-                                          },
-                                        );
-                                      },
-                                    ),
-                                    currentRunIds: runIds,
-                                    currentLabelsById: currentLabelsById,
-                                    busyDeviceIds: inUseDeviceIds,
-                                    pendingStopDeviceIds:
-                                        pendingBackendStopDeviceIds,
+                                  // v6 Session Coach: body → goal → the admin's
+                                  // sets, applied to the units below.
+                                  const SizedBox(height: 12),
+                                  SessionCoachCard(
+                                    units: [
+                                      for (final id in currentSessionDeviceIds)
+                                        CoachUnit(
+                                          id: id,
+                                          name: currentLabelsById[id] ?? 'Unit',
+                                          canLocate: target.transport ==
+                                              SessionTransport.ble,
+                                        ),
+                                    ],
+                                    onApply: _applyProtocolToDevice,
+                                    onLocate: _sendLocate,
                                   ),
-                                ),
-                              );
-                            },
-                            childCount: selectedWifiDevices.length,
-                          ),
-                        );
-                      })(),
-                    ),
-                    if (selectedWifiDevices.isNotEmpty)
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                        sliver: SliverToBoxAdapter(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildStartSessionButton(
-                                runIds: runIds,
-                                transport: target.transport,
-                                canStart: canStart,
+                                ],
                               ),
-                            ],
+                            ),
                           ),
                         ),
-                      ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      sliver: const SliverToBoxAdapter(
-                        child: SectionHeader(title: 'Available WiFi Devices'),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                      sliver: (() {
-                        if (wifiFirstLoading) {
-                          return const SliverToBoxAdapter(
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                        if (wifiAsync.hasError && !wifiAsync.hasValue) {
-                          return SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Text(
-                                'Failed to load WiFi devices: ${wifiAsync.error}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: ThemeConstants.textSecondary,
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                        final list = wifiDeviceList;
-                        if (list.isEmpty) {
-                          return const SliverToBoxAdapter(
-                            child: _EmptyDashed(
-                              icon: Icons.wifi_rounded,
-                              title: 'No registered devices',
-                              subtitle: 'Make sure your device is turned on',
-                            ),
-                          );
-                        }
-
-                        return SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (ctx, index) {
-                              final device = list[index];
-                              // Running in ANY live session — this phone's OWN run, the
-                              // web, or another phone — counts as "In use". "In use"
-                              // wins over "Selected" so a device this app started also
-                              // shows the badge (not a still-selectable "Selected").
-                              final inUse =
-                                  inUseDeviceIds.contains(device.macAddress);
-                              final pendingStop = !inUse &&
-                                  pendingBackendStopDeviceIds
-                                      .contains(device.macAddress);
-                              final selected = !inUse &&
-                                  !pendingStop &&
-                                  target.filteredDeviceIds
-                                      .contains(device.macAddress);
-                              return AnimatedEntrance(
-                                index: index + 1,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: _AvailableDeviceRow(
-                                    icon: Icons.wifi_rounded,
-                                    name: device.name,
-                                    idText: device.macAddress,
-                                    buttonLabel:
-                                        selected ? 'Selected' : 'Select',
-                                    isInUse: inUse,
-                                    isPendingStop: pendingStop,
-                                    onTap: pendingStop
-                                        ? () => _openPendingStopSession(
-                                            device.macAddress)
-                                        : inUse
-                                            ? () => _handleInUseTap(
-                                                device.macAddress)
-                                            : () {
-                                                // Enforce the plan's concurrent-device
-                                                // limit when adding a device (deselect is
-                                                // always allowed).
-                                                if (!selected &&
-                                                    deviceLimitReached) {
-                                                  ScaffoldMessenger.of(context)
-                                                      .showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        'Your plan allows $deviceLimit device(s) at a time. '
-                                                        'Stop a running device or upgrade your plan to run more.',
-                                                      ),
-                                                    ),
-                                                  );
-                                                  return;
-                                                }
+                        SliverPadding(
+                          padding: EdgeInsets.fromLTRB(side, 14, side, 4),
+                          sliver: SliverToBoxAdapter(
+                            child: AnimatedEntrance(
+                              index: 2,
+                              child: Builder(builder: (context) {
+                                final p = RefPalette.of(context);
+                                // Build the REAL connected-device cards (same
+                                // callbacks as the standard manager) in the copper
+                                // reference design.
+                                final cards = <Widget>[];
+                                if (target.transport == SessionTransport.ble) {
+                                  for (final device in bleConnectedDevices) {
+                                    cards.add(Padding(
+                                      padding: EdgeInsets.only(
+                                          bottom: tablet ? 0 : 10),
+                                      child: _buildSessionSetupCard(
+                                        data: _DeviceSessionCardData(
+                                          id: device.id,
+                                          icon: Icons.bluetooth_rounded,
+                                          transportLabel: 'BLE',
+                                          name: device.name,
+                                          subtitle: isIos
+                                              ? 'Connected Device'
+                                              : 'MAC: ${device.id}',
+                                          onDisconnect: () async {
+                                            await _handleDeviceDisconnect(
+                                              deviceId: device.id,
+                                              disconnect: () async {
+                                                await ref
+                                                    .read(bleRepositoryProvider)
+                                                    .disconnectDevice(
+                                                        device.id);
                                                 ref
                                                     .read(sessionTargetProvider
                                                         .notifier)
-                                                    .toggleDevice(
-                                                        device.macAddress);
-                                                setState(() {
-                                                  if (selected) {
-                                                    _clearDeviceSessionState(
-                                                        device.macAddress);
-                                                  } else {
-                                                    _runDeviceIds
-                                                        .add(device.macAddress);
-                                                    _excludedDeviceIds.remove(
-                                                        device.macAddress);
-                                                  }
-                                                });
+                                                    .ensureDeselected(
+                                                        device.id);
                                               },
-                                  ),
-                                ),
-                              );
-                            },
-                            childCount: list.length,
-                          ),
-                        );
-                      })(),
-                    ),
-                  ],
-                  if (_showLegacyDeviceManager &&
-                      target.transport == SessionTransport.ble) ...[
-                    pairedDevices.when(
-                      data: (devices) {
-                        final scanResults = ref.watch(bleScanResultsProvider);
-                        final connectedDevices =
-                            devices.cast<PairedDevice>().where((d) {
-                          if (provisioningIds.contains(d.id)) return false;
-                          final state =
-                              ref.watch(bleDeviceStatusProvider(d.id));
-                          return state == BleConnectionStatus.connected;
-                        }).toList();
+                                            );
+                                          },
+                                        ),
+                                        currentRunIds: runIds,
+                                        currentLabelsById: currentLabelsById,
+                                        busyDeviceIds: inUseDeviceIds,
+                                        pendingStopDeviceIds:
+                                            pendingBackendStopDeviceIds,
+                                        refDesign: true,
+                                      ),
+                                    ));
+                                  }
+                                } else {
+                                  for (final device in selectedWifiDevices) {
+                                    cards.add(Padding(
+                                      padding: EdgeInsets.only(
+                                          bottom: tablet ? 0 : 10),
+                                      child: _buildSessionSetupCard(
+                                        data: _DeviceSessionCardData(
+                                          id: device.macAddress,
+                                          icon: Icons.wifi_rounded,
+                                          transportLabel: 'WiFi',
+                                          name: device.name,
+                                          subtitle: 'MAC: ${device.macAddress}',
+                                          onDisconnect: () async {
+                                            ref
+                                                .read(sessionTargetProvider
+                                                    .notifier)
+                                                .toggleDevice(
+                                                    device.macAddress);
+                                            setState(() =>
+                                                _clearDeviceSessionState(
+                                                    device.macAddress));
+                                          },
+                                        ),
+                                        currentRunIds: runIds,
+                                        currentLabelsById: currentLabelsById,
+                                        busyDeviceIds: inUseDeviceIds,
+                                        pendingStopDeviceIds:
+                                            pendingBackendStopDeviceIds,
+                                        refDesign: true,
+                                      ),
+                                    ));
+                                  }
+                                }
 
-                        return SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                          sliver: SliverList(
-                            delegate: SliverChildListDelegate([
-                              const SectionHeader(title: 'Session Setup'),
-                              if (connectedDevices.isEmpty)
-                                const _EmptyDashed(
-                                  icon: Icons.bluetooth_rounded,
-                                  title: 'No devices connected',
-                                  subtitle:
-                                      'Connect a Bluetooth device to configure protocol and session settings.',
-                                ),
-                              ...connectedDevices.asMap().entries.map((entry) {
-                                final index = entry.key;
-                                final device = entry.value;
-                                return AnimatedEntrance(
-                                  index: index + 1,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 10),
-                                    child: _buildSessionSetupCard(
-                                      data: _DeviceSessionCardData(
-                                        id: device.id,
-                                        icon: Icons.bluetooth_rounded,
-                                        transportLabel: 'BLE',
-                                        name: device.name,
-                                        subtitle: isIos
-                                            ? 'Connected Device'
-                                            : 'MAC: ${device.id}',
-                                        onDisconnect: () async {
-                                          await _handleDeviceDisconnect(
-                                            deviceId: device.id,
-                                            disconnect: () async {
-                                              await ref
-                                                  .read(bleRepositoryProvider)
-                                                  .disconnectDevice(device.id);
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // `.ry-ses-sechead`: eyebrow + mute, Auto-connect
+                                    // and Connection pills.
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.fromLTRB(2, 0, 2, 6),
+                                      child: Row(
+                                        children: [
+                                          const Expanded(
+                                            child: PlanEyebrow('Session setup'),
+                                          ),
+                                          // The Protocol Plus "2 beeps only"
+                                          // switch, as the v6 mute pill.
+                                          PlanPill(
+                                            icon: plusMute
+                                                ? Icons.volume_off_rounded
+                                                : Icons.volume_up_rounded,
+                                            on: plusMute,
+                                            tooltip:
+                                                'Protocol Plus: 2 beeps only',
+                                            onTap: () {
+                                              final next = !plusMute;
                                               ref
-                                                  .read(sessionTargetProvider
-                                                      .notifier)
-                                                  .ensureDeselected(device.id);
+                                                  .read(
+                                                      protocolPlusMuteEnabledProvider
+                                                          .notifier)
+                                                  .setEnabled(next);
+                                              ScaffoldMessenger.of(context)
+                                                ..clearSnackBars()
+                                                ..showSnackBar(SnackBar(
+                                                  duration: const Duration(
+                                                      seconds: 2),
+                                                  content: Text(next
+                                                      ? 'Protocol Plus: 2 beeps only — muted between stages'
+                                                      : 'Protocol Plus: beeps at every stage change'),
+                                                ));
                                             },
+                                          ),
+                                          const SizedBox(width: 6),
+                                          PlanPill(
+                                            label: 'Auto-connect',
+                                            on: autoConnectEnabled,
+                                            onTap: () => ref
+                                                .read(autoConnectEnabledProvider
+                                                    .notifier)
+                                                .setEnabled(
+                                                    !autoConnectEnabled),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          PlanPill(
+                                            icon: target.transport ==
+                                                    SessionTransport.wifi
+                                                ? Icons.wifi_rounded
+                                                : Icons.bluetooth_rounded,
+                                            label: target.transport ==
+                                                    SessionTransport.wifi
+                                                ? 'WiFi'
+                                                : 'BLE',
+                                            caret: true,
+                                            onTap: () => _showConnectionSheet(
+                                                context, p, target.transport),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (cards.isEmpty)
+                                      PlanCard(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 16, vertical: 22),
+                                        child: Text(
+                                          target.transport ==
+                                                  SessionTransport.ble
+                                              ? 'No Bluetooth units connected. Scan below or connect an available unit.'
+                                              : 'No WiFi units selected. Set up WiFi from the Device Center.',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                              fontSize: 13,
+                                              height: 1.45,
+                                              color: p.ink2),
+                                        ),
+                                      )
+                                    else if (tablet)
+                                      // Tablet: units two across
+                                      // (97-tablet §2b).
+                                      HwAutoGrid(gap: 14, children: cards)
+                                    else
+                                      ...cards,
+                                  ],
+                                );
+                              }),
+                            ),
+                          ),
+                        ),
+                        // Session music is the small round button above Start,
+                        // and the Protocol Plus mute is the pill in the Session
+                        // setup header (v6) — the card that held both is gone.
+                        SliverPadding(
+                          padding: EdgeInsets.fromLTRB(side, 8, side, 24),
+                          sliver: SliverToBoxAdapter(
+                            child: AnimatedEntrance(
+                              index: 4,
+                              // BLE → live scan + connect; WiFi → registered-unit
+                              // list with Select/Selected (same as the old flow).
+                              child: target.transport == SessionTransport.ble
+                                  ? const ScanUnitsSection()
+                                  : Builder(builder: (context) {
+                                      return _buildWifiUnits(
+                                        RefPalette.of(context),
+                                        wifiDeviceList,
+                                        target,
+                                        inUseDeviceIds,
+                                        deviceLimitReached,
+                                        deviceLimit,
+                                      );
+                                    }),
+                            ),
+                          ),
+                        ),
+                      ],
+                      // University shows only the clean reference design above;
+                      // the standard device manager below is hidden for it.
+                      if (_showLegacyDeviceManager)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          sliver: SliverToBoxAdapter(
+                            child: AnimatedEntrance(
+                              index: 0,
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: ThemeConstants.surface,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border:
+                                      Border.all(color: ThemeConstants.border),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color:
+                                          Colors.black.withValues(alpha: 0.20),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: _SegmentBtn(
+                                        active: target.transport ==
+                                            SessionTransport.ble,
+                                        icon: Icons.bluetooth_rounded,
+                                        label: 'Bluetooth',
+                                        onTap: () {
+                                          ref
+                                              .read(sessionTargetProvider
+                                                  .notifier)
+                                              .setTransport(
+                                                  SessionTransport.ble, ref);
+                                          Future.delayed(
+                                            const Duration(milliseconds: 100),
+                                            () => ref.read(startScanProvider)(),
                                           );
                                         },
                                       ),
-                                      currentRunIds: runIds,
-                                      currentLabelsById: currentLabelsById,
-                                      busyDeviceIds: inUseDeviceIds,
-                                      pendingStopDeviceIds:
-                                          pendingBackendStopDeviceIds,
                                     ),
-                                  ),
-                                );
-                              }),
-                              const SizedBox(height: 16),
-                              if (connectedDevices.isNotEmpty) ...[
-                                _buildStartSessionButton(
-                                  runIds: runIds,
-                                  transport: target.transport,
-                                  canStart: canStart,
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: _SegmentBtn(
+                                        active: target.transport ==
+                                            SessionTransport.wifi,
+                                        icon: Icons.wifi_rounded,
+                                        label: 'WiFi',
+                                        onTap: () => ref
+                                            .read(
+                                                sessionTargetProvider.notifier)
+                                            .setTransport(
+                                                SessionTransport.wifi, ref),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 16),
-                              ],
-                              const SectionHeader(
-                                  title: 'Available Bluetooth Devices'),
-                              scanResults.when(
-                                data: (list) {
-                                  if (list.isEmpty)
-                                    return const SizedBox(height: 0);
-                                  final byId = <String, ScanResult>{};
-                                  for (final result in list) {
-                                    byId.putIfAbsent(
-                                      result.device.remoteId.str,
-                                      () => result,
-                                    );
-                                  }
-
-                                  final connectedIdSet =
-                                      connectedDevices.map((d) => d.id).toSet();
-                                  final deduped = byId.values
-                                      .where((result) => !connectedIdSet
-                                          .contains(result.device.remoteId.str))
-                                      .where((result) {
-                                    if (!hydrawaveOnly) return true;
-                                    final expected =
-                                        BleConstants.preferredServiceUuid;
-                                    if (expected == null || expected.isEmpty) {
-                                      return false;
-                                    }
-                                    final targetUuid =
-                                        BleConstants.normalizeUuid(expected);
-                                    return result.advertisementData.serviceUuids
-                                        .any(
-                                      (uuid) =>
-                                          BleConstants.normalizeUuid(
-                                              uuid.str) ==
-                                          targetUuid,
-                                    );
-                                  }).toList();
-
-                                  if (deduped.isEmpty) {
-                                    return const _EmptyDashed(
-                                      icon: Icons.bluetooth_rounded,
-                                      title: 'No devices found',
-                                      subtitle:
-                                          'Make sure your device is turned on',
-                                    );
-                                  }
-
-                                  return Column(
-                                    children:
-                                        deduped.asMap().entries.map((entry) {
-                                      final index = entry.key;
-                                      final result = entry.value;
-                                      final name =
-                                          result.device.platformName.isNotEmpty
-                                              ? result.device.platformName
-                                              : 'Unknown';
-                                      final id = result.device.remoteId.str;
-                                      final strictEnabled = BleConstants
-                                              .strictHydraGattProfile &&
-                                          BleConstants.preferredServiceUuid !=
-                                              null;
-                                      final targetService = strictEnabled
-                                          ? BleConstants.normalizeUuid(
-                                              BleConstants
-                                                  .preferredServiceUuid!,
-                                            )
-                                          : null;
-                                      final advertisedServices = result
-                                          .advertisementData.serviceUuids
-                                          .map((uuid) =>
-                                              BleConstants.normalizeUuid(
-                                                  uuid.str));
-                                      final uuidAllowed = !strictEnabled ||
-                                          advertisedServices
-                                              .contains(targetService);
-
-                                      return AnimatedEntrance(
-                                        index: index + 1,
-                                        child: Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 10),
-                                          child: _AvailableDeviceRow(
-                                            icon: Icons.bluetooth_rounded,
-                                            name: name,
-                                            idText: isIos ? '' : id,
-                                            buttonLabel:
-                                                connectingIds.contains(id)
-                                                    ? 'Connecting...'
-                                                    : 'Connect',
-                                            isLoading:
-                                                connectingIds.contains(id),
-                                            onTap: () async {
-                                              if (connectingIds.contains(id))
-                                                return;
-                                              // Enforce the plan's concurrent-device
-                                              // limit before connecting another device.
-                                              if (deviceLimitReached) {
-                                                ScaffoldMessenger.of(context)
-                                                    .showSnackBar(
-                                                  SnackBar(
-                                                    content: Text(
-                                                      'Your plan allows $deviceLimit device(s) at a time. '
-                                                      'Stop a device or upgrade your plan to run more.',
-                                                    ),
-                                                  ),
-                                                );
-                                                return;
-                                              }
-                                              if (!uuidAllowed) {
-                                                final expectedUuid =
-                                                    BleConstants
-                                                        .preferredServiceUuid;
-                                                ScaffoldMessenger.of(context)
-                                                    .showSnackBar(
-                                                  SnackBar(
-                                                    content: Text(
-                                                      expectedUuid == null
-                                                          ? 'Cannot connect: this device does not match the required Hydrawav profile.'
-                                                          : 'Cannot connect: this device does not advertise the required Hydrawav service.',
-                                                    ),
-                                                  ),
-                                                );
-                                                return;
-                                              }
-
-                                              ref
-                                                  .read(bleConnectingIdsProvider
-                                                      .notifier)
-                                                  .state = {
-                                                ...connectingIds,
-                                                id
-                                              };
-                                              final messenger =
-                                                  ScaffoldMessenger.of(context);
-
-                                              try {
-                                                final ok = await ref
-                                                    .read(bleRepositoryProvider)
-                                                    .connectDevice(
-                                                        result.device);
-
-                                                if (ok) {
-                                                  await Future<void>.delayed(
-                                                    const Duration(
-                                                        milliseconds: 150),
-                                                  );
-                                                  ref
-                                                      .read(
-                                                        sessionTargetProvider
-                                                            .notifier,
-                                                      )
-                                                      .ensureSelected(id);
-                                                  if (!mounted) return;
-                                                  setState(() {
-                                                    _runDeviceIds.add(id);
-                                                    _excludedDeviceIds
-                                                        .remove(id);
-                                                  });
-                                                }
-
-                                                if (!context.mounted) return;
-                                                messenger.showSnackBar(
-                                                  SnackBar(
-                                                    content: Text(
-                                                      ok
-                                                          ? 'Connected to $name'
-                                                          : 'Failed to connect to $name',
-                                                    ),
-                                                  ),
-                                                );
-                                              } finally {
-                                                final current = ref.read(
-                                                    bleConnectingIdsProvider);
-                                                ref
-                                                    .read(
-                                                        bleConnectingIdsProvider
-                                                            .notifier)
-                                                    .state = {...current}
-                                                  ..remove(id);
-                                              }
-                                            },
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (_showLegacyDeviceManager)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          sliver: SliverToBoxAdapter(
+                            child: Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                if (target.transport ==
+                                    SessionTransport.ble) ...[
+                                  Container(
+                                    height: 34,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6),
+                                    decoration: BoxDecoration(
+                                      color: ThemeConstants.surface,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                          color: ThemeConstants.border),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.verified_rounded,
+                                          size: 14,
+                                          color: hydrawaveOnly
+                                              ? ThemeConstants.accent
+                                              : ThemeConstants.textTertiary,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Hydrawav3',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: hydrawaveOnly
+                                                ? ThemeConstants.accent
+                                                : ThemeConstants.textSecondary,
                                           ),
                                         ),
-                                      );
-                                    }).toList(),
-                                  );
-                                },
-                                loading: () => const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 16),
+                                        const SizedBox(width: 4),
+                                        SizedBox(
+                                          height: 22,
+                                          child: Center(
+                                            child: Transform.scale(
+                                              scale: 0.68,
+                                              child: Switch.adaptive(
+                                                value: hydrawaveOnly,
+                                                activeColor:
+                                                    ThemeConstants.accent,
+                                                materialTapTargetSize:
+                                                    MaterialTapTargetSize
+                                                        .shrinkWrap,
+                                                onChanged: (value) => ref
+                                                    .read(_hydrawaveOnlyProvider
+                                                        .notifier)
+                                                    .state = value,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (hydrawaveOnly)
+                                    GestureDetector(
+                                      onTap: () async {
+                                        await ref
+                                            .read(autoConnectEnabledProvider
+                                                .notifier)
+                                            .setEnabled(!autoConnectEnabled);
+                                        if (!autoConnectEnabled) {
+                                          await _connectAllHydrawaveDevices(
+                                            bleScanResultsAsync:
+                                                bleScanResultsAsync,
+                                            hydrawaveOnly: hydrawaveOnly,
+                                            connectingIds: connectingIds,
+                                          );
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: autoConnectEnabled
+                                              ? ThemeConstants.accent
+                                              : ThemeConstants.surface,
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: autoConnectEnabled
+                                                ? ThemeConstants.accent
+                                                : ThemeConstants.border,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.usb_rounded,
+                                              size: 16,
+                                              color: autoConnectEnabled
+                                                  ? ThemeConstants.textPrimary
+                                                  : ThemeConstants
+                                                      .textSecondary,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'Auto-connect',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: autoConnectEnabled
+                                                    ? ThemeConstants.textPrimary
+                                                    : ThemeConstants
+                                                        .textSecondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                                _ScanButton(
+                                  visible:
+                                      target.transport == SessionTransport.ble,
+                                  onTap: () => ref.read(startScanProvider)(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      if (_showLegacyDeviceManager &&
+                          target.transport == SessionTransport.wifi) ...[
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          sliver: const SliverToBoxAdapter(
+                            child: AnimatedEntrance(
+                              index: 0,
+                              child: SectionHeader(title: 'Session Setup'),
+                            ),
+                          ),
+                        ),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                          sliver: (() {
+                            if (wifiFirstLoading) {
+                              return const SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
                                   child: Center(
                                     child: SizedBox(
                                       width: 20,
@@ -2599,55 +2118,594 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     ),
                                   ),
                                 ),
-                                error: (e, _) => Padding(
+                              );
+                            }
+                            if (wifiAsync.hasError && !wifiAsync.hasValue) {
+                              return SliverToBoxAdapter(
+                                child: Padding(
                                   padding:
-                                      const EdgeInsets.symmetric(vertical: 16),
+                                      const EdgeInsets.symmetric(vertical: 12),
                                   child: Text(
-                                    'Scan error: $e',
+                                    'Failed to load WiFi devices: ${wifiAsync.error}',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: ThemeConstants.textSecondary,
                                     ),
                                   ),
                                 ),
+                              );
+                            }
+                            final list = wifiDeviceList;
+                            if (list.isEmpty) {
+                              return SliverToBoxAdapter(
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.only(top: 8, bottom: 8),
+                                  child: Text(
+                                    'No registered devices.',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: ThemeConstants.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+
+                            if (selectedWifiDevices.isEmpty) {
+                              return const SliverToBoxAdapter(
+                                child: _EmptyDashed(
+                                  icon: Icons.wifi_rounded,
+                                  title: 'No devices selected',
+                                  subtitle:
+                                      'Select a WiFi device below to configure it.',
+                                ),
+                              );
+                            }
+
+                            return SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (ctx, index) {
+                                  final device = selectedWifiDevices[index];
+                                  return AnimatedEntrance(
+                                    index: index + 1,
+                                    child: Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 10),
+                                      child: _buildSessionSetupCard(
+                                        data: _DeviceSessionCardData(
+                                          id: device.macAddress,
+                                          icon: Icons.wifi_rounded,
+                                          transportLabel: 'WiFi',
+                                          name: device.name,
+                                          subtitle: 'MAC: ${device.macAddress}',
+                                          onDisconnect: () async {
+                                            await _handleDeviceDisconnect(
+                                              deviceId: device.macAddress,
+                                              disconnect: () async {
+                                                await ref
+                                                    .read(bleRepositoryProvider)
+                                                    .disconnectDevice(
+                                                        device.macAddress);
+                                                ref
+                                                    .read(sessionTargetProvider
+                                                        .notifier)
+                                                    .ensureDeselected(
+                                                        device.macAddress);
+                                              },
+                                            );
+                                          },
+                                        ),
+                                        currentRunIds: runIds,
+                                        currentLabelsById: currentLabelsById,
+                                        busyDeviceIds: inUseDeviceIds,
+                                        pendingStopDeviceIds:
+                                            pendingBackendStopDeviceIds,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                childCount: selectedWifiDevices.length,
                               ),
-                            ]),
+                            );
+                          })(),
+                        ),
+                        if (selectedWifiDevices.isNotEmpty)
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                            sliver: SliverToBoxAdapter(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _buildStartSessionButton(
+                                    runIds: runIds,
+                                    transport: target.transport,
+                                    canStart: canStart,
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        );
-                      },
-                      loading: () => const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: Center(
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          sliver: const SliverToBoxAdapter(
+                            child:
+                                SectionHeader(title: 'Available WiFi Devices'),
+                          ),
+                        ),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                          sliver: (() {
+                            if (wifiFirstLoading) {
+                              return const SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  child: Center(
+                                    child: SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+                            if (wifiAsync.hasError && !wifiAsync.hasValue) {
+                              return SliverToBoxAdapter(
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 12),
+                                  child: Text(
+                                    'Failed to load WiFi devices: ${wifiAsync.error}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: ThemeConstants.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+                            final list = wifiDeviceList;
+                            if (list.isEmpty) {
+                              return const SliverToBoxAdapter(
+                                child: _EmptyDashed(
+                                  icon: Icons.wifi_rounded,
+                                  title: 'No registered devices',
+                                  subtitle:
+                                      'Make sure your device is turned on',
+                                ),
+                              );
+                            }
+
+                            return SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (ctx, index) {
+                                  final device = list[index];
+                                  // Running in ANY live session — this phone's OWN run, the
+                                  // web, or another phone — counts as "In use". "In use"
+                                  // wins over "Selected" so a device this app started also
+                                  // shows the badge (not a still-selectable "Selected").
+                                  final inUse = inUseDeviceIds
+                                      .contains(device.macAddress);
+                                  final pendingStop = !inUse &&
+                                      pendingBackendStopDeviceIds
+                                          .contains(device.macAddress);
+                                  final selected = !inUse &&
+                                      !pendingStop &&
+                                      target.filteredDeviceIds
+                                          .contains(device.macAddress);
+                                  return AnimatedEntrance(
+                                    index: index + 1,
+                                    child: Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 10),
+                                      child: _AvailableDeviceRow(
+                                        icon: Icons.wifi_rounded,
+                                        name: device.name,
+                                        idText: device.macAddress,
+                                        buttonLabel:
+                                            selected ? 'Selected' : 'Select',
+                                        isInUse: inUse,
+                                        isPendingStop: pendingStop,
+                                        onTap: pendingStop
+                                            ? () => _openPendingStopSession(
+                                                device.macAddress)
+                                            : inUse
+                                                ? () => _handleInUseTap(
+                                                    device.macAddress)
+                                                : () {
+                                                    // Enforce the plan's concurrent-device
+                                                    // limit when adding a device (deselect is
+                                                    // always allowed).
+                                                    if (!selected &&
+                                                        deviceLimitReached) {
+                                                      ScaffoldMessenger.of(
+                                                              context)
+                                                          .showSnackBar(
+                                                        SnackBar(
+                                                          content: Text(
+                                                            'Your plan allows $deviceLimit device(s) at a time. '
+                                                            'Stop a running device or upgrade your plan to run more.',
+                                                          ),
+                                                        ),
+                                                      );
+                                                      return;
+                                                    }
+                                                    ref
+                                                        .read(
+                                                            sessionTargetProvider
+                                                                .notifier)
+                                                        .toggleDevice(
+                                                            device.macAddress);
+                                                    setState(() {
+                                                      if (selected) {
+                                                        _clearDeviceSessionState(
+                                                            device.macAddress);
+                                                      } else {
+                                                        _runDeviceIds.add(
+                                                            device.macAddress);
+                                                        _excludedDeviceIds
+                                                            .remove(device
+                                                                .macAddress);
+                                                      }
+                                                    });
+                                                  },
+                                      ),
+                                    ),
+                                  );
+                                },
+                                childCount: list.length,
+                              ),
+                            );
+                          })(),
+                        ),
+                      ],
+                      if (_showLegacyDeviceManager &&
+                          target.transport == SessionTransport.ble) ...[
+                        pairedDevices.when(
+                          data: (devices) {
+                            final scanResults =
+                                ref.watch(bleScanResultsProvider);
+                            final connectedDevices =
+                                devices.cast<PairedDevice>().where((d) {
+                              if (provisioningIds.contains(d.id)) return false;
+                              final state =
+                                  ref.watch(bleDeviceStatusProvider(d.id));
+                              return state == BleConnectionStatus.connected;
+                            }).toList();
+
+                            return SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                              sliver: SliverList(
+                                delegate: SliverChildListDelegate([
+                                  const SectionHeader(title: 'Session Setup'),
+                                  if (connectedDevices.isEmpty)
+                                    const _EmptyDashed(
+                                      icon: Icons.bluetooth_rounded,
+                                      title: 'No devices connected',
+                                      subtitle:
+                                          'Connect a Bluetooth device to configure protocol and session settings.',
+                                    ),
+                                  ...connectedDevices
+                                      .asMap()
+                                      .entries
+                                      .map((entry) {
+                                    final index = entry.key;
+                                    final device = entry.value;
+                                    return AnimatedEntrance(
+                                      index: index + 1,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(top: 10),
+                                        child: _buildSessionSetupCard(
+                                          data: _DeviceSessionCardData(
+                                            id: device.id,
+                                            icon: Icons.bluetooth_rounded,
+                                            transportLabel: 'BLE',
+                                            name: device.name,
+                                            subtitle: isIos
+                                                ? 'Connected Device'
+                                                : 'MAC: ${device.id}',
+                                            onDisconnect: () async {
+                                              await _handleDeviceDisconnect(
+                                                deviceId: device.id,
+                                                disconnect: () async {
+                                                  await ref
+                                                      .read(
+                                                          bleRepositoryProvider)
+                                                      .disconnectDevice(
+                                                          device.id);
+                                                  ref
+                                                      .read(
+                                                          sessionTargetProvider
+                                                              .notifier)
+                                                      .ensureDeselected(
+                                                          device.id);
+                                                },
+                                              );
+                                            },
+                                          ),
+                                          currentRunIds: runIds,
+                                          currentLabelsById: currentLabelsById,
+                                          busyDeviceIds: inUseDeviceIds,
+                                          pendingStopDeviceIds:
+                                              pendingBackendStopDeviceIds,
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                  const SizedBox(height: 16),
+                                  if (connectedDevices.isNotEmpty) ...[
+                                    _buildStartSessionButton(
+                                      runIds: runIds,
+                                      transport: target.transport,
+                                      canStart: canStart,
+                                    ),
+                                    const SizedBox(height: 16),
+                                  ],
+                                  const SectionHeader(
+                                      title: 'Available Bluetooth Devices'),
+                                  scanResults.when(
+                                    data: (list) {
+                                      if (list.isEmpty)
+                                        return const SizedBox(height: 0);
+                                      final byId = <String, ScanResult>{};
+                                      for (final result in list) {
+                                        byId.putIfAbsent(
+                                          result.device.remoteId.str,
+                                          () => result,
+                                        );
+                                      }
+
+                                      final connectedIdSet = connectedDevices
+                                          .map((d) => d.id)
+                                          .toSet();
+                                      final deduped = byId.values
+                                          .where((result) =>
+                                              !connectedIdSet.contains(
+                                                  result.device.remoteId.str))
+                                          .where((result) {
+                                        if (!hydrawaveOnly) return true;
+                                        final expected =
+                                            BleConstants.preferredServiceUuid;
+                                        if (expected == null ||
+                                            expected.isEmpty) {
+                                          return false;
+                                        }
+                                        final targetUuid =
+                                            BleConstants.normalizeUuid(
+                                                expected);
+                                        return result
+                                            .advertisementData.serviceUuids
+                                            .any(
+                                          (uuid) =>
+                                              BleConstants.normalizeUuid(
+                                                  uuid.str) ==
+                                              targetUuid,
+                                        );
+                                      }).toList();
+
+                                      if (deduped.isEmpty) {
+                                        return const _EmptyDashed(
+                                          icon: Icons.bluetooth_rounded,
+                                          title: 'No devices found',
+                                          subtitle:
+                                              'Make sure your device is turned on',
+                                        );
+                                      }
+
+                                      return Column(
+                                        children: deduped
+                                            .asMap()
+                                            .entries
+                                            .map((entry) {
+                                          final index = entry.key;
+                                          final result = entry.value;
+                                          final name = result.device
+                                                  .platformName.isNotEmpty
+                                              ? result.device.platformName
+                                              : 'Unknown';
+                                          final id = result.device.remoteId.str;
+                                          final strictEnabled = BleConstants
+                                                  .strictHydraGattProfile &&
+                                              BleConstants
+                                                      .preferredServiceUuid !=
+                                                  null;
+                                          final targetService = strictEnabled
+                                              ? BleConstants.normalizeUuid(
+                                                  BleConstants
+                                                      .preferredServiceUuid!,
+                                                )
+                                              : null;
+                                          final advertisedServices = result
+                                              .advertisementData.serviceUuids
+                                              .map((uuid) =>
+                                                  BleConstants.normalizeUuid(
+                                                      uuid.str));
+                                          final uuidAllowed = !strictEnabled ||
+                                              advertisedServices
+                                                  .contains(targetService);
+
+                                          return AnimatedEntrance(
+                                            index: index + 1,
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(
+                                                  bottom: 10),
+                                              child: _AvailableDeviceRow(
+                                                icon: Icons.bluetooth_rounded,
+                                                name: name,
+                                                idText: isIos ? '' : id,
+                                                buttonLabel:
+                                                    connectingIds.contains(id)
+                                                        ? 'Connecting...'
+                                                        : 'Connect',
+                                                isLoading:
+                                                    connectingIds.contains(id),
+                                                onTap: () async {
+                                                  if (connectingIds
+                                                      .contains(id)) return;
+                                                  // Enforce the plan's concurrent-device
+                                                  // limit before connecting another device.
+                                                  if (deviceLimitReached) {
+                                                    ScaffoldMessenger.of(
+                                                            context)
+                                                        .showSnackBar(
+                                                      SnackBar(
+                                                        content: Text(
+                                                          'Your plan allows $deviceLimit device(s) at a time. '
+                                                          'Stop a device or upgrade your plan to run more.',
+                                                        ),
+                                                      ),
+                                                    );
+                                                    return;
+                                                  }
+                                                  if (!uuidAllowed) {
+                                                    final expectedUuid =
+                                                        BleConstants
+                                                            .preferredServiceUuid;
+                                                    ScaffoldMessenger.of(
+                                                            context)
+                                                        .showSnackBar(
+                                                      SnackBar(
+                                                        content: Text(
+                                                          expectedUuid == null
+                                                              ? 'Cannot connect: this device does not match the required Hydrawav profile.'
+                                                              : 'Cannot connect: this device does not advertise the required Hydrawav service.',
+                                                        ),
+                                                      ),
+                                                    );
+                                                    return;
+                                                  }
+
+                                                  ref
+                                                      .read(
+                                                          bleConnectingIdsProvider
+                                                              .notifier)
+                                                      .state = {
+                                                    ...connectingIds,
+                                                    id
+                                                  };
+                                                  final messenger =
+                                                      ScaffoldMessenger.of(
+                                                          context);
+
+                                                  try {
+                                                    final ok = await ref
+                                                        .read(
+                                                            bleRepositoryProvider)
+                                                        .connectDevice(
+                                                            result.device);
+
+                                                    if (ok) {
+                                                      await Future<
+                                                          void>.delayed(
+                                                        const Duration(
+                                                            milliseconds: 150),
+                                                      );
+                                                      ref
+                                                          .read(
+                                                            sessionTargetProvider
+                                                                .notifier,
+                                                          )
+                                                          .ensureSelected(id);
+                                                      if (!mounted) return;
+                                                      setState(() {
+                                                        _runDeviceIds.add(id);
+                                                        _excludedDeviceIds
+                                                            .remove(id);
+                                                      });
+                                                    }
+
+                                                    if (!context.mounted)
+                                                      return;
+                                                    messenger.showSnackBar(
+                                                      SnackBar(
+                                                        content: Text(
+                                                          ok
+                                                              ? 'Connected to $name'
+                                                              : 'Failed to connect to $name',
+                                                        ),
+                                                      ),
+                                                    );
+                                                  } finally {
+                                                    final current = ref.read(
+                                                        bleConnectingIdsProvider);
+                                                    ref
+                                                        .read(
+                                                            bleConnectingIdsProvider
+                                                                .notifier)
+                                                        .state = {...current}
+                                                      ..remove(id);
+                                                  }
+                                                },
+                                              ),
+                                            ),
+                                          );
+                                        }).toList(),
+                                      );
+                                    },
+                                    loading: () => const Padding(
+                                      padding:
+                                          EdgeInsets.symmetric(vertical: 16),
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        ),
+                                      ),
+                                    ),
+                                    error: (e, _) => Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 16),
+                                      child: Text(
+                                        'Scan error: $e',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: ThemeConstants.textSecondary,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ]),
+                              ),
+                            );
+                          },
+                          loading: () => const SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                            ),
+                          ),
+                          error: (e, _) => SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Text(
+                                'Failed to load paired devices',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: ThemeConstants.textSecondary,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      error: (e, _) => SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Text(
-                            'Failed to load paired devices',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: ThemeConstants.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                  // Room for the floating Start button and summary strip.
-                  const SliverToBoxAdapter(child: SizedBox(height: 250)),
-                ],
-              ),
+                      ],
+                      // Room for the floating Start button and summary strip.
+                      const SliverToBoxAdapter(child: SizedBox(height: 250)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
             // v6: music + Start float bottom-right over the summary strip.
             if (_showNewDesign)
               Positioned(
@@ -2879,8 +2937,8 @@ class _RefDeviceCard {
                       const SizedBox(width: 6),
                       Padding(
                         padding: const EdgeInsets.only(bottom: 2),
-                        child:
-                            Icon(Icons.expand_more_rounded, size: 16, color: sub),
+                        child: Icon(Icons.expand_more_rounded,
+                            size: 16, color: sub),
                       ),
                     ],
                   ),
@@ -2895,9 +2953,8 @@ class _RefDeviceCard {
                         fontWeight: w.protocolTitle == 'Select protocol'
                             ? FontWeight.w400
                             : FontWeight.w700,
-                        color: w.protocolTitle == 'Select protocol'
-                            ? sub
-                            : copper,
+                        color:
+                            w.protocolTitle == 'Select protocol' ? sub : copper,
                       ),
                     ),
                   ],
@@ -2970,7 +3027,7 @@ class _RefDeviceCard {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _UnitHead(name: w.name, id: compactId),
+                        _UnitHead(name: w.name, id: compactId, bleId: w.bleId),
                         protocol,
                       ],
                     ),
@@ -3133,21 +3190,23 @@ class _RefDeviceCard {
           ),
         ),
       );
-
 }
 
 /// The unit's name, with the `ID` pill (`.v51-idbtn`) that reveals its
 /// MAC / id underneath on demand.
-class _UnitHead extends StatefulWidget {
+class _UnitHead extends ConsumerStatefulWidget {
   final String name;
   final String id;
-  const _UnitHead({required this.name, required this.id});
+
+  /// BLE units only: the Bluetooth id their signal is read from.
+  final String? bleId;
+  const _UnitHead({required this.name, required this.id, this.bleId});
 
   @override
-  State<_UnitHead> createState() => _UnitHeadState();
+  ConsumerState<_UnitHead> createState() => _UnitHeadState();
 }
 
-class _UnitHeadState extends State<_UnitHead> {
+class _UnitHeadState extends ConsumerState<_UnitHead> {
   bool _showId = false;
 
   @override
@@ -3167,9 +3226,8 @@ class _UnitHeadState extends State<_UnitHead> {
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
-                  color: dark
-                      ? const Color(0xFFF1E4D6)
-                      : const Color(0xFF1A1A1A),
+                  color:
+                      dark ? const Color(0xFFF1E4D6) : const Color(0xFF1A1A1A),
                 ),
               ),
             ),
@@ -3187,9 +3245,9 @@ class _UnitHeadState extends State<_UnitHead> {
                     child: Center(
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 160),
-                        height: 24,
+                        height: 30,
+                        constraints: const BoxConstraints(minWidth: 32),
                         padding: const EdgeInsets.symmetric(horizontal: 9),
-                        alignment: Alignment.center,
                         decoration: BoxDecoration(
                           gradient: _showId
                               ? const LinearGradient(colors: [
@@ -3201,23 +3259,30 @@ class _UnitHeadState extends State<_UnitHead> {
                               ? null
                               : (dark
                                   ? const Color.fromRGBO(255, 255, 255, .05)
-                                  : const Color(0xFFFBF8F5)),
+                                  : const Color(0xFFF7F3F0)),
                           borderRadius: BorderRadius.circular(999),
                           border: _showId
                               ? null
                               : Border.all(
                                   color: dark
                                       ? const Color.fromRGBO(222, 179, 147, .2)
-                                      : const Color.fromRGBO(26, 26, 26, .09),
+                                      : const Color.fromRGBO(26, 26, 26, .08),
                                 ),
                         ),
-                        child: Text(
-                          'ID',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1,
-                            color: _showId ? PlanTones.copperText : sub,
+                        // hugs its text (an `alignment` would stretch the
+                        // badge to the 44px tap box)
+                        child: Center(
+                          widthFactor: 1,
+                          child: Text(
+                            'ID',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: .5,
+                              color: _showId
+                                  ? PlanTones.copperText
+                                  : (dark ? sub : const Color(0xFF9A918A)),
+                            ),
                           ),
                         ),
                       ),
@@ -3226,6 +3291,19 @@ class _UnitHeadState extends State<_UnitHead> {
                 ),
               ),
             ],
+            if (widget.bleId != null)
+              Builder(builder: (context) {
+                final rssi =
+                    ref.watch(unitRssiProvider(widget.bleId!)).valueOrNull;
+                if (rssi == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Tooltip(
+                    message: '${signalOf(rssi).word} ($rssi dBm)',
+                    child: SignalBars(signalOf(rssi).bars),
+                  ),
+                );
+              }),
           ],
         ),
         AnimatedSize(
@@ -3299,6 +3377,9 @@ class _SessionDeviceSetupCard extends StatelessWidget {
   /// units, which locate from the Devices Fleet screen instead).
   final VoidCallback? onLocate;
 
+  /// BLE units: the Bluetooth id, for the signal bars in the header.
+  final String? bleId;
+
   const _SessionDeviceSetupCard({
     required this.icon,
     required this.transportLabel,
@@ -3321,6 +3402,7 @@ class _SessionDeviceSetupCard extends StatelessWidget {
     this.startDelay = 0,
     this.onChangeStartDelay,
     this.onLocate,
+    this.bleId,
     this.refDesign = false,
   });
 
@@ -3967,8 +4049,7 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
           label: 'Cold pad intensity',
           value: settings.coldPercent,
           tint: _kColdTint,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(coldPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
         const SizedBox(height: 10),
         PlanMoreSettings(
@@ -4096,8 +4177,7 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           label: 'Cold pad intensity',
           value: settings.coldPercent,
           tint: _kColdTint,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(coldPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
         const SizedBox(height: 12),
         PlanToggleRow(
@@ -4504,11 +4584,9 @@ class _ProtocolPickerState extends ConsumerState<_ProtocolPicker> {
     Widget recents = const SizedBox.shrink();
     if (_query.isEmpty && _goalId == null) {
       final recentIds = ref.watch(recentProtocolIdsProvider);
-      final allOptions = ref
-              .watch(protocolSelectionOptionsProvider(null))
-              .asData
-              ?.value ??
-          const <ProtocolSelectionOption>[];
+      final allOptions =
+          ref.watch(protocolSelectionOptionsProvider(null)).asData?.value ??
+              const <ProtocolSelectionOption>[];
       final recentOptions = <ProtocolSelectionOption>[
         for (final id in recentIds)
           ...allOptions.where((p) => p.id == id).take(1),
@@ -4856,7 +4934,8 @@ class _ProtocolRow extends StatelessWidget {
                   child: Icon(
                     locked ? Icons.lock_outline_rounded : Icons.waves_rounded,
                     size: 18,
-                    color: dark ? const Color(0xFFE2C0A2) : PlanTones.copperDeep,
+                    color:
+                        dark ? const Color(0xFFE2C0A2) : PlanTones.copperDeep,
                   ),
                 ),
                 const SizedBox(width: 12),

@@ -3633,7 +3633,7 @@ class _ScoreBlock extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'IMPROVEMENT SCORE',
+          'AVERAGE IMPROVEMENT SCORE',
           style: TextStyle(
             fontSize: HwType.cap,
             fontWeight: FontWeight.w700,
@@ -3664,25 +3664,19 @@ class _ScoreBlock extends StatelessWidget {
         const SizedBox(height: 2),
         // Say what the number is: the share of post-session check-ins where
         // the answer was that the session helped.
+        // The prototype's short line: "12 checks · last 7 days".
         Text.rich(
           total == 0
-              ? TextSpan(
-                  text: 'No post-session check-ins in the ${window.caption} '
-                      'yet. The score fills in as clients answer after '
-                      'each session.',
-                )
+              ? TextSpan(text: 'No checks yet · ${window.caption}')
               : TextSpan(children: [
                   TextSpan(
-                    text: '$yes of $total',
+                    text: '$total check${total == 1 ? '' : 's'}',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: p.ink2,
                     ),
                   ),
-                  TextSpan(
-                    text: ' post-session check-in${total == 1 ? '' : 's'} '
-                        'said the session helped · ${window.caption}',
-                  ),
+                  TextSpan(text: ' · ${window.caption}'),
                 ]),
           style: TextStyle(fontSize: HwType.cap, height: 1.4, color: p.ink3),
         ),
@@ -3785,7 +3779,8 @@ class _WindowChips extends ConsumerWidget {
                     ),
                     child: Text.rich(
                       TextSpan(children: [
-                        TextSpan(text: '${w.chip}  '),
+                        // compact, as in the prototype: "7D 92%"
+                        TextSpan(text: '${w.label}  '),
                         TextSpan(
                           text: s.pct != null ? '${s.pct}%' : '—',
                           style: TextStyle(

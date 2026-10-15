@@ -7,6 +7,8 @@ import '../../../clients/data/client_repository.dart';
 import '../../../clients/domain/client_model.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../clients/presentation/widgets/new_client_sheet.dart';
+import '../../../../core/theme/widgets/hw_tablet.dart';
+import '../../../history/data/history_repository.dart';
 import '../providers/players_provider.dart';
 import 'plan_sheet.dart';
 import 'ref_palette.dart';
@@ -75,7 +77,48 @@ class PlayersSection extends ConsumerWidget {
           : (university ? _playerSubline(client) : _clientSubline(client)),
       onTapSelector: () =>
           showClientSelectSheet(context, ref, playersOnly: university),
+      // Tablet: the prototype's RECENT row (v6 `93-recent`).
+      recent: HwTablet.of(context)
+          ? _RecentRow(
+              people: _recents(ref, university),
+              selectedId: isGuest ? null : client.id,
+              onGuest: () {
+                ref.read(selectedClientProvider.notifier).state = null;
+                ref.read(sessionClientModeProvider.notifier).state =
+                    ClientMode.guest;
+              },
+              onPick: (c) {
+                ref.read(selectedClientProvider.notifier).state = c;
+                ref.read(sessionClientModeProvider.notifier).state =
+                    ClientMode.client;
+              },
+            )
+          : null,
     );
+  }
+
+  /// The 5 people most recently in a session (newest first), topped up from
+  /// the roster when history is short — the prototype's `recents(5)`.
+  static List<Client> _recents(WidgetRef ref, bool university) {
+    final all = ref.watch(clientListProvider).valueOrNull ?? const <Client>[];
+    final pool = university ? all.where((c) => c.isPlayer).toList() : all;
+    final byId = {for (final c in pool) c.id: c};
+    final sessions = [
+      ...(ref.watch(allSessionsProvider).valueOrNull ?? const []),
+    ]..sort((a, b) =>
+        (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
+    final out = <Client>[];
+    final seen = <String>{};
+    for (final s in sessions) {
+      final c = byId[s.clientId];
+      if (c != null && seen.add(c.id)) out.add(c);
+      if (out.length >= 5) return out;
+    }
+    for (final c in pool) {
+      if (seen.add(c.id)) out.add(c);
+      if (out.length >= 5) break;
+    }
+    return out;
   }
 
   // Shared card layout (v6 `#ry-ses-user`): uppercase label + "+ Add", then
@@ -90,6 +133,7 @@ class PlayersSection extends ConsumerWidget {
     required String? initials,
     required String subline,
     required VoidCallback onTapSelector,
+    Widget? recent,
   }) {
     return Builder(builder: (context) {
       final dark = PlanTones.dark(context);
@@ -140,10 +184,162 @@ class PlayersSection extends ConsumerWidget {
               subline: subline,
               onTap: onTapSelector,
             ),
+            if (recent != null) recent,
           ],
         ),
       );
     });
+  }
+}
+
+/// `.v6rc`: a thin rule, "RECENT", then Guest + recent people as chips —
+/// tapping one picks them, exactly like the Select sheet.
+class _RecentRow extends StatelessWidget {
+  final List<Client> people;
+  final String? selectedId;
+  final VoidCallback onGuest;
+  final ValueChanged<Client> onPick;
+  const _RecentRow({
+    required this.people,
+    required this.selectedId,
+    required this.onGuest,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.only(top: 11),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: p.line)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PlanEyebrow('Recent'),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              _RecentChip(
+                name: 'Guest',
+                initials: 'GU',
+                guest: true,
+                on: selectedId == null,
+                onTap: onGuest,
+              ),
+              for (final c in people)
+                _RecentChip(
+                  name: c.displayName,
+                  initials: PlayersSection._initials(c.displayName),
+                  on: selectedId == c.id,
+                  onTap: () => onPick(c),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecentChip extends StatelessWidget {
+  final String name;
+  final String initials;
+  final bool guest;
+  final bool on;
+  final VoidCallback onTap;
+  const _RecentChip({
+    required this.name,
+    required this.initials,
+    required this.on,
+    required this.onTap,
+    this.guest = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final card2 = dark ? const Color(0xFF212C33) : const Color(0xFFFBF8F5);
+    return Semantics(
+      button: true,
+      selected: on,
+      label: name,
+      child: PlanPress(
+        onTap: onTap,
+        scale: .97,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.fromLTRB(5, 0, 12, 0),
+          decoration: BoxDecoration(
+            color: on
+                ? Color.alphaBlend(
+                    Color.fromRGBO(198, 158, 131, dark ? .16 : .14), p.card)
+                : card2,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+                color: on ? const Color.fromRGBO(198, 158, 131, .75) : p.line),
+          ),
+          child: ExcludeSemantics(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 30,
+                  height: 30,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: guest ? p.bg2 : null,
+                    gradient: guest
+                        ? null
+                        : LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: dark
+                                ? const [Color(0xFF3A4A57), Color(0xFF2A3742)]
+                                : const [Color(0xFFEDDDCF), Color(0xFFDDC3AC)],
+                          ),
+                    border: guest ? Border.all(color: p.line) : null,
+                  ),
+                  child: Text(
+                    initials,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: guest
+                          ? p.ink3
+                          : (dark
+                              ? const Color(0xFFE7D3C0)
+                              : const Color(0xFF6B4A32)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 7),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 110),
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: on ? p.ink : p.ink2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -365,7 +561,8 @@ class _ProtoDrop extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: p.cardline),
+          // the prototype's light grey line (not copper)
+          border: Border.all(color: p.line),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

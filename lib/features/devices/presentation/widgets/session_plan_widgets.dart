@@ -206,7 +206,7 @@ class PlanPill extends StatelessWidget {
         border: Border.all(
           color: on
               ? Color.fromRGBO(198, 158, 131, dark ? .5 : .7)
-              : PlanTones.hairline(context),
+              : Color.fromRGBO(198, 158, 131, dark ? .32 : .55),
           width: 2,
         ),
       ),
@@ -560,23 +560,38 @@ class PlanLocatePill extends StatelessWidget {
         height: 44,
         child: Center(
           child: Container(
+            width: 120,
             height: 28,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: PlanTones.fill(context),
+              color: dark ? PlanTones.fill(context) : const Color(0xFFFBF5EE),
               borderRadius: BorderRadius.circular(999),
               border: Border.all(
                 color: dark
                     ? const Color.fromRGBO(192, 157, 132, .3)
                     : const Color.fromRGBO(192, 157, 132, .45),
-                width: 1.5,
               ),
             ),
             child: Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.track_changes_rounded, size: 13, color: fg),
-                const SizedBox(width: 5),
+                // ◎ — a ring with a dot
+                Container(
+                  width: 12,
+                  height: 12,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: fg, width: 1.6),
+                  ),
+                  child: Container(
+                    width: 4,
+                    height: 4,
+                    decoration:
+                        BoxDecoration(shape: BoxShape.circle, color: fg),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 Text(
                   'LOCATE',
                   style: TextStyle(
@@ -889,74 +904,85 @@ class PlanSummaryStrip extends StatelessWidget {
                 ),
               ],
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+          : Row(
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        who,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: ink,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '$units unit${units == 1 ? '' : 's'}'
-                      '${mins > 0 ? ' · $mins min' : ''}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: ink3,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ],
-                ),
-                if (protocols.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    protocols.join(' · '),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      height: 1.35,
-                      color: ink2,
-                    ),
-                  ),
-                ],
-                if (guest) ...[
-                  const SizedBox(height: 6),
-                  Row(
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.person_outline_rounded, size: 13, color: ink3),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          "Guest — this session won't be saved to a client",
-                          maxLines: 1,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              who,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: ink,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '$units unit${units == 1 ? '' : 's'}'
+                            '${mins > 0 ? ' · $mins min' : ''}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: ink3,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures()
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (protocols.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          protocols.join(' \u2192 '),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: ink3,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
+                            color: ink2,
                           ),
                         ),
-                      ),
+                      ],
+                      if (guest) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(Icons.person_outline_rounded,
+                                size: 13, color: ink3),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                "Guest — this session won't be saved to a client",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: ink3,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
-                ],
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.chevron_right_rounded, size: 20, color: ink3),
               ],
             ),
     );

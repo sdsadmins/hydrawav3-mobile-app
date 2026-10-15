@@ -92,7 +92,7 @@ void main() {
         tester, const HubModuleView(HubModule.usage, HubSize.large));
     expect(tester.takeException(), isNull);
     // No checks yet → an em-dash score and the empty graph, never 0%.
-    expect(find.textContaining('No post-session check-ins in the last 7 days'),
+    expect(find.textContaining('No checks yet · last 7 days'),
         findsOneWidget);
     expect(find.text('Scores appear after post-session checks'),
         findsOneWidget);
@@ -146,8 +146,7 @@ void main() {
     expect(tester.takeException(), isNull);
     // Says what the number is made of.
     expect(
-        find.text('3 of 4 post-session check-ins said the session helped · '
-            'last 7 days', findRichText: true),
+        find.text('4 checks · last 7 days', findRichText: true),
         findsOneWidget);
     expect(find.text('Score by day'), findsOneWidget);
     expect(find.text('75'), findsOneWidget); // the counted-up score
@@ -159,13 +158,12 @@ void main() {
     expect(find.text('Deep-Tension Recovery'), findsOneWidget);
 
     // Switching the window re-scores and redraws.
-    await tester.tap(find.textContaining('All time'));
+    await tester.tap(find.textContaining('ALL'));
     await tester.pump();
     await tester.pump(const Duration(seconds: 3));
     expect(tester.takeException(), isNull);
     expect(
-        find.text('3 of 5 post-session check-ins said the session helped · '
-            'all time', findRichText: true),
+        find.text('5 checks · all time', findRichText: true),
         findsOneWidget);
     expect(find.text('Score by month'), findsOneWidget);
   });

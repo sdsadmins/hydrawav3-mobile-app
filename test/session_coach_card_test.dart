@@ -111,8 +111,11 @@ void main() {
 
     testWidgets('body → goal → sets → use this set ($tag)', (tester) async {
       await pump(tester, size);
+      // closed: the coach capsule
       expect(find.text('Session coach'), findsOneWidget);
-      expect(find.text('0 of 2 planned'), findsOneWidget);
+      expect(find.textContaining('Body area, protocol and pad placement'),
+          findsOneWidget);
+      expect(find.text('0/2', findRichText: true), findsOneWidget);
 
       await tap(tester, find.text('Session coach'));
       expect(find.text('STEP 1 OF 3 · BODY'), findsOneWidget);
@@ -125,17 +128,21 @@ void main() {
 
       expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
       expect(find.text('Set 1 · Calf'), findsWidgets);
-      expect(find.text('Sun: Gastrocnemius'), findsOneWidget);
-      expect(find.text('Moon: Gastrocnemius'), findsOneWidget);
+      // both set cards sit side by side; each lists its pads by muscle
+      // Sun + Moon lines on the card, and the caption on the 3D box
+      expect(find.text('Gastrocnemius'), findsNWidgets(3));
+      expect(find.text('Vastus medialis'), findsOneWidget);
       expect(shown.last.length, 2); // the set's Sun + Moon go to the 3D body
+      // set 1 defaults to the Unit 1 tab, set 2 to the next free unit
       expect(find.text('Locate Unit 1'), findsOneWidget);
+      expect(find.text('Locate Unit 2'), findsOneWidget);
 
       await tap(tester, find.text('Use this set  →'));
       expect(applied, [('u1', 'p1')]);
       expect(find.text('1 of 2 planned'), findsOneWidget);
       // moves on to set 2, defaulting to the next free unit
-      expect(find.text('Sun: Vastus medialis'), findsOneWidget);
-      expect(shown.last.length, 1);
+      expect(find.text('On Unit 1'), findsOneWidget); // set 1 is assigned
+      expect(shown.last.length, 1); // the body now shows set 2
       await tap(tester, find.text('Use this set  →'));
       expect(applied.last, ('u2', 'p1'));
       expect(find.text('2 of 2 planned'), findsOneWidget);
