@@ -60,8 +60,8 @@ Future<void> goToSessionFromPlacement(
       content: Text(
         protocol == null
             // Don't claim a load that didn't happen.
-            ? 'Placement saved — pick your device and protocol'
-            : '${protocol.templateName} loaded — pick your device & start',
+            ? 'Placement saved, pick your device and protocol'
+            : '${protocol.templateName} loaded, pick your device & start',
       ),
     ),
   );

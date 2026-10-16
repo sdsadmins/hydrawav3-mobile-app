@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:collection';
+
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/error/exceptions.dart';
@@ -14,6 +16,9 @@ import '../../../devices/presentation/widgets/ref_palette.dart';
 import '../../../intake/domain/intake_enums.dart';
 import '../../../intake/domain/intake_models.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
+import '../../data/assistant_chat_remote_source.dart';
+import '../../data/rag_chat_history_repository.dart';
+import '../../domain/assistant_chat_models.dart';
 import '../../../pad_placement/data/recovery_chat_remote_source.dart';
 import '../../../pad_placement/data/recovery_engine_remote_source.dart';
 import '../../../pad_placement/domain/recovery_chat_models.dart';
@@ -25,6 +30,9 @@ import '../../../performance_protocols/presentation/providers/performance_sessio
 import '../../../performance_protocols/presentation/screens/go_to_session.dart';
 import '../../../performance_protocols/presentation/screens/pad_map_screen.dart';
 import '../../../performance_protocols/presentation/widgets/placement_card.dart';
+import '../widgets/assistant_welcome_panel.dart';
+import 'assistant_history_screen.dart';
+import '../../../../core/theme/widgets/hw_tablet.dart';
 
 /// The "Assistant" page — a port of the cowork-os handoff `scr-chat` chat.
 /// Suggestion-led: AI / user bubbles + tappable chips. `intent == "pads"` (from
@@ -32,7 +40,12 @@ import '../../../performance_protocols/presentation/widgets/placement_card.dart'
 /// / Recovery (pick a discomfort area from the org's body-part list).
 class AssistantScreen extends ConsumerStatefulWidget {
   final String? intent;
-  const AssistantScreen({super.key, this.intent});
+
+  /// With `intent == "recovery"`: a [RecoveryGoal.value] already picked on the
+  /// Hub's Support Recovery card, so the flow opens on that pathway's areas.
+  final String? goal;
+
+  const AssistantScreen({super.key, this.intent, this.goal});
 
   @override
   ConsumerState<AssistantScreen> createState() => _AssistantScreenState();
@@ -104,13 +117,89 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
 
-  final List<_Msg> _messages = [];
+  // Every bubble goes through this list; adding one also saves it to the
+  // client's RAG chat history (see `_record`).
+  late final _RecordingList _messages =
+      _RecordingList(onAdd: _record, onClear: _ragNewThread);
+
+  // ── RAG chat history (`rag-chat-history`) ──────────────────────────────────
+  // One thread per conversation. A thread starts on the first message the
+  // user sends (opening AI lines wait until then, so just opening the
+  // Assistant saves nothing) and ends on Start over or a change of person.
+  _RagThread _ragThread = _RagThread();
+  Future<void> _ragQueue = Future<void>.value();
+
+  /// Who this chat is saved under: the person picked in the Assistant's own
+  /// flow, else the client selected for the session (Client mode), else guest.
+  Client? get _historyClient =>
+      _perfClient ??
+      (ref.read(sessionClientModeProvider) == ClientMode.client
+          ? ref.read(selectedClientProvider)
+          : null);
+
+  void _ragNewThread() => _ragThread = _RagThread();
+
+  void _record(_Msg m) {
+    final text = m.placement != null
+        ? 'Pad placement: ${m.placement!.displayName}'
+        : m.text.trim();
+    if (text.isEmpty) return;
+    final client = _historyClient;
+    final who = client == null ? 'guest' : 'client:${client.id}';
+    var t = _ragThread;
+    if (t.who != null && t.who != who) {
+      // A different person is a different conversation.
+      _ragNewThread();
+      t = _ragThread;
+    }
+    t.who = who;
+    // A placement card keeps its full pad-set payload, so History can
+    // reopen it on the 3D body.
+    final placement = m.placement?.raw.isNotEmpty == true
+        ? Map<String, dynamic>.from(m.placement!.raw)
+        : null;
+    if (!t.started && !m.isMe) {
+      t.pending.add((false, text, placement));
+      return;
+    }
+    final batch = [...t.pending, (m.isMe, text, placement)];
+    t.pending.clear();
+    t.started = true;
+    final repo = ref.read(ragChatHistoryRepositoryProvider);
+    final clientId = client?.id;
+    // Sequential, so the server keeps the order and every message after the
+    // first carries the conversation id the first one got back.
+    _ragQueue = _ragQueue.then((_) async {
+      for (final (isUser, msg, placement) in batch) {
+        try {
+          final id = await repo.addMessage(
+            isGuest: clientId == null,
+            clientId: clientId,
+            conversationId: t.id,
+            isUser: isUser,
+            message: msg,
+            placement: placement,
+          );
+          t.id ??= id;
+        } catch (_) {
+          // History is best-effort: a failed save never interrupts the chat.
+        }
+      }
+    });
+  }
+
   List<_ChipAction> _chips = const [];
   bool _chipsVisible = true;
   bool _typing = false;
   // True while in the Recovery flow — after an area is picked it goes to the
   // Range-of-Motion step, then the guided-assessment questions. Performance is
   // untouched.
+  //
+  // Still SET by the Performance / Recovery mode buttons (`_onPerformance` /
+  // `_onRecovery`), left in place so those buttons and their guided chip flows
+  // are unchanged. Nothing READS it any more: typed free text now goes to the
+  // unified `POST chat` route, which classifies the lane itself.
+  // ignore: unused_field
   bool _recovery = false;
 
   // Guided-assessment chat state (recovery only). `_answers` is what the
@@ -194,7 +283,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// feeding one's memory to the other resolves nothing and confuses both.
   Map<String, dynamic> _recoverySlots = const {};
 
-  static const _greeting = 'Hey — what are we working on today?';
+  /// The conversation handle for the unified `POST chat` route — the typed
+  /// free-text path only (see [_assistantChat]). Threaded back on every following
+  /// turn so the backend keeps one conversation; null starts a fresh one, which
+  /// is what a rotated session / "Start over" wants.
+  String? _threadId;
+
+  /// The unified chat's slot memory. REPLACED wholesale by each reply's `slots`
+  /// and sent verbatim on the next turn — never merged into here. This is what
+  /// carries the performance walk (`perfAccept` → `perfChain`) to a placement.
+  /// Cleared with [_threadId] on "Start over".
+  Map<String, dynamic> _assistantSlots = const {};
 
   bool get _isUniversity =>
       (ref.read(authStateProvider).user?.organizationType ?? '')
@@ -228,7 +327,10 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (widget.intent == 'performance' || widget.intent == 'recovery') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (widget.intent == 'recovery') {
+        final goal = RecoveryGoal.byValue(widget.goal);
+        if (widget.intent == 'recovery' && goal != null) {
+          _onRecoveryGoal(goal);
+        } else if (widget.intent == 'recovery') {
           _onRecovery();
         } else {
           _onPerformance();
@@ -244,24 +346,32 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         'or working on recovery?',
         rich: [
           TextSpan(
-              text:
-                  'Let’s find the right pad placement. Are we prepping for '),
+              text: 'Let’s find the right pad placement. Are we prepping for '),
           TextSpan(
               text: 'performance',
               style: TextStyle(fontWeight: FontWeight.w700)),
           TextSpan(text: ', or working on '),
           TextSpan(
-              text: 'recovery',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+              text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
           TextSpan(text: '?'),
         ],
       ));
       _chips = _padChips;
     } else {
-      _messages.add(const _Msg(false, _greeting));
-      _chips = _homeChips;
+      // v5 `58-assistant`: an empty conversation opens on the welcome panel
+      // (greeting card, pick up, what I can do) — see the list in build. Its
+      // Prep a user / Recovery tiles run the same guided flows the opening
+      // chips did; typing still goes to the unified `chat` route.
+      _chips = const [];
     }
   }
+
+  /// The open-state chips: the two lanes and nothing else.
+  List<_ChipAction> get _openingChips => [
+        _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance,
+            hot: true),
+        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+      ];
 
   /// True between requesting a scroll and the post-frame callback running, so a
   /// burst of `_scrollToEnd()` calls in one turn produces ONE animation.
@@ -339,37 +449,37 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               'Start Session.');
         }, hot: true),
         _ChipAction(Icons.bolt_rounded, 'Prep a user', _onPerformance),
-        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
-        _ChipAction(Icons.grid_view_rounded, 'Find pad placements', () {
-          _me('Find pad placements');
-          _ai(
-            'Let’s find the right pad placement. Are we prepping for '
-            'performance, or working on recovery?',
-            rich: const [
-              TextSpan(
-                  text:
-                      'Let’s find the right pad placement. Are we prepping for '),
-              TextSpan(
-                  text: 'performance',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-              TextSpan(text: ', or working on '),
-              TextSpan(
-                  text: 'recovery',
-                  style: TextStyle(fontWeight: FontWeight.w700)),
-              TextSpan(text: '?'),
-            ],
-            then: _padChips,
-          );
-        }),
+        _ChipAction(Icons.waves_rounded, 'Support Recovery', _onRecovery),
+        _ChipAction(
+            Icons.grid_view_rounded, 'Find pad placements', _onFindPads),
         // The catalogue as dropdowns, for browsing rather than conversing.
         _ChipAction(Icons.list_alt_rounded, 'Browse protocol chains',
             () => context.push(RoutePaths.performanceProtocols)),
       ];
 
+  void _onFindPads() {
+    _me('Find pad placements');
+    _ai(
+      'Let’s find the right pad placement. Are we prepping for '
+      'performance, or working on recovery?',
+      rich: const [
+        TextSpan(
+            text: 'Let’s find the right pad placement. Are we prepping for '),
+        TextSpan(
+            text: 'performance', style: TextStyle(fontWeight: FontWeight.w700)),
+        TextSpan(text: ', or working on '),
+        TextSpan(
+            text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
+        TextSpan(text: '?'),
+      ],
+      then: _padChips,
+    );
+  }
+
   List<_ChipAction> get _padChips => [
         _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance,
             hot: true),
-        _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+        _ChipAction(Icons.waves_rounded, 'Support Recovery', _onRecovery),
       ];
 
   // ── flows ───────────────────────────────────────────────────────────────────
@@ -391,16 +501,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return;
     }
 
-    await _ai('Who are we prepping? Guest works too — no name needed.');
+    await _ai('Who are we prepping? Guest works too, no name needed.');
     final members = await _loadMembers();
     final uni = _isUniversity;
     _showChips([
-      _ChipAction(Icons.person_outline_rounded, 'Guest — no name',
+      _ChipAction(Icons.person_outline_rounded, 'Guest (no name)',
           () => _pickUser('Guest'),
           hot: true),
       for (final m in members)
-        _ChipAction(Icons.person_outline_rounded, m.clientName,
-            () => _pickUser(m.clientName, client: m)),
+        _ChipAction(Icons.person_outline_rounded, m.displayName,
+            () => _pickUser(m.displayName, client: m)),
       _ChipAction(
         uni ? Icons.person_add_alt_1_rounded : Icons.person_add_alt_1_rounded,
         uni ? 'Add player' : 'Add client',
@@ -454,7 +564,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // response we couldn't read throws above and lands in `_failStep`, so this
     // never blames the account for a wiring problem.
     if (disciplines.isEmpty) {
-      await _ai('No performance disciplines are authored for this account yet.');
+      await _ai(
+          'No performance disciplines are authored for this account yet.');
       _showChips([
         _ChipAction(Icons.refresh_rounded, 'Try again', _perfStartDiscipline),
         _ChipAction(Icons.waves_rounded, 'Recovery instead', _onRecovery),
@@ -493,18 +604,42 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     await _ai('What are we prepping for?');
-    _showChips([
-      for (final d in disciplines.take(8))
-        _ChipAction(Icons.sports_rounded, d.label, () {
-          _me(d.label);
-          _perfDiscipline = d.discipline;
-          _perfDisciplineLabel = d.label;
-          _perfStartRole();
-        }, hot: _matchesClientSport(d)),
-      if (disciplines.length > 8)
-        _ChipAction(Icons.grid_view_rounded, 'Browse all disciplines…',
-            () => _showDisciplineSheet(disciplines)),
-    ]);
+    _showChips(_disciplineChipsFrom(disciplines));
+  }
+
+  /// The tap-flow's discipline picker (ballet, cricket, …), built once so a
+  /// typed message that the chat can't resolve to a sport gets the exact same
+  /// chip row instead of falling back to the generic home chips.
+  List<_ChipAction> _disciplineChipsFrom(List<Discipline> disciplines) => [
+        for (final d in disciplines.take(8))
+          _ChipAction(Icons.sports_rounded, d.label, () {
+            _me(d.label);
+            _pickDiscipline(d);
+          }, hot: _matchesClientSport(d)),
+        if (disciplines.length > 8)
+          _ChipAction(Icons.grid_view_rounded, 'Browse all disciplines…',
+              () => _showDisciplineSheet(disciplines)),
+      ];
+
+  /// Commit a discipline choice and start the position step. A role/subtype
+  /// picked under a PREVIOUS discipline (e.g. tapping "Pick another
+  /// discipline" after already reaching the chains step, or browsing the full
+  /// sheet) must not survive the switch — a stale role/subtype from the old
+  /// sport riding along in `_slots` is exactly what made the service answer
+  /// with an unresolved "which sport" reply instead of the new sport's chains.
+  void _pickDiscipline(Discipline d) {
+    _perfDiscipline = d.discipline;
+    _perfDisciplineLabel = d.label;
+    _perfRole = null;
+    _perfSubtype = null;
+    _slots = {
+      ..._slots,
+      'discipline': d.discipline,
+      'role': null,
+      'subtype': null,
+      'chainId': null,
+    };
+    _perfStartRole();
   }
 
   Future<void> _perfStartRole() async {
@@ -643,7 +778,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   Future<void> _showPlacement(PadSetPayload payload) async {
     final context = payload.contextLine;
     await _ai('Placements ready for $_perfWho'
-        '${context.isEmpty ? '' : ' — $context'}.');
+        '${context.isEmpty ? '' : ', $context'}.');
     if (!mounted) return;
     setState(() => _messages.add(_Msg.card(payload)));
     _scrollToEnd();
@@ -705,7 +840,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (!mounted) return;
     setState(() => _typing = false);
     final because = detail == null ? '' : '\n\n${_reason(detail)}';
-    await _ai('$message — tap to retry.$because');
+    await _ai('$message. Tap to retry.$because');
     if (!mounted) return;
     _showChips([
       _ChipAction(Icons.refresh_rounded, 'Try again', retry),
@@ -726,6 +861,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     resetPerformanceSessionFromWidget(ref);
     _slots = const {};
     _recoverySlots = const {};
+    // Drop the unified-chat conversation handle AND its slot memory, or the
+    // "new" chat keeps appending to the old thread — and resolving the old
+    // sport's chain — server-side.
+    _threadId = null;
+    _assistantSlots = const {};
     _resetRecovery();
     // The transcript is cleared, so the disclaimer goes with it and has to be
     // said again — a placement reached without it on screen is the one state
@@ -744,9 +884,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         onPick: (d) {
           Navigator.of(context).pop();
           _me(d.label);
-          _perfDiscipline = d.discipline;
-          _perfDisciplineLabel = d.label;
-          _perfStartRole();
+          _pickDiscipline(d);
         },
       ),
     );
@@ -839,8 +977,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // memory of its own), so an empty map really does start a new topic here.
     _recoverySlots = const {};
     _resetRecovery();
-    _me('Recovery');
+    _me('Support Recovery');
     _askGoal();
+  }
+
+  /// Recovery with the pathway already chosen (the Hub's focus tiles). The
+  /// disclaimer still goes up first — a placement is never reached without it.
+  Future<void> _onRecoveryGoal(RecoveryGoal goal) async {
+    _recovery = true;
+    _recoverySlots = const {};
+    _resetRecovery();
+    ref.read(recoveryDispatchProvider.future).ignore();
+    if (!_disclaimerShown) {
+      _disclaimerShown = true;
+      final screen = ref.read(recoveryDispatchProvider).valueOrNull?.screen;
+      await _ai((screen ?? const RecoverySafetyScreen()).disclaimerOrFallback);
+      if (!mounted) return;
+    }
+    await _pickGoal(goal);
   }
 
   void _resetRecovery() {
@@ -1040,6 +1194,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoveryAspect = a;
           _askSide();
         }),
+      // Web parity: `aspect` is a plain optional select (`RecoveryEngineFlow.jsx`
+      // — starts `""`, sent only `...(aspect ? {aspect} : {})`, not in the
+      // Resolve gate) — same "not stated is fine" shape as side.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryAspect = null;
+        _askSide();
+      }),
     ]);
   }
 
@@ -1064,6 +1226,17 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           _recoverySide = s.$1;
           _afterSide();
         }),
+      // Web parity: `side` starts (and can stay) empty — "not stated" — the
+      // Resolve button is gated on `region` alone, never on side
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`). The movement
+      // test and referral steps already have their own skip path ("Too
+      // painful — skip the test", "No — just there"); this was the one step
+      // in between with no way through except picking one.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoverySide = null;
+        _afterSide();
+      }),
     ]);
   }
 
@@ -1091,7 +1264,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     await _ai('Which movement did you try? Run one of these and note where '
-        'else you feel it — each one reveals something different.');
+        'else you feel it: each one reveals something different.');
     if (!mounted) return;
     _showChips([
       for (var i = 0; i < tests.length; i++)
@@ -1101,16 +1274,25 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       // Ronel's Option B, kept: a test that is too painful or too limited is
       // skipped and the point selected directly. "I ran this one" and "I could
       // not run any" are different answers, so skipping clears the chosen test.
-      _ChipAction(Icons.do_not_touch_outlined, 'Too painful — skip the test',
-          _skipRom),
+      _ChipAction(Icons.do_not_touch_outlined, 'Too painful, skip the test',
+          () => _skipRom('Too painful, skip the test', confirmed: true)),
+      // A plain skip is NOT the same signal as "too painful" — web parity:
+      // `RecoveryEngineFlow.jsx` only sends `movementTestSkipped` from a
+      // dedicated "I can't run a test" checkbox; simply moving past the chips
+      // without picking one leaves the field unsent, so the engine reads it
+      // as "untested" rather than "confirmed skipped". This chip used to send
+      // the same `movementTestSkipped: true` as "Too painful", which resolved
+      // a materially different (direct_select) placement than web showed for
+      // the same "didn't answer" journey.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () => _skipRom('Skip')),
     ]);
   }
 
-  Future<void> _skipRom() async {
-    _me('Too painful — skip the test');
-    _recoveryTestSkipped = true;
+  Future<void> _skipRom(String spoken, {bool confirmed = false}) async {
+    _me(spoken);
+    _recoveryTestSkipped = confirmed;
     _recoveryMovementTest = null;
-    _answers['movementTest'] = 'skipped';
+    _answers['movementTest'] = confirmed ? 'skipped' : 'not answered';
     await _askReferral();
   }
 
@@ -1132,7 +1314,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   }
 
   String _revealsFor(String testName) {
-    for (final t in _recoveryRegion?.movementTests ?? const <RecoveryMovementTest>[]) {
+    for (final t
+        in _recoveryRegion?.movementTests ?? const <RecoveryMovementTest>[]) {
       if (t.test.trim().toLowerCase() == testName.trim().toLowerCase()) {
         return t.reveals.trim();
       }
@@ -1158,8 +1341,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     await _ai('Does it travel anywhere else?');
     if (!mounted) return;
     _showChips([
-      _ChipAction(Icons.check_circle_outline, 'No — just there', () {
-        _me('No — just there');
+      _ChipAction(Icons.check_circle_outline, 'No, just there', () {
+        _me('No, just there');
         _recoveryReferral = null;
         _recoveryReferralSide = null;
         _askNerveReferral();
@@ -1194,14 +1377,22 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
           // crossing. The engine names the pattern on the result; this is the
           // same statement at the moment of choosing, so it is not a surprise.
           _ai(s.$1 == 'both'
-              ? 'Both sides — the ${target.toLowerCase()} pads are drawn left and right.'
+              ? 'Both sides: the ${target.toLowerCase()} pads are drawn left and right.'
               : (_recoverySide != null && _recoverySide != s.$1)
                   ? 'That’s a cross-body pattern. The main pads stay on the '
                       '$_recoverySide; the ${target.toLowerCase()} pads go on the ${s.$1}.'
-                  : 'Same side — the ${target.toLowerCase()} pads go on the '
+                  : 'Same side: the ${target.toLowerCase()} pads go on the '
                       '${s.$1} with the main pads.');
           _askNerveReferral();
         }),
+      // Web parity: `referralSide` isn't in the Resolve gate either
+      // (`RecoveryEngineFlow.jsx`, `disabled={!region || ...}`) — it's
+      // defaulted for convenience there, not forced.
+      _ChipAction(Icons.arrow_forward_rounded, 'Skip', () {
+        _me('Skip');
+        _recoveryReferralSide = null;
+        _askNerveReferral();
+      }),
     ]);
   }
 
@@ -1218,58 +1409,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// A nerve-referral pattern ALONE blocks nothing — it is a selection signal.
   /// Only the combination with weakness or a bladder/bowel change is the
   /// refer-out.
+  /// No longer asked — always defaults to No (no nerve-referral pattern, no
+  /// motor weakness, no bladder/bowel change) and moves straight to the
+  /// resolve, instead of prompting the user for it.
   Future<void> _askNerveReferral() async {
-    await _ai('Last one — is there a true nerve-referral pattern (shooting or '
-        'electric down the limb)?');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.check_circle_outline, 'No', () {
-        _me('No');
-        _nerveReferral = false;
-        _finishAssessment();
-      }, hot: true),
-      _ChipAction(Icons.bolt_outlined, 'Yes', () {
-        _me('Yes');
-        _nerveReferral = true;
-        _askRadicularDetail();
-      }),
-    ]);
-  }
-
-  Future<void> _askRadicularDetail() async {
-    await _ai('With any motor weakness, or a bladder or bowel change?');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.check_circle_outline, 'Neither', () {
-        _me('Neither');
-        _motorWeakness = false;
-        _bladderBowelChange = false;
-        _finishAssessment();
-      }, hot: true),
-      _ChipAction(Icons.warning_amber_rounded, 'Motor weakness', () {
-        _me('Motor weakness');
-        _motorWeakness = true;
-        _radicularBlock();
-      }),
-      _ChipAction(Icons.warning_amber_rounded, 'Bladder or bowel change', () {
-        _me('Bladder or bowel change');
-        _bladderBowelChange = true;
-        _radicularBlock();
-      }),
-    ]);
-  }
-
-  /// The client-side half of the radicular gate. The engine refuses this
-  /// combination too; stopping here means not asking it to.
-  Future<void> _radicularBlock() async {
-    await _ai('A nerve-referral pattern with weakness or a bladder or bowel '
-        'change needs professional assessment before any pad placement. No '
-        'placement is available for this session.');
-    if (!mounted) return;
-    _showChips([
-      _ChipAction(Icons.home_rounded, 'Start over', _startOver),
-      _ChipAction(Icons.bolt_rounded, 'Performance instead', _onPerformance),
-    ]);
+    _nerveReferral = false;
+    _motorWeakness = false;
+    _bladderBowelChange = false;
+    await _finishAssessment();
   }
 
   // ── The resolve ────────────────────────────────────────────────────────────
@@ -1374,7 +1521,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         '${placement.thermalLabel} recommended',
       if (placement.thermalRationale.trim().isNotEmpty)
         placement.thermalRationale.trim(),
-    ].join(' — ');
+    ].join('. ');
     if (thermal.isNotEmpty) await _ai(thermal);
     if (!mounted) return;
 
@@ -1403,8 +1550,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (area == null || area.trim().isEmpty) return;
 
     final existing = ref.read(guidedAssessmentProvider).discomfortAreas;
-    if (existing
-        .any((a) => a.bodyPart.toLowerCase() == area.toLowerCase())) {
+    if (existing.any((a) => a.bodyPart.toLowerCase() == area.toLowerCase())) {
       return;
     }
 
@@ -1482,16 +1628,389 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // menu matches nothing — a no-match dressed up as a question the user was
     // invited to answer. A typed message goes to the chat surface like any other.
     _me(text);
-    // Two chatbots, one input box. A typed message must reach the surface the
-    // conversation is actually on: the recovery corpus can't answer "hamstring
-    // chain for a sprinter" and the performance corpus can't answer "my low
-    // back is tight", so sending everything to one of them made half the
-    // messages unanswerable. Nothing chosen yet → performance, as before.
-    if (_recovery) {
-      _recoveryChat(text);
-    } else {
-      _perfChat(text);
+    // ONE DOOR FOR TYPED TEXT. The split `performance-chat/message` /
+    // `recovery-chat/message` pair is replaced here by the backend's unified
+    // `POST chat` route, which classifies each turn itself — so "hamstring chain
+    // for a sprinter" and "my low back is tight" both land on the lane that can
+    // answer them regardless of which mode button was last tapped. The
+    // chip-driven flows (mode buttons, catalogue pickers, pad map, guided
+    // recovery) are untouched and still use `_perfChat` / `_recoveryChat`.
+    _assistantChat(text);
+  }
+
+  // ── Typed text → the unified assistant route (`POST chat`) ─────────────────
+
+  /// The typed free-text path. Posts to [ApiEndpoints.assistantChat] and renders
+  /// the envelope's `reply` as a bubble plus its `chips` as tappable follow-ups;
+  /// tapping one replays its label as the next turn, carrying [_threadId] so the
+  /// backend keeps one conversation.
+  ///
+  /// Deliberately NOT wired to the catalogue position picker / ranked-chain /
+  /// pad-map behaviours that `_perfChat` has — this route does not return those
+  /// shapes, and the chip flows that do are reached from the mode buttons, which
+  /// this change leaves alone.
+  /// [slots] is the slot payload for THIS turn — a chip tap passes
+  /// `chip.nextSlots(_assistantSlots)`, typed text passes nothing and the
+  /// current [_assistantSlots] ride along unchanged (web parity:
+  /// `carried = nextSlots ?? slots`).
+  Future<void> _assistantChat(String text,
+      {Map<String, dynamic>? slots}) async {
+    final sent = slots ?? _assistantSlots;
+    setState(() {
+      _typing = true;
+      _chipsVisible = false;
+    });
+    _scrollToEnd();
+
+    final AssistantChatReply reply;
+    try {
+      reply = await ref.read(assistantChatRemoteSourceProvider).send(
+            message: text,
+            sessionId: ref.read(performanceSessionIdProvider),
+            threadId: _threadId,
+            slots: sent,
+          );
+    } catch (e) {
+      return _failStep('Couldn’t reach the assistant',
+          () => _assistantChat(text, slots: sent), e);
     }
+    if (!mounted) return;
+
+    // Keep the conversation handle for the next turn, and REPLACE the slot
+    // memory with whatever the server now holds (web: `if (reply.slots)
+    // setSlots(reply.slots)`).
+    if (reply.threadId != null) _threadId = reply.threadId;
+    _assistantSlots = reply.slots;
+
+    setState(() {
+      _typing = false;
+      final body = reply.reply.trim();
+      if (body.isNotEmpty) _messages.add(_Msg(false, body));
+      // The disclosed sources, as one compact line — the backend already
+      // decided what was safe to cite.
+      if (reply.sources.isNotEmpty) {
+        final names = reply.sources.map((s) => s.display).take(3).join(' · ');
+        _messages.add(_Msg(false, 'Source: $names'));
+      }
+    });
+    _scrollToEnd();
+
+    // A gate block (or a lane refusal). Show what it said and offer a way
+    // onward — never a placement, never a "start a session" chip.
+    if (reply.isRefusal) {
+      if (reply.reply.trim().isEmpty) return _refusal(null);
+      // The server's own chips win when it sent any (a rate-limited refusal
+      // still offers "Where is the discomfort?" → the placement lane). Only when
+      // it sent none do we fall back to the two lanes plus Start over.
+      _showChips(reply.chips.isNotEmpty
+          ? [
+              for (final c in reply.chips.take(12)) _assistantChip(c),
+              _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+            ]
+          : [
+              _ChipAction(Icons.bolt_rounded, 'Performance', _onPerformance),
+              _ChipAction(Icons.waves_rounded, 'Recovery', _onRecovery),
+              _ChipAction(Icons.home_rounded, 'Start over', _startOver),
+            ]);
+      return;
+    }
+
+    // A generated pad placement rides in the envelope as `placement` — the same
+    // card payload the Performance / Recovery chip flows land on. Render it
+    // INLINE as the same [PlacementCard] (kept in the conversation, never a
+    // redirect like the web's `/placement`). The 3D pad map is NOT opened
+    // automatically — the card's own "Open in 3D" button (wired to
+    // [_openPadMap]) is how the practitioner gets there, same as every other
+    // placement in this screen.
+    // Two envelope shapes carry a placement: the performance lane NESTS it under
+    // `placement`, the recovery lane puts `hasPlacement` / `point` / `sets` at
+    // the TOP LEVEL (lane == "placement"). Check both — reading only the nested
+    // key is why a recovery placement rendered as "just the questions".
+    final nested = reply.raw['placement'];
+    final rawPlacement = (nested is Map)
+        ? Map<String, dynamic>.from(nested)
+        : (reply.raw['hasPlacement'] == true || reply.raw['sets'] is List)
+            ? reply.raw
+            : null;
+    if (rawPlacement != null) {
+      // RECOVERY chat placements carry no thermal mode, driver or wellness
+      // claim — those exist only on `recovery-engine-v3/resolve`'s own
+      // response. The web gets them by navigating "Open in 3D" to `/placement`,
+      // which follows the card's `deepLink` back into that same resolve call
+      // (`RecoveryEngineFlow.jsx`'s deep-link effect). Do the same call here,
+      // from the params the chat envelope already gave us, instead of a
+      // redirect — then render through the SAME [_showRecoveryPlacement] the
+      // guided flow uses, so thermal / driver / cautions show identically.
+      if ((rawPlacement['source'] ?? reply.lane) == 'recovery') {
+        setState(() {
+          _typing = true;
+          _chipsVisible = false;
+        });
+        _scrollToEnd();
+        final full = await _resolveRecoveryFromChat(rawPlacement);
+        if (!mounted) return;
+        setState(() => _typing = false);
+        if (full != null && full.hasPads) {
+          await _showRecoveryPlacement(full);
+          return;
+        }
+        // Resolve failed or came back empty — fall through to the thin
+        // chat-only card below rather than losing the turn.
+      }
+
+      final json = _chatPlacementJson(Map<String, dynamic>.from(rawPlacement));
+      if (json != null) {
+        final payload = PadSetPayload.fromJson(json);
+        if (!payload.isRefusal) {
+          setState(() => _messages.add(_Msg.card(payload)));
+          _scrollToEnd();
+          // Let the card land before the follow-up chips, same beat as the
+          // performance / recovery placement steps.
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          if (!mounted) return;
+          // The server's follow-up questions below the card, plus a way to
+          // start another prep.
+          _showChips([
+            for (final c in reply.chips.take(8)) _assistantChip(c),
+            _ChipAction(
+                Icons.autorenew_rounded, 'Prep another user', _onPerformance),
+          ]);
+          return;
+        }
+      }
+    }
+
+    // The assistant's own follow-up chips — tapping one is the next turn, with
+    // the chip's slot written into the payload.
+    if (reply.chips.isNotEmpty) {
+      _showChips([for (final c in reply.chips.take(12)) _assistantChip(c)]);
+      return;
+    }
+
+    // No chips came back — fall back to the two lanes so the conversation can
+    // still go somewhere.
+    if (reply.reply.trim().isEmpty) {
+      await _ai('I don’t have an answer for that yet. Try rephrasing, or pick '
+          'a suggestion below.');
+    }
+    _showChips(_openingChips);
+  }
+
+  /// One assistant follow-up chip as a tappable action. Tapping echoes the
+  /// chip's label as the next message and sends `chip.nextSlots(_assistantSlots)`
+  /// as the turn's slots — this is what advances `perfAccept` → `perfChain` →
+  /// placement. `likely` chips render hot.
+  _ChipAction _assistantChip(AssistantChip c) => _ChipAction(
+        Icons.chevron_right_rounded,
+        c.label,
+        () {
+          _me(c.label);
+          _assistantChat(c.label, slots: c.nextSlots(_assistantSlots));
+        },
+        hot: c.likely,
+      );
+
+  /// Re-resolves a RECOVERY chat placement against
+  /// `recovery-engine-v3/resolve`, using the params the envelope's own
+  /// `deepLink` carries (`region`, `goal`, `side`, `generation`,
+  /// `referral_target`, `referral_side`, `aspect`). That endpoint is the only
+  /// place thermal mode, the driver description, the wellness claim and
+  /// cautions live — the chat envelope's `sets[]` never carry them. Web parity:
+  /// `RecoveryEngineFlow.jsx`'s deep-link effect, reached there by navigating
+  /// "Open in 3D" to `/placement?…`; reached here by calling the same resolve
+  /// directly instead of a redirect.
+  ///
+  /// Returns null on anything that stops the call — no region/goal in the
+  /// deep link, an unreachable cutover, an unreachable resolve — so the caller
+  /// falls back to the thin chat-only card rather than losing the turn.
+  Future<RecoveryPlacement?> _resolveRecoveryFromChat(
+      Map<String, dynamic> placement) async {
+    String? str(dynamic v) {
+      final s = (v ?? '').toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    final deepLink = placement['deepLink'];
+    final params = (deepLink is Map && deepLink['params'] is Map)
+        ? Map<String, dynamic>.from(deepLink['params'] as Map)
+        : const <String, dynamic>{};
+    final point =
+        (placement['point'] is Map) ? placement['point'] as Map : const {};
+
+    final region = str(params['region']) ?? str(point['region']);
+    final goal = str(params['goal']) ?? str(point['goalPathway']);
+    if (region == null || goal == null) return null;
+
+    final generation = RecoveryGeneration.readFrom({
+          'generation':
+              str(params['generation']) ?? str(placement['generation']),
+        }) ??
+        RecoveryGeneration.v3;
+
+    final RecoveryDispatch dispatch;
+    try {
+      dispatch = await _awaitDispatch();
+    } catch (_) {
+      return null;
+    }
+    if (!mounted) return null;
+
+    try {
+      return await ref.read(recoveryEngineRemoteSourceProvider).resolve(
+            generation: generation,
+            goal: goal,
+            region: region,
+            side: str(params['side']),
+            aspect: str(params['aspect']),
+            referralTarget: str(params['referral_target']),
+            referralSide: str(params['referral_side']),
+            redFlags: dispatch.screen.allFlagsNo,
+            sessionId: ref.read(performanceSessionIdProvider),
+          );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Pulls each pad's muscle list out of `presented.whereText`, one entry per
+  /// parenthetical, in the SAME order the pads appear in `sets[]` (sun, then
+  /// moon, set by set — the `whereText` sentence order and the `chunkIds` list
+  /// both confirm it). The sentence shape is authored, not typed, e.g.:
+  /// "...(Rectus femoris muscle and Vastus medialis muscle — Proximal quad and
+  /// rectus femoris, right)." → `["Rectus femoris muscle", "Vastus medialis
+  /// muscle"]`. Returns one (possibly empty) list per parenthetical found;
+  /// callers index past the end when the text is shorter than the pad count.
+  static List<List<String>> _muscleGroupsFromWhereText(String whereText) {
+    if (whereText.trim().isEmpty) return const [];
+    final groups = <List<String>>[];
+    for (final m in RegExp(r'\(([^()]*?)—[^()]*\)').allMatches(whereText)) {
+      final muscles = (m.group(1) ?? '')
+          .split(RegExp(r'\s+and\s+|,\s*'))
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      groups.add(muscles);
+    }
+    return groups;
+  }
+
+  /// Reshapes the unified `POST chat` envelope's `placement` block into the
+  /// JSON [PadSetPayload.fromJson] already understands (the performance
+  /// catalogue shape). The chat backend nests the point under `point` and lists
+  /// each set's pads as a flat `pads[]` array labelled "Sun" / "Moon"; the
+  /// catalogue shape wants top-level discipline/role, a `chain` object, and
+  /// `sun` / `moon` keys per set. Returns null when there is no drawable
+  /// placement to render.
+  Map<String, dynamic>? _chatPlacementJson(Map<String, dynamic> placement) {
+    if (placement['hasPlacement'] != true && placement['sets'] is! List) {
+      return null;
+    }
+    final rawSets = placement['sets'];
+    if (rawSets is! List || rawSets.isEmpty) return null;
+
+    final point = (placement['point'] is Map)
+        ? Map<String, dynamic>.from(placement['point'] as Map)
+        : const <String, dynamic>{};
+    final isRecovery = (placement['source'] ?? '').toString() == 'recovery' ||
+        (placement['generation'] ?? '').toString().startsWith('v');
+
+    Map<String, dynamic>? padOf(List pads, String label) {
+      for (final p in pads.whereType<Map>()) {
+        if ((p['padLabel'] ?? p['pad_label'] ?? '').toString().toLowerCase() ==
+            label) {
+          return Map<String, dynamic>.from(p);
+        }
+      }
+      return null;
+    }
+
+    // Recovery v3's chat shape names no `target_muscles` on the pad itself — the
+    // ONLY place the muscles are named is the prose in `presented.whereText`,
+    // one parenthetical per pad, in the exact sun-then-moon, set-by-set order
+    // the `chunkIds` list confirms. Without them the 3D mapper's tier-2
+    // (muscle-centroid) fallback is unavailable, and a landmark phrase that
+    // doesn't happen to hit the curated zone-synonym table (tier 1) draws
+    // NOTHING — which is why only some (or none) of a recovery card's pads were
+    // showing on the model. Parsed once per placement, consumed in order below.
+    final whereMuscleGroups = _muscleGroupsFromWhereText(
+        ((placement['presented'] as Map?)?['whereText'] ?? '').toString());
+    var whereIdx = 0;
+    List<String> nextMuscleGroup() {
+      if (whereIdx >= whereMuscleGroups.length) {
+        whereIdx++;
+        return const [];
+      }
+      return whereMuscleGroups[whereIdx++];
+    }
+
+    final sets = <Map<String, dynamic>>[];
+    for (final s in rawSets.whereType<Map>()) {
+      final m = Map<String, dynamic>.from(s);
+      final pads = (m['pads'] is List) ? m['pads'] as List : const [];
+      var sun = padOf(pads, 'sun');
+      var moon = padOf(pads, 'moon');
+
+      // Recovery v3's chat shape has NO `pads[]` — just `landmarks[]` (sun
+      // anchor, then moon anchor) and `bodySides[]`. Synthesize the pair from
+      // those, plus the muscles parsed above, so the card AND the 3D view have
+      // a Sun / Moon to place.
+      if (sun == null && moon == null && m['landmarks'] is List) {
+        final lm = List.from(m['landmarks'] as List);
+        final bs = (m['bodySides'] is List)
+            ? List.from(m['bodySides'] as List)
+            : const [];
+        if (lm.isNotEmpty) {
+          sun = {
+            'pad_label': 'Sun',
+            'side': bs.isNotEmpty ? bs.first.toString() : '',
+            'landmark_anchor': lm[0].toString(),
+            'target_muscles': nextMuscleGroup(),
+          };
+        }
+        if (lm.length > 1) {
+          moon = {
+            'pad_label': 'Moon',
+            'side': bs.isNotEmpty ? bs.last.toString() : '',
+            'landmark_anchor': lm[1].toString(),
+            'target_muscles': nextMuscleGroup(),
+          };
+        }
+      }
+
+      sets.add({
+        'set_index': m['setIndex'] ?? m['set_index'] ?? 0,
+        'role': m['role'] ?? '',
+        'placement_label': m['note'] ?? m['placementLabel'] ?? '',
+        'clinical_reasoning':
+            m['clinicalReasoning'] ?? m['clinical_reasoning'] ?? '',
+        'sun': sun,
+        'moon': moon,
+      });
+    }
+    if (sets.every((s) => s['sun'] == null && s['moon'] == null)) return null;
+
+    return {
+      'discipline': point['discipline'] ??
+          (isRecovery ? 'recovery' : placement['source']) ??
+          '',
+      'display_name': point['displayName'] ?? point['display_name'] ?? '',
+      'role': point['role'] ?? '',
+      'subtype': point['subtype'],
+      'chain': {
+        'chain_id': point['chainId'] ??
+            point['chain_id'] ??
+            point['recoveryId'] ??
+            point['recovery_id'] ??
+            '',
+        'name': point['chainName'] ?? point['chain_name'] ?? '',
+        'movement': point['movement'] ?? '',
+        'directional_mode':
+            point['directionalMode'] ?? point['directional_mode'] ?? '',
+        'injury_risk_reduction': point['injuriesCommonlySeen'] ?? const [],
+        'performance_rom_benefits': point['romBenefits'] ?? const [],
+      },
+      'sets': sets,
+    };
   }
 
   // ── Typed text → performance-chat (the query path, conversationally) ────────
@@ -1521,6 +2040,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     return null;
   }
 
+  // Retained unchanged, but no longer the typed-text entry point — `_send` now
+  // routes free text to `_assistantChat` (`POST chat`). Kept because removing it
+  // would also mean unpicking the catalogue position-picker / pad-map helpers it
+  // shares with the mode-button flows, which this change must leave alone.
+  // ignore: unused_element
   Future<void> _perfChat(String text) async {
     // A bare sport name needs no chat turn: the catalogue already knows the
     // sport, and the position step is where this was always going to land. It
@@ -1576,7 +2100,24 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 
     setState(() {
       _typing = false;
-      if (reply.slots.isNotEmpty) _slots = reply.slots;
+      // MERGE, don't replace. When the typed text doesn't match anything the
+      // service resets ITS OWN session slots to null rather than echoing back
+      // what was already picked — blindly assigning `_slots = reply.slots` in
+      // that case wiped the discipline/role we already had (and the NEXT
+      // typed turn would then carry that emptied map to the service, making
+      // the loss stick). Keep every existing value; only overwrite a key when
+      // the reply actually resolved something non-empty for it, so an
+      // unmatched message is a no-op for state instead of a silent restart.
+      if (reply.slots.isNotEmpty) {
+        final merged = Map<String, dynamic>.from(_slots);
+        for (final entry in reply.slots.entries) {
+          final value = entry.value;
+          final isEmpty =
+              value == null || (value is String && value.trim().isEmpty);
+          if (!isEmpty) merged[entry.key] = value;
+        }
+        _slots = merged;
+      }
     });
     _adoptSlots(reply.slots);
 
@@ -1611,6 +2152,45 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       return _perfStartRole();
     }
 
+    // The service couldn't resolve the typed text to a sport it has chains
+    // for. Its own reply text at this point tends to just echo/name the
+    // unmatched sport back in prose — not tappable, and redundant once the
+    // chip picker below repeats the same names as actual buttons — so skip
+    // printing it and ask the tap flow's own question instead, followed by
+    // the exact same discipline chips (ballet, cricket, …) rather than the
+    // generic home chips.
+    //
+    // The service can also fail to resolve mid-conversation, once a
+    // discipline (and maybe a role) is already picked — its own prose at that
+    // point (e.g. "…I have documented protocol for: Ballet, Basketball, …")
+    // reads as a reset back to square one. It isn't: we already know where
+    // the conversation left off, so re-show THAT step instead of printing the
+    // service's reply. Not gated on the reply's wording — any unresolved
+    // message mid-flow should return to the current step, since the wording
+    // the backend uses for "didn't understand that" isn't a stable contract.
+    // A role was already picked → the chains for it, unchanged (not the
+    // discipline picker); a discipline only → the position picker.
+    if (!reply.hasPads && reply.options.isEmpty) {
+      if (_perfRole != null) {
+        return _perfPickRole(_perfRole!);
+      }
+      if (_perfDiscipline != null) {
+        return _perfStartRole();
+      }
+    }
+    if (!reply.hasPads && reply.options.isEmpty && _perfDiscipline == null) {
+      try {
+        final disciplines = await ref.read(disciplinesProvider.future);
+        if (mounted && disciplines.isNotEmpty) {
+          await _ai('What are we prepping for?');
+          _showChips(_disciplineChipsFrom(disciplines));
+          return;
+        }
+      } catch (_) {
+        // Fall through to the service's own reply/home chips below.
+      }
+    }
+
     if (reply.reply.trim().isNotEmpty) {
       setState(() => _messages.add(_Msg(false, reply.reply.trim())));
       _scrollToEnd();
@@ -1632,6 +2212,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               _me(r.payload.chain?.name ?? 'Another match');
               setState(() => _messages.add(_Msg.card(r.payload)));
               _scrollToEnd();
+              // Open the body for THIS chain immediately, same as tapping the
+              // card's own "3D pad map" button — otherwise picking a later
+              // match just adds another card and the 3D view (if already
+              // open from the first match) keeps showing the old one.
+              _openPadMap(r.payload);
             },
           ),
         _ChipAction(
@@ -1683,6 +2268,11 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// citation — so the reply is rendered verbatim rather than re-formatted
   /// here. [slotPatch] carries an exact value from a tapped chip, so a chip
   /// answer doesn't have to survive a second round of text parsing.
+  ///
+  /// Retained unchanged, but no longer the typed-text entry point — `_send` now
+  /// routes free text to `_assistantChat` (`POST chat`). Its area-disambiguation
+  /// chips still call back into it, so the method stays self-contained.
+  // ignore: unused_element
   Future<void> _recoveryChat(
     String text, {
     Map<String, dynamic> slotPatch = const {},
@@ -1760,7 +2350,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     }
 
     if (reply.reply.trim().isEmpty) {
-      await _ai('I don’t have a recovery placement for that yet. Try naming the '
+      await _ai(
+          'I don’t have a recovery placement for that yet. Try naming the '
           'area and how it feels, or pick an area below.');
     }
     _showChips([
@@ -1901,12 +2492,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                             Icon(Icons.auto_awesome_rounded,
                                 size: 20, color: p.copperInk),
                             const SizedBox(width: 8),
-                            Text(
-                              'Assistant',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: p.ink,
+                            Flexible(
+                              child: Text(
+                                'Assistant',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: p.ink,
+                                ),
                               ),
                             ),
                           ],
@@ -1919,6 +2514,26 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                       ],
                     ),
                   ),
+                  Builder(builder: (context) {
+                    // Past conversations: the selected client's, or — in
+                    // Guest mode — the guest chats this practitioner started.
+                    ref.watch(sessionClientModeProvider);
+                    ref.watch(selectedClientProvider);
+                    final c = _historyClient;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      // labelled, so it reads as History at a glance
+                      child: _HistoryBtn(
+                        palette: p,
+                        // History: Protocols / Usage / Outcomes / Chat
+                        onTap: () => AssistantHistoryScreen.open(
+                          context,
+                          clientId: c?.id,
+                          name: c?.displayName ?? 'Guest',
+                        ),
+                      ),
+                    );
+                  }),
                   _IconBtn(
                     palette: p,
                     icon: Icons.refresh_rounded,
@@ -1940,6 +2555,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 // typing row and chip row carry their own const keys so they can
                 // never be confused with a message bubble.
                 children: [
+                  if (_messages.isEmpty && !_typing)
+                    AssistantWelcomePanel(
+                      key: const ValueKey('welcome'),
+                      university: _isUniversity,
+                      onPrepUser: _onPerformance,
+                      onRecovery: _onRecovery,
+                      onFindPads: _onFindPads,
+                    ),
                   for (var i = 0; i < _messages.length; i++)
                     if (_messages[i].placement != null)
                       PlacementCard(
@@ -1983,30 +2606,39 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                 color: p.bg,
                 border: Border(top: BorderSide(color: p.line)),
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _input,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      style: TextStyle(color: p.ink, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'Ask or say what you need…',
-                        hintStyle: TextStyle(color: p.ink3),
-                        filled: true,
-                        fillColor: p.card,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 13),
-                        border: _barBorder(p.line),
-                        enabledBorder: _barBorder(p.line),
-                        focusedBorder: _barBorder(p.copper),
-                      ),
-                    ),
+              // Tablet: the input sits in the centred 680px reading column.
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth:
+                        HwTablet.of(context) ? HwTablet.read : double.infinity,
                   ),
-                  const SizedBox(width: 9),
-                  _MicSendButton(palette: p, onTap: _send),
-                ],
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _input,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _send(),
+                          style: TextStyle(color: p.ink, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: 'Ask or say what you need…',
+                            hintStyle: TextStyle(color: p.ink3),
+                            filled: true,
+                            fillColor: p.card,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 13),
+                            border: _barBorder(p.line),
+                            enabledBorder: _barBorder(p.line),
+                            focusedBorder: _barBorder(p.copper),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 9),
+                      _MicSendButton(palette: p, onTap: _send),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
@@ -2232,6 +2864,51 @@ class _IconBtn extends StatelessWidget {
   }
 }
 
+/// History: a small copper-tinted pill with a clock and the word.
+class _HistoryBtn extends StatelessWidget {
+  final RefPalette palette;
+  final VoidCallback onTap;
+  const _HistoryBtn({required this.palette, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Semantics(
+      button: true,
+      label: 'History',
+      excludeSemantics: true,
+      child: Material(
+        color: p.tanSoft,
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: p.cardline),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.history_rounded, size: 15, color: p.copperInk),
+                const SizedBox(width: 4),
+                Text('History',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: p.copperInk)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// `.micbtn` — send.
 class _MicSendButton extends StatelessWidget {
   final RefPalette palette;
@@ -2349,7 +3026,7 @@ class _DisciplineSheetState extends State<_DisciplineSheet> {
               child: list.isEmpty
                   ? Center(
                       child: Text(
-                        'No match — new disciplines appear here as their pad '
+                        'No match. New disciplines appear here as their pad '
                         'protocols land.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 12, color: p.ink3),
@@ -2382,5 +3059,48 @@ class _DisciplineSheetState extends State<_DisciplineSheet> {
         ),
       ),
     );
+  }
+}
+
+/// One saved conversation in `rag-chat-history`.
+class _RagThread {
+  String? id;
+  String? who;
+  bool started = false;
+  final List<(bool, String, Map<String, dynamic>?)> pending = [];
+}
+
+/// The transcript list: behaves like a plain `List<_Msg>`, and reports each
+/// added message (and a clear) so the chat can be saved without touching the
+/// flows that add bubbles.
+class _RecordingList extends ListBase<_Msg> {
+  final void Function(_Msg) onAdd;
+  final VoidCallback onClear;
+  _RecordingList({required this.onAdd, required this.onClear});
+
+  final List<_Msg> _inner = [];
+
+  @override
+  int get length => _inner.length;
+
+  @override
+  set length(int n) => _inner.length = n;
+
+  @override
+  _Msg operator [](int i) => _inner[i];
+
+  @override
+  void operator []=(int i, _Msg v) => _inner[i] = v;
+
+  @override
+  void add(_Msg element) {
+    _inner.add(element);
+    onAdd(element);
+  }
+
+  @override
+  void clear() {
+    _inner.clear();
+    onClear();
   }
 }

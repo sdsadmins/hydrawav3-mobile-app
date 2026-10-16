@@ -44,9 +44,16 @@ class AppConstants {
   static const String termsUrl = 'https://www.hydrawav3.com/terms';
 
   // Version and Release Notes
-  static const String appVersion = '1.0.3';
-  static const String buildNumber = '4';
+  static const String appVersion = '1.0.4';
+  static const String buildNumber = '5';
   static const String releaseNotes = '''
+Version 1.0.4
+- Fixed an issue on iOS where switching exercises in Protocol Plus could incorrectly show a connected device as out of range
+- Selecting "Both" during a Guided Assessment now correctly shows pads on both sides of the body
+- Improved 3D muscle highlighting accuracy on the pad placement viewer
+- Improved the reliability of the Locate Device feature
+- Recently used protocols now show the full protocol name
+- Various bug fixes and stability improvements
 Version 1.0.3
 - Your plan details now correctly show remaining session minutes
 - Advanced settings: hot & cold intensity now matches the web app

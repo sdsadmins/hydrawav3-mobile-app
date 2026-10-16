@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/config/app_config_store.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -60,14 +61,14 @@ class LegalScreen extends StatelessWidget {
                   title: 'Privacy policy',
                   subtitle: 'hydrawav3.com/privacy',
                   onTap: () =>
-                      _open(context, 'https://www.hydrawav3.com/privacy'),
+                      _open(context, AppConfigStore.current.links.privacy),
                 ),
                 _LinkRow(
                   icon: HwIcons.phone,
                   title: 'Help center',
                   subtitle: 'hydrawav3.com/help-center',
                   onTap: () =>
-                      _open(context, 'https://www.hydrawav3.com/help-center'),
+                      _open(context, AppConfigStore.current.links.helpCenter),
                 ),
                 _LinkRow(
                   icon: HwIcons.doc,

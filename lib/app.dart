@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/config/app_config_gate.dart';
 import 'core/router/app_router.dart';
 import 'core/constants/theme_constants.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_mode_provider.dart';
+import 'core/theme/text_scale_provider.dart';
 import 'features/session/presentation/widgets/session_outcome_gate.dart';
+import 'features/session/services/plus_reconnect_watchdog.dart';
 
 class HydrawavApp extends ConsumerWidget {
   const HydrawavApp({super.key});
@@ -14,6 +17,7 @@ class HydrawavApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
     final themeMode = ref.watch(themeModeProvider);
+    final textScale = ref.watch(textScaleProvider);
     final platformBrightness =
         WidgetsBinding.instance.platformDispatcher.platformBrightness;
     final effectiveBrightness = switch (themeMode) {
@@ -33,9 +37,24 @@ class HydrawavApp extends ConsumerWidget {
       scrollBehavior: const _AppScrollBehavior(),
       routerConfig: router,
       // Sits above every route so a session that ends off-screen still gets its
-      // post-session screen — see [SessionOutcomeGate].
-      builder: (context, child) =>
-          SessionOutcomeGate(child: child ?? const SizedBox.shrink()),
+      // post-session screen — see [SessionOutcomeGate]. PlusReconnectWatchdog
+      // is nested the same way so its "bring the device back in range" nag is
+      // visible from any screen (session screen, device list, anywhere), not
+      // just while SessionScreen itself is mounted.
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: TextScaler.linear(textScale),
+        ),
+        // Update required / maintenance (server mobile-app-config) cover
+        // everything below them.
+        child: AppConfigGate(
+          child: SessionOutcomeGate(
+            child: PlusReconnectWatchdog(
+              child: child ?? const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -183,13 +184,28 @@ class ProtocolPlusController {
   /// Guards the one-time end-of-run teardown ([_finishRun]).
   bool _terminalHandled = false;
 
+  /// Devices already finished by [_finishDevice], so ending one unit of a
+  /// multi-device run is idempotent per device rather than per run. The whole-run
+  /// teardown fires only once every binding is in here.
+  final Set<String> _finishedDevices = <String>{};
+
+  /// Best-effort unique backend slot for each Plus device. When the live feed
+  /// exposes a slotId we cache it here so stop/pause/resume can target the
+  /// exact device instead of falling back to a broad name match.
+  final Map<String, String> _slotIdByDevice = <String, String>{};
+
   /// The engine for the current run (set in [connectAll]) — used to replay a
   /// held protocol switch once a device reconnects.
   SessionEngine? _engine;
 
   /// Protocol switches that arrived while a (BLE) device was disconnected,
   /// keyed by localMac. Only the LATEST is kept; applied on reconnect.
-  final Map<String, ({Protocol protocol, int index})> _pendingSwitches = {};
+  /// `advanced` is set only for a restart's START_PROTOCOL event (`restarted:
+  /// true`, carrying the server's confirmed advancedSettings) — null for a
+  /// normal switch, matching [SessionEngine.applyProtocolPlusSwitch]'s
+  /// `advancedOverride`.
+  final Map<String, ({Protocol protocol, int index, AdvancedSettings? advanced})>
+      _pendingSwitches = {};
 
   /// Devices whose OWN server session has already been stopped because the user
   /// stopped that unit on the hardware. [stopServerSession] and [_finishRun]
@@ -211,6 +227,50 @@ class ProtocolPlusController {
   /// is what makes the run converge instead of freezing on a flaky stack.
   Timer? _pendingSwitchReconciler;
 
+  /// iOS-only: serializes the BLE write for each device's protocol switch.
+  /// CoreBluetooth queues central-role operations across peripherals more
+  /// strictly than Android — when two devices' breaks end close together,
+  /// concurrent START_PROTOCOL writes to both can head-of-line-block each
+  /// other and hit the write timeout, which then makes a device that never
+  /// actually lost its link look like it "went out of range." Android's BLE
+  /// stack tolerates the concurrent writes fine, so this is iOS-only.
+  Future<void> _iosSwitchQueue = Future.value();
+
+  /// Apply one device's protocol switch — on iOS, queued behind any switch
+  /// already in flight for another device (see [_iosSwitchQueue]); on other
+  /// platforms, applied immediately as before.
+  Future<bool> _applyDeviceSwitch(
+    SessionEngine engine,
+    String localMac,
+    Protocol protocol,
+    int index, {
+    AdvancedSettings? advancedOverride,
+  }) {
+    if (!Platform.isIOS) {
+      return engine.applyProtocolPlusSwitch(
+        localMac,
+        protocol,
+        index,
+        advancedOverride: advancedOverride,
+      );
+    }
+    final completer = Completer<bool>();
+    _iosSwitchQueue = _iosSwitchQueue.then((_) async {
+      try {
+        final ok = await engine.applyProtocolPlusSwitch(
+          localMac,
+          protocol,
+          index,
+          advancedOverride: advancedOverride,
+        );
+        completer.complete(ok);
+      } catch (e) {
+        completer.completeError(e);
+      }
+    });
+    return completer.future;
+  }
+
   ProtocolPlusController(this._ref);
 
   /// Pretty-print any JSON-ish payload for debugging (falls back to toString).
@@ -220,6 +280,20 @@ class ProtocolPlusController {
     } catch (_) {
       return data.toString();
     }
+  }
+
+  /// One-line read of the pause/resume switch list, e.g. `— held #1 in 84s, #2 in
+  /// 420s`. This is the part worth seeing at a glance in the log: it says the
+  /// sequence really did stop, and with how much left on each remaining switch.
+  String _switchSummary(dynamic data, String key, String verb) {
+    if (data is! Map) return '';
+    final list = data[key];
+    if (list is! List || list.isEmpty) return '— no switches $verb';
+    final parts = list
+        .whereType<Map>()
+        .map((s) => '#${s['protocolIndex']} in ${s['remainingSeconds']}s')
+        .join(', ');
+    return '— $verb ${list.length}: $parts';
   }
 
   /// GET /protocol-plus — list all Protocol Plus templates.
@@ -364,8 +438,13 @@ class ProtocolPlusController {
     );
   }
 
-  /// POST /sessions/:sessionId/pause/:organizationId for every bound device —
-  /// pause the server-side Protocol Plus session(s) so they stay in sync.
+  /// POST /protocol-plus/:sessionId/pause/:organizationId for every bound device.
+  ///
+  /// The Protocol Plus route, not the plain session one: besides stopping the
+  /// device timers it HOLDS the server's queued protocol switches. Those switches
+  /// are delayed jobs that otherwise keep counting down while the run is paused,
+  /// so a long pause would fire the rest of the sequence back to back on resume.
+  /// The response reports what is being held (`protocolPlusHeldSwitches`).
   Future<void> pauseServerSession() async {
     if (_bindings.isEmpty) return;
     final ctx = await _sessionRequestContext();
@@ -374,12 +453,15 @@ class ProtocolPlusController {
     for (final b in _bindings) {
       try {
         final res = await dio.post(
-          ApiEndpoints.sessionPause(b.serverSessionId, ctx.orgId),
+          ApiEndpoints.protocolPlusPause(b.serverSessionId, ctx.orgId),
           data: b.identityBody,
           options: ctx.options,
         );
-        appLogger
-            .i('ProtocolPlus: ⇐ POST pause payload:\n${_pretty(res.data)}');
+        appLogger.i(
+          'ProtocolPlus: ⇐ POST pause '
+          '${_switchSummary(res.data, 'protocolPlusHeldSwitches', 'held')}'
+          '\n${_pretty(res.data)}',
+        );
       } on DioException catch (e) {
         appLogger.e(
           'ProtocolPlus: pause failed (status=${e.response?.statusCode}) '
@@ -391,7 +473,9 @@ class ProtocolPlusController {
     }
   }
 
-  /// POST /sessions/:sessionId/resume/:organizationId for every bound device.
+  /// POST /protocol-plus/:sessionId/resume/:organizationId for every bound
+  /// device. Each held switch goes back on the queue with the wait it had left
+  /// when the pause landed, so the sequence continues from where it stopped.
   Future<void> resumeServerSession() async {
     if (_bindings.isEmpty) return;
     final ctx = await _sessionRequestContext();
@@ -400,12 +484,15 @@ class ProtocolPlusController {
     for (final b in _bindings) {
       try {
         final res = await dio.post(
-          ApiEndpoints.sessionResume(b.serverSessionId, ctx.orgId),
+          ApiEndpoints.protocolPlusResume(b.serverSessionId, ctx.orgId),
           data: b.identityBody,
           options: ctx.options,
         );
-        appLogger
-            .i('ProtocolPlus: ⇐ POST resume payload:\n${_pretty(res.data)}');
+        appLogger.i(
+          'ProtocolPlus: ⇐ POST resume '
+          '${_switchSummary(res.data, 'protocolPlusResumedSwitches', 're-queued')}'
+          '\n${_pretty(res.data)}',
+        );
       } on DioException catch (e) {
         appLogger.e(
           'ProtocolPlus: resume failed (status=${e.response?.statusCode}) '
@@ -417,32 +504,73 @@ class ProtocolPlusController {
     }
   }
 
+  /// POST /protocol-plus/:sessionId/restart for [localMac]'s binding —
+  /// restarts the sub-protocol CURRENTLY RUNNING on that device from the
+  /// beginning. Unlike pause/resume this route is NOT nested under
+  /// `:organizationId`.
+  ///
+  /// This call only TRIGGERS the restart and reports whether the server
+  /// accepted it — it does NOT itself write to the device. The server
+  /// broadcasts the same `START_PROTOCOL` socket event a normal sequence
+  /// switch uses (now carrying `restarted: true` plus authoritative timing:
+  /// `startedAt`/`elapsedSeconds`/`remainingSeconds`), and THAT event is what
+  /// drives the actual STOP -> fresh config -> PLAY device write, through the
+  /// exact same handler as every other switch (see the `START_PROTOCOL`
+  /// listener in [connectAll]). Applying the device write here too, from this
+  /// REST response, would double-fire it — the device would get two
+  /// STOP+config+PLAY cycles for one restart. Because it's the same
+  /// protocol/index — not a new sub-protocol — this is a clean restart of the
+  /// running stage: the whole-sequence total, the backend session, and
+  /// token/session lifecycle are all untouched. This must NEVER be confused
+  /// with a stop: we are only resetting the currently-running firmware, not
+  /// ending anything.
+  Future<bool> restartCurrentProtocol(String localMac) async {
+    final binding = _bindingForDevice(localMac);
+    if (binding == null) return false;
+    final ctx = await _sessionRequestContext();
+    // ctx is used only for auth headers here — the restart route has no
+    // :organizationId segment, so ctx.orgId is intentionally NOT appended to
+    // the path (unlike pause/resume above). A missing org context still
+    // allows the call to proceed with no extra headers rather than no-op.
+    final dio = _ref.read(nodeDioProvider);
+    try {
+      final res = await dio.post(
+        ApiEndpoints.protocolPlusRestart(binding.serverSessionId),
+        data: binding.identityBody,
+        options: ctx?.options,
+      );
+      appLogger.i(
+        'ProtocolPlus: ⇐ POST restart for $localMac\n${_pretty(res.data)}',
+      );
+      final data = res.data;
+      if (data is! Map || data['success'] != true) {
+        appLogger.w('ProtocolPlus: restart rejected for $localMac');
+        return false;
+      }
+      // The device write + timer resync arrive via the START_PROTOCOL socket
+      // event this triggers — nothing further to do here on success.
+      return true;
+    } on DioException catch (e) {
+      appLogger.e(
+        'ProtocolPlus: restart failed (status=${e.response?.statusCode}) '
+        '${e.response?.data}',
+      );
+      return false;
+    } catch (e) {
+      appLogger.e('ProtocolPlus: restart failed: $e');
+      return false;
+    }
+  }
+
   /// POST /sessions/:sessionId/stop/:organizationId with `stopAll` for every
   /// bound device — ends the Protocol Plus session(s) and cancels the server's
   /// remaining switch jobs.
   Future<void> stopServerSession() async {
     if (_bindings.isEmpty) return;
-    final ctx = await _sessionRequestContext();
-    if (ctx == null) return;
-    final dio = _ref.read(nodeDioProvider);
+    // Each device owns its own server session; the shared helper skips any
+    // already closed by a device-initiated stop so nothing is double-posted.
     for (final b in _bindings) {
-      // Already closed by a device-initiated stop — don't re-post.
-      if (_serverStoppedDevices.contains(b.localMac)) continue;
-      try {
-        final res = await dio.post(
-          ApiEndpoints.sessionStop(b.serverSessionId, ctx.orgId),
-          data: const {'stopAll': true},
-          options: ctx.options,
-        );
-        appLogger.i('ProtocolPlus: ⇐ POST stop payload:\n${_pretty(res.data)}');
-      } on DioException catch (e) {
-        appLogger.e(
-          'ProtocolPlus: stop failed (status=${e.response?.statusCode}) '
-          '${e.response?.data}',
-        );
-      } catch (e) {
-        appLogger.e('ProtocolPlus: stop failed: $e');
-      }
+      await _stopServerSessionForBinding(b);
     }
   }
 
@@ -458,40 +586,44 @@ class ProtocolPlusController {
   /// carries on. When it was the last live device the engine goes terminal
   /// anyway and the existing engine listener runs [_finishRun].
   Future<void> _handlePlusDeviceStopped(String localMac) async {
-    if (!_serverStoppedDevices.add(localMac)) return; // already handled
-    ProtocolPlusBinding? binding;
-    for (final b in _bindings) {
-      if (b.localMac == localMac) {
-        binding = b;
-        break;
-      }
-    }
+    final binding = _bindingForDevice(localMac);
     if (binding == null) return;
 
     // Drop any held switch for this device — it is never being applied now.
     _pendingSwitches.remove(localMac);
     _engine?.setPlusSwitchPending(localMac, false);
 
-    final ctx = await _sessionRequestContext();
-    if (ctx == null) return;
+    await _stopServerSessionForBinding(binding);
+  }
+
+  /// Close ONE device's own server session (`stopAll` scopes to that session,
+  /// which holds a single device). Releases its locked tokens and drops it from
+  /// the org-wide live feed — which is also what stops the on-screen countdown,
+  /// since the card reads the feed's `remainingSeconds` in preference to the
+  /// local engine timer.
+  ///
+  /// Guarded by [_serverStoppedDevices] so the several paths that can end a
+  /// device (user stop, firmware-reported stop, SESSION_STOPPED echo, end-of-run
+  /// teardown) never double-post and double-charge it.
+  Future<void> _stopServerSessionForBinding(ProtocolPlusBinding binding) async {
+    if (!_serverStoppedDevices.add(binding.localMac)) return;
+
     try {
-      final res = await _ref.read(nodeDioProvider).post(
-            ApiEndpoints.sessionStop(binding.serverSessionId, ctx.orgId),
-            data: const {'stopAll': true},
-            options: ctx.options,
+      await _ref
+          .read(sessionSyncServiceProvider)
+          .stopServerSessionDeviceByIdentity(
+            binding.serverSessionId,
+            binding.localMac,
+            slotId: _slotIdByDevice[binding.localMac],
+            deviceName: binding.deviceName,
           );
       appLogger.i(
-        'ProtocolPlus: device-initiated stop → server session '
-        '${binding.serverSessionId} stopped:\n${_pretty(res.data)}',
-      );
-    } on DioException catch (e) {
-      appLogger.e(
-        'ProtocolPlus: device-stop server stop failed for $localMac '
-        '(status=${e.response?.statusCode}) ${e.response?.data}',
+        'ProtocolPlus: server device ${binding.localMac} '
+        '(${binding.serverSessionId}) stopped',
       );
     } catch (e) {
       appLogger.e(
-        'ProtocolPlus: device-stop server stop failed for $localMac: $e',
+        'ProtocolPlus: server stop failed for ${binding.localMac}: $e',
       );
     }
   }
@@ -740,6 +872,7 @@ class ProtocolPlusController {
     _engine = engine;
     _pendingSwitches.clear();
     _serverStoppedDevices.clear();
+    _slotIdByDevice.clear();
 
     // Apply any protocol switch that was held while a device was disconnected,
     // the moment that device reconnects (BLE). Survives screen changes.
@@ -773,6 +906,13 @@ class ProtocolPlusController {
     // keep receiving their switches.
     engine.onPlusDeviceStoppedByUser =
         (mac) => unawaited(_handlePlusDeviceStopped(mac));
+
+    // Tell the engine which backend session each of OUR devices lives in, so a
+    // per-device pause/resume/stop is addressed to the session that actually
+    // holds it. A Plus device owns its own; anything not bound here is a normal
+    // device and the engine falls back to the shared normal session.
+    engine.backendSessionIdForDevice =
+        (mac) => _bindingForDevice(mac)?.serverSessionId;
 
     _removeEngineListener?.call();
     _removeEngineListener = engine.addListener(
@@ -855,6 +995,15 @@ class ProtocolPlusController {
         if (binding == null) return;
 
         final index = (data['protocolIndex'] as num?)?.toInt() ?? 0;
+        // Set only on a restart's event (see restartCurrentProtocol) — the
+        // server's confirmed advancedSettings for the (unchanged) protocol
+        // that's re-starting, and authoritative timing for the instant jump.
+        // A normal switch carries neither.
+        final restarted = data['restarted'] == true;
+        final advancedJson = data['advancedSettings'];
+        final advancedOverride = (restarted && advancedJson is Map)
+            ? AdvancedSettings.fromJson(Map<String, dynamic>.from(advancedJson))
+            : null;
 
         // The event's `protocol` may arrive as a full populated object, a
         // partial object (no cycles), or just an id from the protocolIds array.
@@ -870,7 +1019,7 @@ class ProtocolPlusController {
         appLogger.i(
           'ProtocolPlus: START_PROTOCOL (session=$evSession, index=$index, '
           'device=${binding.localMac}, protocol=${protocol.templateName}, '
-          'cycles=${protocol.cycles.length})',
+          'cycles=${protocol.cycles.length}, restarted=$restarted)',
         );
 
         // If this is a BLE run and the device's link is currently down, the
@@ -879,8 +1028,11 @@ class ProtocolPlusController {
         final isBle = engine.transport == SessionTransport.ble;
         if (isBle &&
             !_ref.read(bleConnectorProvider).isConnected(binding.localMac)) {
-          _pendingSwitches[binding.localMac] =
-              (protocol: protocol, index: index);
+          _pendingSwitches[binding.localMac] = (
+            protocol: protocol,
+            index: index,
+            advanced: advancedOverride,
+          );
           // Tell the engine a switch is outstanding: while it is, the device's
           // `rs:stop` is the expected idle waiting for this protocol, not the
           // user pressing STOP on the unit.
@@ -895,18 +1047,23 @@ class ProtocolPlusController {
         // Write to the device using our LOCAL id (BLE remoteId / Wi-Fi mac).
         // The event's `bluetoothId` is the firmware id, which is NOT what the
         // BLE connector uses to address the device — so we must not write to it.
-        final ok = await engine.applyProtocolPlusSwitch(
+        final ok = await _applyDeviceSwitch(
+          engine,
           binding.localMac,
           protocol,
           index,
+          advancedOverride: advancedOverride,
         );
         // If the write failed/timed out (e.g. the device dropped between the
         // connection check and the write), DON'T lose the switch — queue it so
         // the reconciler retries once the link is healthy again. Otherwise the
         // device would strand on "SWITCHING".
         if (!ok) {
-          _pendingSwitches[binding.localMac] =
-              (protocol: protocol, index: index);
+          _pendingSwitches[binding.localMac] = (
+            protocol: protocol,
+            index: index,
+            advanced: advancedOverride,
+          );
           engine.setPlusSwitchPending(binding.localMac, true);
           appLogger.w(
             'ProtocolPlus: switch apply failed for ${binding.localMac} '
@@ -914,6 +1071,14 @@ class ProtocolPlusController {
           );
         } else {
           engine.setPlusSwitchPending(binding.localMac, false);
+          if (restarted) {
+            _applyRestartTimingOverride(
+              engine,
+              binding.localMac,
+              index,
+              data,
+            );
+          }
         }
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to handle START_PROTOCOL: $e');
@@ -945,6 +1110,15 @@ class ProtocolPlusController {
                   ?.toString();
               if (id == null || id.isEmpty) continue;
               engine.updateDeviceTelemetry(id, m);
+              final slotId = m['slotId']?.toString();
+              if (slotId != null && slotId.isNotEmpty) {
+                final binding = _bindingForDevice(id) ??
+                    _bindingForServerDevice(id) ??
+                    _bindingForDeviceByName(id);
+                if (binding != null) {
+                  _slotIdByDevice[binding.localMac] = slotId;
+                }
+              }
             }
           }
           return;
@@ -953,11 +1127,18 @@ class ProtocolPlusController {
         // SESSION_PAUSED / SESSION_RESUMED — another client or the backend
         // changed this run's lifecycle. Reconcile the local UI without
         // re-issuing device commands (mirrors the web's socket handlers).
+        //
+        // Scoped to the ONE device whose own server session the event names.
+        // Every Plus device is registered separately and owns its own
+        // `serverSessionId`, so applying this session-wide paused every other
+        // device in a multi-device run along with it.
         if (type == 'SESSION_PAUSED' || type == 'SESSION_RESUMED') {
           final evSession = data['sessionId']?.toString();
           if (evSession == null || evSession.isEmpty) return;
-          if (!_bindings.any((b) => b.serverSessionId == evSession)) return;
-          _engine?.applyRemoteLifecycle(
+          final binding = _bindingForSession(evSession);
+          if (binding == null) return;
+          _engine?.applyRemoteDeviceLifecycle(
+            binding.localMac,
             type == 'SESSION_PAUSED'
                 ? SessionStatus.paused
                 : SessionStatus.running,
@@ -968,18 +1149,77 @@ class ProtocolPlusController {
         if (type != 'SESSION_STOPPED') return;
         final evSession = data['sessionId']?.toString();
         if (evSession == null || evSession.isEmpty) return;
-        final matches = _bindings.any((b) => b.serverSessionId == evSession);
-        if (!matches) return;
-        appLogger
-            .i('ProtocolPlus: ⇐ SESSION_STOPPED for $evSession — ending run');
-        // Server already ended it; just free locally (don't re-call stop).
-        unawaited(_finishRun(stopServer: false));
+        final binding = _bindingForSession(evSession);
+        if (binding == null) return;
+        appLogger.i(
+          'ProtocolPlus: ⇐ SESSION_STOPPED for $evSession — ending device '
+          '${binding.localMac} (other devices in this run keep going)',
+        );
+        // Server already ended THIS device's session; free it locally without
+        // re-calling stop. The whole-run teardown happens in [_finishDevice]
+        // once every binding is done.
+        unawaited(_finishDevice(binding.localMac, stopServer: false));
       } catch (e) {
         appLogger.e('ProtocolPlus: failed to handle session-event: $e');
       }
     });
 
     socket.connect();
+  }
+
+  /// Compute the correct WHOLE-SEQUENCE remaining seconds from a restart
+  /// event's authoritative PER-STAGE numbers (`elapsedSeconds`,
+  /// `protocolDurationSeconds` — the sample restart response's `protocolIndex:
+  /// 1, elapsedSeconds: 0, remainingSeconds: 252` for a 252s stage 2), and
+  /// hand it to the engine as a short-lived display override.
+  ///
+  /// This exists because the backend sets `deviceStartTime = restartedAt` on
+  /// restart, which zeroes the WHOLE-SEQUENCE wall clock the live-feed poll's
+  /// own `remainingSeconds` is computed from — not just this stage's. Left
+  /// uncompensated, the on-screen countdown briefly shows close to the full
+  /// session duration remaining right after a restart (looks like the timer
+  /// jumped back to the very start, and — since it then barely moves for a
+  /// long stretch — like the UI is stuck) until/unless the backend is fixed
+  /// to rewind `deviceStartTime` by the stage's own start offset instead.
+  ///
+  /// `stageStartElapsed` (how far into the WHOLE sequence this stage began)
+  /// is reconstructed from data already tracked locally: the sum of every
+  /// earlier stage's own duration plus the break seconds between stages
+  /// (`protocolPlusDurationsByDevice` / `protocolPlusDelayByDevice`, both
+  /// populated at launch from the same Plus detail the durations come from).
+  void _applyRestartTimingOverride(
+    SessionEngine engine,
+    String localMac,
+    int index,
+    Map data,
+  ) {
+    final durations = engine.protocolPlusDurationsByDevice[localMac];
+    final total = engine.deviceTimers[localMac]?.totalDuration;
+    if (durations == null || total == null || index >= durations.length) {
+      return;
+    }
+    final delay = engine.protocolPlusDelayByDevice[localMac] ?? 0;
+    var stageStartElapsed = delay * index;
+    for (var i = 0; i < index && i < durations.length; i++) {
+      stageStartElapsed += durations[i];
+    }
+    // Prefer the event's own elapsed/remaining for THIS stage when present
+    // (right after a restart that's `elapsedSeconds: 0`); fall back to the
+    // stage's full duration if the event omitted them.
+    final stageElapsed = (data['elapsedSeconds'] as num?)?.toInt() ?? 0;
+    final stageRemaining = (data['remainingSeconds'] as num?)?.toInt() ??
+        (data['protocolDurationSeconds'] as num?)?.toInt();
+    if (stageRemaining == null) return;
+    final wholeSequenceRemaining =
+        total.inSeconds - stageStartElapsed - stageElapsed;
+    if (wholeSequenceRemaining <= 0) return;
+    appLogger.i(
+      'ProtocolPlus: restart timing override for $localMac — '
+      'stageStartElapsed=${stageStartElapsed}s, stageRemaining=${stageRemaining}s, '
+      'wholeSequenceRemaining=${wholeSequenceRemaining}s (was reporting the '
+      'full ${total.inSeconds}s per the backend feed)',
+    );
+    engine.setPlusRestartTimingOverride(localMac, wholeSequenceRemaining);
   }
 
   /// Resolve the `START_PROTOCOL` payload into a full [Protocol] with cycles.
@@ -1035,6 +1275,94 @@ class ProtocolPlusController {
     final sa = a.map(key).toSet();
     final sb = b.map(key).toSet();
     return sa.length == sb.length && sa.containsAll(sb);
+  }
+
+  /// The binding whose OWN server session is [serverSessionId], or null when the
+  /// event belongs to a run that isn't ours. Every Plus device registers
+  /// separately, so this is what makes a socket event device-scoped instead of
+  /// run-scoped.
+  ProtocolPlusBinding? _bindingForSession(String serverSessionId) {
+    for (final b in _bindings) {
+      if (b.serverSessionId == serverSessionId) return b;
+    }
+    return null;
+  }
+
+  /// End ONE device of a multi-device run, leaving the others alone.
+  ///
+  /// This is the per-device half of [_finishRun]. Stopping one unit used to run
+  /// the whole-run teardown — which STOPped every bound device and disposed the
+  /// controller — so stopping device 1 also killed device 2, and device 2's own
+  /// server session was never closed, leaving it locked as "Running —
+  /// controlled elsewhere" until the backend timed it out.
+  ///
+  /// Idempotent per device via [_finishedDevices]. Once every binding has been
+  /// finished it hands over to [_finishRun] for the shared teardown (socket,
+  /// background service, local active session).
+  Future<void> _finishDevice(
+    String localMac, {
+    required bool stopServer,
+  }) async {
+    if (_terminalHandled) return; // whole run already torn down
+    if (!_finishedDevices.add(localMac)) return;
+
+    final engine = _engine;
+    final binding = _bindingForDevice(localMac);
+
+    appLogger.i(
+      'ProtocolPlus: finishing device $localMac '
+      '(${_finishedDevices.length}/${_bindings.length} done)',
+    );
+
+    // Drop any held switch — it is never being applied to a finished device.
+    _pendingSwitches.remove(localMac);
+    engine?.setPlusSwitchPending(localMac, false);
+
+    // Terminal STOP for THIS device only. The server can't reach a BLE unit, and
+    // the firmware self-stop is the only other thing that ends a Plus run, so an
+    // explicit stop is what guarantees the hardware halts. Idempotent.
+    if (engine != null) {
+      try {
+        await engine.stopDevice(localMac);
+      } catch (e) {
+        appLogger.w('ProtocolPlus: stopDevice($localMac) failed: $e');
+      }
+    }
+
+    // Close this device's own server session so its tokens are released and it
+    // stops occupying a slot in the org-wide live feed. Skipped when the server
+    // already closed it (a device-initiated stop, or a SESSION_STOPPED echo).
+    if (stopServer && binding != null) {
+      await _stopServerSessionForBinding(binding);
+    }
+
+    if (_bindings.isNotEmpty &&
+        _bindings.every((b) => _finishedDevices.contains(b.localMac))) {
+      appLogger.i('ProtocolPlus: every device finished — tearing down the run');
+      await _finishRun(stopServer: false);
+    }
+  }
+
+  /// The binding driving [localMac], or null if that device isn't ours.
+  ProtocolPlusBinding? _bindingForDevice(String localMac) {
+    for (final b in _bindings) {
+      if (b.localMac == localMac) return b;
+    }
+    return null;
+  }
+
+  ProtocolPlusBinding? _bindingForServerDevice(String serverDeviceId) {
+    for (final b in _bindings) {
+      if (b.serverDeviceId == serverDeviceId) return b;
+    }
+    return null;
+  }
+
+  ProtocolPlusBinding? _bindingForDeviceByName(String deviceName) {
+    for (final b in _bindings) {
+      if (b.deviceName == deviceName) return b;
+    }
+    return null;
   }
 
   /// End-of-run teardown, app-scoped so it works even with no screen mounted:
@@ -1141,6 +1469,27 @@ class ProtocolPlusController {
   /// first applies it; the other sees null and skips.
   void _applyPendingSwitch(SessionEngine engine, String mac,
       {required String reason}) {
+    if (!_pendingSwitches.containsKey(mac)) return;
+
+    // THE BREAK IS PART OF THE PROTOCOL, not dead air to be skipped. A unit that
+    // comes back in range partway through its break must serve the rest of that
+    // break and only then take the next protocol — pushing the switch the instant
+    // the link returns cuts the gap short and starts the next sub-protocol early.
+    // Nothing is scheduled here: the switch stays held and the 4s reconciler
+    // applies it as soon as the break is spent, so a second outage in the
+    // meantime is handled by the same path.
+    final breakLeft = engine.remainingPlusBreak(mac);
+    if (breakLeft > Duration.zero) {
+      // Keep the engine's "switch outstanding" flag set: it is what stops the
+      // device's idle `rs:stop` from being read as the user stopping the unit.
+      engine.setPlusSwitchPending(mac, true);
+      appLogger.i(
+        'ProtocolPlus: $mac back in range mid-break — serving the remaining '
+        '${breakLeft.inSeconds}s of break before the next protocol (via=$reason)',
+      );
+      return;
+    }
+
     final pending = _pendingSwitches.remove(mac);
     if (pending == null) return;
     appLogger.i(
@@ -1153,7 +1502,12 @@ class ProtocolPlusController {
     engine.setPlusSwitchPending(mac, false);
     unawaited(
       engine
-          .applyProtocolPlusSwitch(mac, pending.protocol, pending.index)
+          .applyProtocolPlusSwitch(
+            mac,
+            pending.protocol,
+            pending.index,
+            advancedOverride: pending.advanced,
+          )
           .then((ok) {
         // Re-queue on failure so the next reconciler tick retries — keep trying
         // until the device actually accepts the switch.
@@ -1178,10 +1532,12 @@ class ProtocolPlusController {
     _pendingSwitchReconciler = null;
     _pendingSwitches.clear();
     _serverStoppedDevices.clear();
+    _finishedDevices.clear();
     _lastConnStates = {};
     // Detach before dropping the reference, or a late confirmation from an
     // engine that outlives this run would call back into a torn-down controller.
     _engine?.onPlusDeviceStoppedByUser = null;
+    _engine?.backendSessionIdForDevice = null;
     _engine = null;
     try {
       _socket?.dispose();
@@ -1326,7 +1682,28 @@ Future<void> launchSession(
         if (first.cycles.isEmpty) {
           throw StateError('protocol[0] (${first.templateName}) has no cycles');
         }
-        final advanced = _advancedFromProtocol(first);
+        // _advancedFromProtocol derives protocol[0]'s OWN fields
+        // (cycle1/cycle5, vibration range, hot/cold drop) — but it must not
+        // discard what the user actually chose in the Protocol Plus
+        // Advanced Settings panel (vibration on/off, lights, flip,
+        // hot/cold %). Layer those 4 user-facing fields from sel.advanced
+        // on top, so they reach both the device write below and the
+        // POST /protocol-plus/start body via plusPlans.
+        final advanced = _advancedFromProtocol(first).copyWith(
+          vibrationMode: sel.advanced.vibrationMode,
+          lights: sel.advanced.lights,
+          flipSettings: sel.advanced.flipSettings,
+          hotPercent: sel.advanced.hotPercent,
+          coldPercent: sel.advanced.coldPercent,
+          // Start Delay applies to the FIRST sub-protocol only (this is
+          // protocol[0]). It reaches the device as `sDelay` in the BLE
+          // config write, and the backend as `advancedSettings.startDelay`
+          // in POST /protocol-plus/start — the backend must add it to when
+          // it schedules the protocol[1] switch, or protocol[0] gets cut
+          // short by that many seconds. Later sub-protocols carry no
+          // startDelay (see _advancedFromProtocol / the switch handler).
+          startDelay: sel.advanced.startDelay,
+        );
         protocolByDevice[sel.deviceId] = first;
         advancedByDevice[sel.deviceId] = advanced;
         plusDeviceIds.add(sel.deviceId);
@@ -1370,6 +1747,63 @@ Future<void> launchSession(
         delayedDeviceId != null && deviceIds.contains(delayedDeviceId)
             ? delayedDeviceId
             : null;
+
+    // Register the ActiveSession record SYNCHRONOUSLY, right here at launch —
+    // not later, from the session screen's own bootstrap once it happens to
+    // notice the engine went "running". That later path depends on this
+    // exact screen instance watching the exact right engine key, which has
+    // proven fragile (a re-entered/backgrounded screen can miss it
+    // entirely, silently leaving no ActiveSession record at all). Doing it
+    // here means EVERY session launched through this function is guaranteed
+    // a record — with its real total duration — the moment it starts,
+    // independent of any screen's lifecycle. This is what makes the
+    // app-wide outcome watchdog (SessionOutcomeGate) actually able to
+    // guarantee "every session ends up in history, no matter how or where
+    // it ends": it reads ActiveSession.totalDurationSeconds, which was
+    // previously never set anywhere and always silently defaulted to 0.
+    final maxTotalDurationSeconds = deviceIds
+        .map((id) {
+          // Protocol Plus: protocolByDevice[id] is only protocol[0] of the
+          // sequence (see above), so computing the firmware duration off it
+          // would give protocol[0]'s own runtime, not the whole sequence's.
+          // durationsByDevice[id] already holds the correct whole-sequence
+          // total (detail.totalDuration from the Plus detail API) — using
+          // protocol[0]'s duration here previously made ActiveSession.
+          // totalDurationSeconds too short, which made SessionOutcomeGate's
+          // watchdog force the post-session screen the moment sub-protocol[0]
+          // finished, even though the sequence was still meant to continue.
+          if (plusDeviceIds.contains(id)) {
+            final plusTotal = durationsByDevice[id];
+            if (plusTotal != null && plusTotal > 0) {
+              // A Plus Start Delay lengthens the whole run by that much (it
+              // sits before protocol[0]) — the backend adds it to when the
+              // protocol[1] switch fires, so the sequence total the
+              // watchdog checks must include it too.
+              final plusStartDelay = advancedByDevice[id]?.startDelay ?? 0;
+              return plusTotal + plusStartDelay;
+            }
+          }
+          final proto = protocolByDevice[id];
+          final settings = advancedByDevice[id];
+          if (proto == null || settings == null) return 0;
+          final applyStartDelay = settings.startDelay > 0 &&
+              (effectiveDelayedDeviceId == null ||
+                  effectiveDelayedDeviceId == id);
+          return SessionEngine.computeEffectiveTotalDurationSeconds(
+            proto,
+            settings,
+            applyStartDelay: applyStartDelay,
+          );
+        })
+        .fold<int>(0, (a, b) => a > b ? a : b);
+    await ref.read(activeSessionsProvider.notifier).createSession(
+          sessionId: sessionId,
+          protocolId: commonProtocol.id,
+          protocolName: commonProtocol.templateName,
+          deviceIds: deviceIds,
+          transport: transport,
+          totalDurationSeconds: maxTotalDurationSeconds,
+        );
 
     engine.prepareSession(deviceIds: deviceIds, transport: transportEnum);
     engine.loadSession(
@@ -1439,13 +1873,29 @@ Future<void> launchSession(
     // pause/resume/stop (and so the terminal stop reliably deducts tokens).
     if (normalSelections.isNotEmpty) {
       final specs = normalSelections
-          .map((s) => NormalDeviceSpec(
-                localMac: s.deviceId,
-                protocolId: s.protocol.id,
-                protocolName: s.protocol.templateName,
-                advancedSettings: s.advanced.toJson(),
-                totalDurationSeconds: s.protocol.totalDurationSeconds,
-              ))
+          .map((s) {
+            // Same delay-gating rule as SessionEngine's own: a start delay
+            // only applies to every device when no specific device was
+            // singled out, or to just that one device when it was.
+            final applyStartDelay = s.advanced.startDelay > 0 &&
+                (effectiveDelayedDeviceId == null ||
+                    effectiveDelayedDeviceId == s.deviceId);
+            return NormalDeviceSpec(
+              localMac: s.deviceId,
+              protocolId: s.protocol.id,
+              protocolName: s.protocol.templateName,
+              advancedSettings: s.advanced.toJson(),
+              // The delay/cycle1/cycle5-ADJUSTED duration — not the
+              // protocol's plain totalDurationSeconds — so the backend
+              // session record (the live screen's timer source of truth)
+              // matches what was actually sent to the device over BLE.
+              totalDurationSeconds: SessionEngine.computeEffectiveTotalDurationSeconds(
+                s.protocol,
+                s.advanced,
+                applyStartDelay: applyStartDelay,
+              ),
+            );
+          })
           .toList();
       final backendId = await ref
           .read(sessionSyncServiceProvider)

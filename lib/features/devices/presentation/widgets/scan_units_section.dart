@@ -11,6 +11,7 @@ import '../../../ble/presentation/providers/ble_scan_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/presentation/providers/session_target_provider.dart';
 import 'ref_palette.dart';
+import 'session_plan_widgets.dart';
 
 /// University-only "Your other units" scan/connect section — reuses the SAME
 /// BLE providers as the standard device manager (`startScanProvider`,
@@ -37,7 +38,8 @@ class ScanUnitsSection extends ConsumerWidget {
           await ref.read(bleRepositoryProvider).connectDevice(result.device);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(ok ? 'Connected to $name' : 'Failed to connect to $name'),
+          content:
+              Text(ok ? 'Connected to $name' : 'Failed to connect to $name'),
         ),
       );
     } catch (e) {
@@ -79,21 +81,15 @@ class ScanUnitsSection extends ConsumerWidget {
       children: [
         // eyebrow + Scan button.
         Padding(
-          padding: const EdgeInsets.fromLTRB(2, 2, 2, 8),
+          padding: const EdgeInsets.fromLTRB(2, 12, 2, 2),
           child: Row(
             children: [
-              Expanded(
-                child: Text(
-                  'YOUR OTHER UNITS',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.5,
-                    color: p.copperInk,
-                  ),
-                ),
+              const Expanded(child: PlanEyebrow('Your other units')),
+              PlanPill(
+                label: 'Scan',
+                icon: Icons.radar_rounded,
+                onTap: () => ref.read(startScanProvider)(),
               ),
-              _ScanBtn(palette: p, onTap: () => ref.read(startScanProvider)()),
             ],
           ),
         ),
@@ -117,8 +113,7 @@ class ScanUnitsSection extends ConsumerWidget {
                         ? r.device.platformName
                         : 'Unknown unit',
                     mac: r.device.remoteId.str,
-                    connecting:
-                        connectingIds.contains(r.device.remoteId.str),
+                    connecting: connectingIds.contains(r.device.remoteId.str),
                     onConnect: () => _connect(
                       context,
                       ref,
@@ -151,7 +146,7 @@ class ScanUnitsSection extends ConsumerWidget {
       );
 }
 
-/// Reference `.btn.ghost.sm` — full-width "Add a new unit · Device Center".
+/// `.ry-ses-link.add` — "+ Add a new unit · Device Center" as a copper link.
 class _AddUnitButton extends StatelessWidget {
   final RefPalette palette;
   final VoidCallback onTap;
@@ -159,77 +154,28 @@ class _AddUnitButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = palette;
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(13),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(13),
-        onTap: onTap,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: p.line),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.add_rounded, size: 16, color: p.ink2),
-              const SizedBox(width: 6),
-              Text(
-                'Add a new unit · Device Center',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: p.ink2,
-                ),
+    final link = PlanTones.dark(context)
+        ? const Color(0xFFE2C0A2)
+        : const Color(0xFFB98457);
+    return PlanPress(
+      onTap: onTap,
+      scale: .97,
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add_rounded, size: 15, color: link),
+            const SizedBox(width: 4),
+            Text(
+              'Add a new unit · Device Center',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: link,
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Reference `.devbtn` — the "Scan" affordance.
-class _ScanBtn extends StatelessWidget {
-  final RefPalette palette;
-  final VoidCallback onTap;
-  const _ScanBtn({required this.palette, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = palette;
-    return Material(
-      color: p.card,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: p.copper, width: 1.5),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.radar_rounded, size: 14, color: p.copperInk),
-              const SizedBox(width: 5),
-              Text(
-                'Scan',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: p.copperInk,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -254,94 +200,90 @@ class _AvailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = palette;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: p.cardline),
-        boxShadow: p.shadow,
-      ),
-      child: Row(
-        children: [
-          // .devring off — grey gradient.
-          Container(
-            width: 38,
-            height: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF9C948B), Color(0xFF6E675F)],
+    final dark = PlanTones.dark(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: PlanCard(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: PlanTones.fill(context),
+                borderRadius: BorderRadius.circular(12),
               ),
-              borderRadius: BorderRadius.circular(12),
+              child: Icon(Icons.sensors_rounded,
+                  size: 18, color: PlanTones.sub(context)),
             ),
-            child: const Icon(Icons.graphic_eq_rounded,
-                size: 17, color: Colors.white),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: p.ink,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: p.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    '$mac · last seen offline',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 12, color: PlanTones.sub(context)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            // `.ry-ses-cbtn` — CONNECT.
+            PlanPress(
+              onTap: connecting ? null : onConnect,
+              scale: .94,
+              child: SizedBox(
+                height: 44,
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: PlanTones.hairline(context)),
+                    ),
+                    child: connecting
+                        ? SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                  dark ? const Color(0xFFE2C0A2) : p.copperInk),
+                            ),
+                          )
+                        : Text(
+                            'CONNECT',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: .55,
+                              color: p.ink2,
+                            ),
+                          ),
                   ),
                 ),
-                const SizedBox(height: 1),
-                Text(
-                  '$mac · last seen offline',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: p.ink2),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          // .btn.dark.sm — Connect.
-          Material(
-            borderRadius: BorderRadius.circular(13),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(13),
-              onTap: connecting ? null : onConnect,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                decoration: BoxDecoration(
-                  gradient: p.heroGrad,
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: connecting
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Color(0xFFF2E9E2)),
-                        ),
-                      )
-                    : const Text(
-                        'Connect',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFFF2E9E2),
-                        ),
-                      ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

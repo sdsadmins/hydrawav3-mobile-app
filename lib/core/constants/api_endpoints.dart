@@ -1,3 +1,5 @@
+import '../config/app_config_store.dart';
+
 class ApiEndpoints {
   ApiEndpoints._();
 
@@ -10,6 +12,10 @@ class ApiEndpoints {
   static const String changePassword = "/profile/me/password";
   static const String forgotPassword = "/profile/me/forget-password";
 
+  // Signed-out "Forgot password?" — the web's `ForgotPasswordLink`: emails a
+  // reset link that opens the web's reset-password page.
+  static const String forgotPasswordRequest = '/auth/forgot-password';
+
   // Account management (admin user account resource).
   // PUT with `deleted: true` soft-deletes the account.
   static String userAccountById(String id) => '/admin/user/accounts/$id';
@@ -18,26 +24,39 @@ class ApiEndpoints {
 // static const String login = '/auth/login';
   static const String login = '/auth/login';
   // Base URLs
-  static const String djangoBaseUrl = 'http://54.241.236.53:8080/api/v1';
+  // Base URLs come from the server's `mobile-app-config` (loaded in main()
+  // before the app starts; see core/config). The built-in values live in
+  // AppConfig.defaults and are used offline / for any invalid field.
+  static String get djangoBaseUrl => AppConfigStore.current.djangoBaseUrl;
   //static const String nodeBaseUrl = 'http://3.111.197.247:5000/hydrawav/v1/';
   // Dev-only ngrok tunnel (URL rotates on restart + free-tier rate limits → intermittent ServerException). Do not ship.
   //static const String nodeBaseUrl =     'https://hung-homeless-president-beats.trycloudflare.com/hydrawav/v1/';
 
-  static const String nodeBaseUrl =
-      'https://api.hydrawav3.studio/api/hydrawav/v1/';
-  static const String deviceControlUrl = 'https://hydrawav3.app';
+  static String get nodeBaseUrl => AppConfigStore.current.nodeBaseUrl;
+
+  /// Socket.IO origin (`scheme://host[:port]`).
+  static String get socketOrigin => AppConfigStore.current.socketOrigin;
+
+  // static const String nodeBaseUrl = 'http://192.168.31.92:5000/hydrawav/v1/';
+  static String get deviceControlUrl => AppConfigStore.current.deviceControlUrl;
 
   // Auth
 
   static const String refreshToken = '/auth/refreshToken';
-  static const String baseUrl = "http://54.241.236.53:8080";
+  static String get baseUrl =>
+      AppConfigStore.current.djangoBaseUrl.replaceFirst(RegExp(r'/api/v1$'), '');
 
   // Practitioner onboarding (native "Create account" flow, parity with web).
   // The submit needs an admin token from this public proxy (the user isn't
   // logged in yet), then a multipart POST to the onboarding endpoint.
-  static const String proxyCreateUserUrl =
-      'https://hydrawav3.app/proxy_create_user.php';
+  static String get proxyCreateUserUrl =>
+      AppConfigStore.current.onboardingProxyUrl;
   static const String practitionerOnboarding = '/practitioners/onboarding';
+  // The website's plan page. US storefront only: Plan & usage opens it in the
+  // phone's browser (see subscription_screen.dart). Website host for
+  // now: api.hydrawav3.studio (hydrawav3.app is the device/PHP server → 404).
+  static String get practitionerSubscriptionUrl =>
+      AppConfigStore.current.websitePlanUrl;
   // Profile
 //   static const String profileMe = '/profile/me';
 //   static const String changePassword = '/profile/me/password';
@@ -124,6 +143,17 @@ class ApiEndpoints {
   static const String perfQuery = 'performance-query/query';
   static const String perfChat = 'performance-chat/message';
 
+  /// The UNIFIED assistant route (`src/modules/pad-chat` on the Node backend) —
+  /// one door that routes each turn between a knowledge, placement or
+  /// performance lane and grounds the answer against the retrieved corpus.
+  /// Envelope: `{ ok, lane, kind, reply, chips[], sessionId, threadId }`.
+  ///
+  /// The Assistant's typed free-text path posts here instead of [perfChat] /
+  /// [recoveryChat]; the chip-driven catalogue / pad-map flows are unchanged and
+  /// still use those. Body `{ message, sessionId?, threadId? }` — `threadId` is
+  /// the multi-turn handle. Relative (no leading slash).
+  static const String assistantChat = 'chat';
+
   /// The RECOVERY conversational front door — the recovery v2 engine's own
   /// chatbot, not the performance one. Same envelope idea (reply + slots +
   /// options + render), different corpus and different slots (`region`, `side`,
@@ -191,7 +221,6 @@ class ApiEndpoints {
   /// The universal red-flag screen (questions + the authored client disclaimer).
   static const String recoveryScreen = 'recovery-engine-v3/screen';
 
-
   /// Builds `path?a=b&c=d`, dropping null/blank values and encoding the rest.
   static String _perfUri(String path, Map<String, String?> params) {
     final q = params.entries
@@ -226,6 +255,10 @@ class ApiEndpoints {
   // mark-read. Relative (no leading slash) so they append to the Node base URL.
   static String notificationsByUser(String userId) => 'notifications/$userId';
   static String notificationRead(String id) => 'notifications/read/$id';
+
+  // Warranty (Node) — per-device warranty status for the org. Relative (no
+  // leading slash) so it appends to the Node base URL.
+  static String warrantyByOrg(String orgId) => 'warranty/$orgId';
 
   // Clients
   static const String clients = '/clients';
@@ -265,12 +298,29 @@ class ApiEndpoints {
 
   // Intake / Sessions
   static const String intake = '/intake';
-  static const String intakeAll = '/intake/all';
+  static String intakeAll(String organizationId) =>
+      '/intake/allByorg/$organizationId';
   static String intakeByClient(String clientId) => '/intake/client/$clientId';
   static String intakeDashboard(String orgId) => '/intake/dashboard/$orgId';
 
   // Body Parts & Muscles
   static const String bodyParts = '/body-part';
+
+  // Session Coach (Node `session-coach`): the admin-authored sets for a body
+  // part — default + secondary protocols and Sun/Moon pads per support type.
+  static String sessionCoachByBodyPart(String bodyPartId) =>
+      'session-coach/body-part/${Uri.encodeComponent(bodyPartId)}';
+
+  // RAG chat history (Node `rag-chat-history`): Assistant transcripts saved
+  // per client (or as guest), listed and read back per client.
+  static const String ragChatHistory = 'rag-chat-history';
+  static const String ragChatConversations = 'rag-chat-history/conversations';
+  // Guest chats started by the logged-in practitioner (server filters by
+  // createdBy = the caller).
+  static const String ragChatGuestConversations =
+      'rag-chat-history/conversation/guest';
+  static String ragChatConversation(String conversationId) =>
+      'rag-chat-history/${Uri.encodeComponent(conversationId)}';
   static const String muscles = '/muscle';
 
   // ROM body parts (for the Range of Motion intake step; parity with web getRoms).
@@ -290,6 +340,11 @@ class ApiEndpoints {
   static String freePlan(String orgId) => '/payments/free-plan/$orgId';
   static const String paymentUser = '/payments/user';
   static const String products = '/products';
+
+  // Token cost config — the backend's per-second session token rate
+  // (session.service.ts: `perSecondCost`), used to show "this will cost ~N
+  // tokens" on a protocol before starting it.
+  static const String tokenConfig = '/token-config';
 
   /// Every SUBSCRIPTION product. `GET /products` deliberately drops the one
   /// named "Free" (`product.service.ts:150`) because it isn't purchasable — but
@@ -334,6 +389,28 @@ class ApiEndpoints {
   /// Starts a Protocol Plus sequence (server starts protocol[0] + schedules
   /// the remaining protocol switches, emitted over the `/sessions` socket).
   static const String protocolPlusStart = 'protocol-plus/start';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/pause/:organizationId`
+  /// Pauses the run AND holds the server's queued protocol switches. Without the
+  /// hold those switches keep counting down through the pause and fire together
+  /// on resume. Body optionally targets one device (`macAddress` / `deviceName`
+  /// / `slotId`); an empty body pauses the whole session.
+  static String protocolPlusPause(String sessionId, String organizationId) =>
+      'protocol-plus/$sessionId/pause/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/resume/:organizationId`
+  /// Resumes the run; every held switch is re-queued with the wait it had left.
+  static String protocolPlusResume(String sessionId, String organizationId) =>
+      'protocol-plus/$sessionId/resume/$organizationId';
+
+  /// Node Nest: `POST /hydrawav/v1/protocol-plus/:sessionId/restart`
+  /// Restarts the CURRENTLY RUNNING sub-protocol for this device from its own
+  /// beginning (fresh timer/cycles) — the server re-serves the same
+  /// protocol/index it already has active. Does NOT end the session or touch
+  /// token/session lifecycle; unlike pause/resume this route is NOT nested
+  /// under `:organizationId`.
+  static String protocolPlusRestart(String sessionId) =>
+      'protocol-plus/$sessionId/restart';
 
   // AI (Next.js routes - uses Django base URL with different path)
   static const String aiAnalyze = '/api/analyze';

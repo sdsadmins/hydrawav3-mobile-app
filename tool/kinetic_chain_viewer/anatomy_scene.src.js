@@ -88,10 +88,13 @@ const BODY_TARGET_CENTER_Y = 0.24;
 
 const PAD_SIZE = 0.13;
 const BADGE_CLUSTER_DISTANCE = PAD_SIZE * 1.45;
-const HIGHLIGHT_COLOR = 0x9af5d2;
 
 // Role colours — identical to the web so a Sun muscle is the same red in both
 // clients. Set identity is NOT encoded here; it lives on the arc and the badge.
+//
+// These are now the ONLY colours painted onto the body. The mint
+// `HIGHLIGHT_COLOR` (0x9af5d2) that used to serve as the badge-mode Moon tint is
+// gone with the branch that used it — one role, one colour, every pad style.
 const PERF_SUN_COLOR = 0xff3b30; // red
 const PERF_MOON_COLOR = 0x2f80ff; // blue
 const PERF_SUN_EMISSIVE = 0x4d0f0b;
@@ -330,7 +333,6 @@ function makePadContactTexture(role) {
   ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
   const isSun = role === "sun";
-  const base = isSun ? "#ff6a21" : "#2387ff";
   const inner = isSun ? "#ffe17d" : "#bfe7ff";
   const edge = isSun ? "#ff8b3d" : "#57a8ff";
 
@@ -351,36 +353,18 @@ function makePadContactTexture(role) {
   roundRect(ctx, 70, 70, 244, 244, 30);
   ctx.fill();
 
+  // Plain role-coloured centre dot — role still reads via colour (orange/blue)
+  // and the S1/M1 badge, without drawing a literal sun-ray or moon-crescent
+  // shape on the patch.
   ctx.fillStyle = isSun ? "rgba(255, 207, 89, 0.72)" : "rgba(166, 220, 255, 0.72)";
   ctx.beginPath();
   ctx.arc(192, 192, 42, 0, Math.PI * 2);
   ctx.fill();
 
-  if (isSun) {
-    ctx.strokeStyle = inner;
-    ctx.lineWidth = 8;
-    ctx.lineCap = "round";
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(192 + Math.cos(a) * 48, 192 + Math.sin(a) * 48);
-      ctx.lineTo(192 + Math.cos(a) * 66, 192 + Math.sin(a) * 66);
-      ctx.stroke();
-    }
-    ctx.fillStyle = inner;
-    ctx.beginPath();
-    ctx.arc(192, 192, 25, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.fillStyle = inner;
-    ctx.beginPath();
-    ctx.arc(181, 192, 36, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = base;
-    ctx.beginPath();
-    ctx.arc(199, 183, 38, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  ctx.fillStyle = inner;
+  ctx.beginPath();
+  ctx.arc(192, 192, 25, 0, Math.PI * 2);
+  ctx.fill();
 
   const texture = new THREE.CanvasTexture(canvasEl);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -921,11 +905,10 @@ function highlightSize(marker) {
 
 function addMuscleHighlight(group, marker, position, normal, opts) {
   const size = highlightSize(marker);
-  const color = opts.colorBySet
-    ? perfSetColor(marker.setIndex)
-    : marker.role === "sun"
-      ? 0xffb56b
-      : HIGHLIGHT_COLOR;
+  // Same rule as the mesh tint: the halo sits ON the body, so it carries role
+  // and nothing else. Sun red / Moon blue, whatever the pad style or the focused
+  // set — see the note in setMeshMaterialHighlight.
+  const color = marker.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
   const mesh = new THREE.Mesh(
     new THREE.CircleGeometry(1, 64),
     new THREE.MeshBasicMaterial({
@@ -1096,14 +1079,17 @@ function resolveMarkerPlacements(markers) {
 }
 
 function addMarker(group, placement, opts) {
-  const { marker, position, normal, layout } = placement;
+  const { marker, position, normal } = placement;
   // Muscle style: the target muscle mesh IS the indicator (coloured by role in
   // applyHighlights), so no disc, no patch, no badge. Set identity moves to the
   // labelled arc.
   if (opts.padStyle === "muscle") return;
-  addMuscleHighlight(group, marker, position, normal, opts);
+  // The Sun/Moon-coloured skin halo (addMuscleHighlight) is Muscle Mode's own
+  // look and was leaking into every other style too — the exact "half the body
+  // still tinted like Muscle Mode after switching off" bug. The square S1/M1
+  // badge chip (addPadBadge) is dropped too — badge/dot style now shows only
+  // the plain contact patch, no colour and no text tag on the skin.
   addFallbackPad(group, marker, position, normal);
-  addPadBadge(group, marker, position, normal, layout, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,32 +1201,44 @@ function addSetArcs(group, placements) {
 // Highlight + X-ray
 // ---------------------------------------------------------------------------
 
-function darkenHex(hex, factor = 0.3) {
-  return new THREE.Color(hex).multiplyScalar(factor).getHex();
-}
-
 function setMeshMaterialHighlight(mesh, active, marker, opts, strong) {
   const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
   if (!material?.color) return;
-  if (active) {
+  // Sun/Moon anatomy tint is a Muscle Mode thing only. Unchecking Muscle Mode
+  // means "just show me the chain" — the pin/badge markers carry the
+  // placement instead, so the body mesh itself must stay at rest colour
+  // rather than a dimmer version of the same red/blue tint.
+  if (active && opts.padStyle === "muscle") {
     let color;
     let emissive;
     let intensity;
-    if (opts.padStyle === "muscle") {
-      // Role colour wins: Sun red / Moon blue. No per-set encoding here — set
-      // identity lives on the arc.
-      color = marker?.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
-      emissive = marker?.role === "sun" ? PERF_SUN_EMISSIVE : PERF_MOON_EMISSIVE;
-      intensity = strong ? 0.72 : 0.5;
-    } else if (opts.colorBySet) {
-      color = perfSetColor(marker?.setIndex);
-      emissive = darkenHex(color, 0.34);
-      intensity = strong ? 0.62 : 0.38;
-    } else {
-      color = marker?.role === "sun" ? 0xffb36d : HIGHLIGHT_COLOR;
-      emissive = marker?.role === "sun" ? 0x4a1f05 : 0x07382a;
-      intensity = strong ? 0.62 : 0.38;
-    }
+    // ROLE COLOUR ALWAYS WINS — Sun red, Moon blue — while in Muscle Mode.
+    //
+    // The muscle mesh answers exactly one question: is this pad the Sun or the
+    // Moon. Anything else painted onto it is a second variable on the same
+    // channel, and the anatomy is the last place that can carry one: a muscle
+    // that changes colour reads as a different finding about the body, not as a
+    // different selection in the UI.
+    //
+    // Two encodings used to sit here and both were wrong on this surface.
+    // `colorBySet` repainted the SAME pad a different colour depending on which
+    // set was focused, so Sun/Moon stopped being readable. The badge-mode
+    // fallback used a third pair (amber/mint) that agreed with neither, so the
+    // same placement changed colour merely by toggling Muscle Mode.
+    //
+    // Set identity is carried by the labelled arc, the chips and the legend —
+    // three places that are free to use the palette because none of them is the
+    // body. `colorBySet` and `perfSetColor` remain live for the arcs.
+    //
+    // Exactly two colours, never a third: a mesh belongs to whichever role
+    // claimed it first (see `setActiveAnatomyMeshHighlight`) — no blending.
+    // A mesh a chain's Sun and Moon both name (a shared-muscle "sandwich" pad
+    // geometry) is a DATA/mapping question — see `mapping.js`'s
+    // "lateral/medial head of gastrocnemius" entries — not something this
+    // renderer should paper over with a mixed colour.
+    color = marker?.role === "sun" ? PERF_SUN_COLOR : PERF_MOON_COLOR;
+    emissive = marker?.role === "sun" ? PERF_SUN_EMISSIVE : PERF_MOON_EMISSIVE;
+    intensity = strong ? 0.72 : 0.5;
     material.color.setHex(color);
     if (material.emissive) material.emissive.setHex(emissive);
     if ("emissiveIntensity" in material) material.emissiveIntensity = intensity;
@@ -1284,6 +1282,13 @@ let dimmedMeshCount = 0;
 function setActiveAnatomyMeshHighlight(markerList, opts, strong, dim) {
   if (!bodyRoot) return;
   const list = Array.isArray(markerList) ? markerList.filter(Boolean) : [];
+  // First marker in list order to name a mesh owns it — exactly web's
+  // algorithm (`AnatomyScene.jsx`'s `setActiveAnatomyMeshHighlight`), no
+  // special-casing. A mesh two markers of the same set both name (a
+  // shared-muscle "sandwich" pad geometry, e.g. calf) is a mapping/data
+  // question — see `mapping.js`'s "lateral/medial head of gastrocnemius"
+  // entries, which give each pad its OWN single mesh so this collision
+  // shouldn't arise for a properly-authored pair in the first place.
   const meshToMarker = new Map();
   for (const marker of list) {
     for (const mesh of targetMuscleMeshes(marker).slice(0, 6)) {
@@ -1291,22 +1296,16 @@ function setActiveAnatomyMeshHighlight(markerList, opts, strong, dim) {
     }
   }
 
-  // X-ray budget: only meshes near the highlighted cluster are dimmed. Distant
-  // ones are never between the camera and a pad, so dimming them buys nothing
-  // and costs a transparent depth-sorted draw call each.
-  let cluster = null;
-  if (dim && meshToMarker.size) {
-    cluster = new THREE.Vector3();
-    for (const mesh of meshToMarker.keys()) cluster.add(meshWorldCentroid(mesh));
-    cluster.divideScalar(meshToMarker.size);
-  }
-
   dimmedMeshCount = 0;
+  // The target muscle is coloured (Muscle Mode's Sun/Moon tint) and must stay
+  // vivid whether the rest of the body is solid or X-rayed — that's the ONE
+  // thing exempt from the fade. Every other mesh fades across the WHOLE body
+  // when `dim` (transparentBody) is on, not just a patch near the pads: this
+  // toggle is meant to X-ray the entire body, target muscle aside.
   bodyRoot.traverse((child) => {
     if (!child.isMesh || child.userData?.skipPadProjection) return;
     const marker = meshToMarker.get(child);
-    const wantDim =
-      dim && !marker && (!cluster || meshWorldCentroid(child).distanceTo(cluster) <= XRAY_RADIUS);
+    const wantDim = dim && !marker;
     const needsOwnMaterial = Boolean(marker) || wantDim;
     const alreadyOwned = child.material?.userData?.__ownerUuid === child.uuid;
 

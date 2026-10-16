@@ -1,11 +1,19 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../core/utils/logger.dart';
+import '../../session/domain/active_session_model.dart' as active_session;
+import '../../session/presentation/providers/active_sessions_provider.dart';
+import '../../session/services/session_engine.dart';
 import '../domain/music_model.dart';
+
+/// Sentinel [_loadedUrl] value marking "the bundled iOS keep-alive ambient
+/// asset is loaded", as opposed to a real user-selected track URL.
+const _kFallbackTrackKey = 'asset:session_ambient_fallback';
 
 /// UI-facing state of the session "Atmosphere" music.
 class SessionMusicState {
@@ -43,48 +51,90 @@ class SessionMusicState {
 }
 
 /// One app-scoped controller that owns the single [AudioPlayer]. Plays a looping
-/// "Atmosphere" track during a live session, gated on the session being running
-/// and the app being foreground (foreground-only by design — see plan).
+/// "Atmosphere" track during a live session and keeps it alive across app
+/// navigation/background while the session is running.
+///
+/// **iOS background keep-alive.** iOS has no foreground-service equivalent to
+/// Android's — a backgrounded/locked app is suspended within seconds unless it
+/// holds active audio focus (`UIBackgroundModes: audio`). That's what makes
+/// Protocol Plus's socket-driven sub-protocol switching and BLE reconnect keep
+/// working while the phone is locked on iOS. Rather than run a second,
+/// competing [AudioPlayer] purely for that purpose, this controller falls back
+/// to a bundled quiet ambient loop (`assets/audio/session_ambient.wav`) on iOS
+/// whenever a session is running but the user hasn't picked an Atmosphere
+/// track — see [_shouldPlay]/[_evaluate]. The existing session-screen mute
+/// button covers "I don't want to hear anything": muting sets volume to 0
+/// without pausing, so the audio session (and therefore the background grant)
+/// stays active. Explain this in App Store Connect review notes: background
+/// audio keeps protocol timing synced with a connected Bluetooth therapy
+/// device during an active session.
 ///
 /// EVERY audio operation is wrapped so a device/OEM audio quirk can never crash
 /// or stall a session: failures are logged and swallowed, and the session
 /// engine / timer / BLE never depend on this.
 final sessionMusicControllerProvider =
     StateNotifierProvider<SessionMusicController, SessionMusicState>((ref) {
-  final controller = SessionMusicController();
+  final controller = SessionMusicController(ref);
   ref.onDispose(controller.shutdown);
   return controller;
 });
 
 class SessionMusicController extends StateNotifier<SessionMusicState> {
-  SessionMusicController() : super(const SessionMusicState());
+  SessionMusicController(this._ref) : super(const SessionMusicState());
 
+  final Ref _ref;
   final AudioPlayer _player = AudioPlayer();
 
   bool _disposed = false;
   bool _sessionConfigured = false;
   String? _loadedUrl;
 
-  // Latest gating conditions, so mute/select can re-evaluate immediately.
+  // Latest gating condition, so mute/select can re-evaluate immediately.
   bool _sessionRunning = false;
-  bool _appForeground = true;
+
+  /// Picked on Session Setup before a session runs: plays straight away so
+  /// the practitioner hears it there, and carries on into the session. Ends
+  /// once the session is running (the session gate takes over, so Pause
+  /// pauses it), on [stopPreview], or when the session ends.
+  bool _preview = false;
 
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<bool>? _playingSub;
 
   /// One-time audio-session + player setup. Configures the iOS category to
-  /// `music`/playback so audio is audible through the silent switch, and wires
-  /// interruption (calls/Siri) handling. Best-effort: failures don't block.
+  /// `playback`/music so audio is audible through the silent switch, and
+  /// wires interruption (calls/Siri) handling. Best-effort: failures don't
+  /// block.
+  ///
+  /// `mixWithOthers` lets our loop keep playing underneath whatever the user
+  /// already has running in Spotify/Apple Music/YouTube/etc. instead of iOS
+  /// forcing an exclusive-focus interruption between the two — that
+  /// interruption is exactly the kind of gap that can let iOS suspend us in
+  /// the background. (A phone/FaceTime call is a different, OS-level
+  /// reservation that `mixWithOthers` cannot avoid — we still pause/resume
+  /// around those via the interruption stream below.)
   Future<void> _ensureReady() async {
     if (_sessionConfigured || _disposed) return;
     _sessionConfigured = true; // set first so we don't re-enter on failure
     try {
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.mixWithOthers,
+        avAudioSessionMode: AVAudioSessionMode.defaultMode,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.music,
+          usage: AndroidAudioUsage.media,
+        ),
+      ));
       _interruptionSub = session.interruptionEventStream.listen((event) {
         if (_disposed) return;
         if (event.begin) {
           unawaited(_safePause());
+          if (event.type != AudioInterruptionType.duck) {
+            _pauseAllLiveSessions();
+          }
         } else {
           unawaited(_evaluate()); // resume only if conditions still hold
         }
@@ -106,10 +156,37 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     });
   }
 
+  /// iOS-only: pause every currently-running session app-wide, device
+  /// included, not just whichever session screen happens to be mounted.
+  /// [activeSessionsProvider] is the app-wide registry of live sessions, so
+  /// this reaches every one of them regardless of which screen (if any) is
+  /// on screen at the moment the call arrives. Android already survives a
+  /// call via its foreground service, so it isn't at risk of the process
+  /// being suspended and doesn't need this.
+  void _pauseAllLiveSessions() {
+    if (!Platform.isIOS) return;
+    try {
+      final sessions = _ref.read(activeSessionsProvider);
+      for (final session in sessions) {
+        if (session.status != active_session.SessionStatus.running) continue;
+        appLogger.i(
+          'Music: pausing session ${session.id} for a call/Siri interruption',
+        );
+        unawaited(
+          _ref.read(sessionEngineFamilyProvider(session.id).notifier).pause(),
+        );
+      }
+    } catch (e) {
+      appLogger.w('Music: failed to pause live sessions on interruption: $e');
+    }
+  }
+
   /// Choose (or switch to) a track. Loads its URL and starts playing if the
-  /// session conditions allow it.
-  Future<void> selectTrack(Music track) async {
+  /// session conditions allow it. With [preview] (Session Setup, no session
+  /// running yet) it plays right away instead of waiting for Start.
+  Future<void> selectTrack(Music track, {bool preview = false}) async {
     if (_disposed || !track.isPlayable) return;
+    if (preview && !_sessionRunning) _preview = true;
     await _ensureReady();
     if (_disposed || !mounted) return;
     state = state.copyWith(
@@ -128,12 +205,16 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     await _evaluate();
   }
 
-  /// Deselect the current track and stop playback.
+  /// Deselect the current track and stop playback. If a session is still
+  /// running on iOS, [_evaluate] immediately falls back to the ambient
+  /// keep-alive loop rather than leaving audio focus dropped.
   Future<void> clear() async {
     if (_disposed) return;
+    _preview = false;
     if (mounted) state = state.copyWith(clearTrack: true, isPlaying: false);
     _loadedUrl = null;
     await _safeStop();
+    await _evaluate();
   }
 
   /// Mute keeps the track "running" but silent (volume 0), mirroring the web.
@@ -141,8 +222,9 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     if (_disposed || !mounted) return;
     final muted = !state.isMuted;
     state = state.copyWith(isMuted: muted);
+    final unmutedVolume = _loadedUrl == _kFallbackTrackKey ? 0.35 : 1.0;
     try {
-      await _player.setVolume(muted ? 0 : 1);
+      await _player.setVolume(muted ? 0 : unmutedVolume);
     } catch (e) {
       appLogger.w('Music: setVolume failed (ignored): $e');
     }
@@ -152,18 +234,30 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   /// session screen on every status change and app-lifecycle transition.
   Future<void> applyConditions({
     required bool sessionRunning,
-    required bool appForeground,
   }) async {
     _sessionRunning = sessionRunning;
-    _appForeground = appForeground;
+    // The session is running: it owns playback from here on (a later Pause
+    // pauses the music). Before that — the session screen's idle start — a
+    // Setup preview keeps playing so there's no gap.
+    if (sessionRunning) _preview = false;
+    await _ensureReady();
     await _evaluate();
   }
 
-  /// Stop everything and drop the selection — used when the session ends or the
+  /// Leaving Session Setup without starting: stop the preview. The track
+  /// stays selected, so it plays when a session does start.
+  Future<void> stopPreview() async {
+    if (_disposed || !_preview || _sessionRunning) return;
+    _preview = false;
+    await _evaluate();
+  }
+
+  /// Stop everything and drop the selection â€” used when the session ends or the
   /// session screen is left (music must never outlive the session).
   Future<void> stopAndReset() async {
     if (_disposed) return;
     _sessionRunning = false;
+    _preview = false;
     if (mounted) state = state.copyWith(clearTrack: true, isPlaying: false);
     _loadedUrl = null;
     await _safeStop();
@@ -172,16 +266,36 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   bool get _shouldPlay =>
       state.activeTrackId != null &&
       _loadedUrl != null &&
-      _sessionRunning &&
-      _appForeground;
+      (_sessionRunning || _preview);
+
+  /// iOS-only keep-alive: a session is running but the user hasn't picked an
+  /// Atmosphere track, so there's nothing else holding audio focus.
+  bool get _shouldPlayFallback =>
+      Platform.isIOS && _sessionRunning && state.activeTrackId == null;
 
   Future<void> _evaluate() async {
     if (_disposed) return;
     if (_shouldPlay) {
       await _safePlay();
+    } else if (_shouldPlayFallback) {
+      await _playFallback();
     } else {
       await _safePause();
     }
+  }
+
+  Future<void> _playFallback() async {
+    try {
+      if (_loadedUrl != _kFallbackTrackKey) {
+        await _player.setAsset('assets/audio/session_ambient.wav');
+        _loadedUrl = _kFallbackTrackKey;
+        await _player.setVolume(state.isMuted ? 0 : 0.35);
+      }
+    } catch (e) {
+      appLogger.w('Music: fallback ambient load failed (ignored): $e');
+      return;
+    }
+    await _safePlay();
   }
 
   Future<void> _safePlay() async {

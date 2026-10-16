@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/config/app_config_store.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -7,9 +8,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_button.dart';
 import '../../domain/onboarding_models.dart';
 import '../providers/onboarding_provider.dart';
+import '../widgets/auth_ui.dart';
 
 /// Native multi-step "Create account" onboarding (parity with the web's
 /// 4-step practitioner onboarding). Theme-aware (light + dark): cards, labeled
@@ -183,25 +186,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final canSubmit = !isLast || state.euaAccepted;
 
     return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      appBar: AppBar(
-        backgroundColor: ThemeConstants.background,
-        elevation: 0,
-        centerTitle: true,
-        toolbarHeight: 74,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () {
-            if (state.currentStep > 0) {
-              ref.read(onboardingControllerProvider.notifier).back();
-            } else {
-              context.pop();
-            }
-          },
-        ),
-        // Logo centered in the app bar, sized to roughly match the
-        // "Welcome to Hydrawav3" heading (SVG has built-in vertical padding).
-        title: const _OnboardingLogo(height: 56),
+      backgroundColor: RefPalette.of(context).bg,
+      appBar: authAppBar(
+        context,
+        onBack: () {
+          if (state.currentStep > 0) {
+            ref.read(onboardingControllerProvider.notifier).back();
+          } else {
+            context.pop();
+          }
+        },
+        title: const _OnboardingLogo(height: 34),
       ),
       body: SafeArea(
         child: Column(
@@ -213,7 +208,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 child: Column(
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 12),
+                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
                       child: _heroHeader(),
                     ),
                     _stepper(state.currentStep),
@@ -246,147 +241,56 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  // ── Hero header (step 1) ────────────────────────────────────────────────────
+  // ── Heading (v6 `.authwrap` eyebrow title) ────────────────────────────────
   Widget _heroHeader() {
-    return Column(
-      children: [
-        // Sparkles badge pill.
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: ThemeConstants.surface.withValues(alpha: 0.8),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-                color: ThemeConstants.accent.withValues(alpha: 0.30)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.auto_awesome_rounded,
-                  size: 14, color: ThemeConstants.accent),
-              const SizedBox(width: 7),
-              Text('PRACTITIONER ONBOARDING',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.8,
-                    color: ThemeConstants.accent,
-                  )),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        // "Welcome to Hydrawav3" on one line (Hydrawav3 in the accent gradient).
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Welcome to ',
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: ThemeConstants.textPrimary,
-                  )),
-              ShaderMask(
-                shaderCallback: (rect) => LinearGradient(
-                  colors: [ThemeConstants.accent, const Color(0xFFA55A3B)],
-                ).createShader(rect),
-                child: const Text('Hydrawav3',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                    )),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        Text(
+    return const AuthHeading(
+      'Practitioner onboarding',
+      subtitle:
           'Share your details so we can tailor the workspace to your practice.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13.5,
-            height: 1.35,
-            color: ThemeConstants.textSecondary,
-          ),
-        ),
-      ],
     );
   }
 
-  // ── Stepper ─────────────────────────────────────────────────────────────────
+  // ── Stepper: dots + "Step N of 4 · Name" ─────────────────────────────────
   Widget _stepper(int current) {
+    final p = RefPalette.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Row(
-        children: [
-          for (var i = 0; i < _steps.length; i++) ...[
-            Expanded(child: _stepItem(i, current)),
-            if (i < _steps.length - 1)
-              Container(
-                width: 18,
-                height: 2,
-                margin: const EdgeInsets.only(bottom: 18),
-                color:
-                    i < current ? ThemeConstants.accent : ThemeConstants.border,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+      child: Semantics(
+        label: 'Step ${current + 1} of ${_steps.length}, '
+            '${_steps[current].label}',
+        child: ExcludeSemantics(
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var i = 0; i < _steps.length; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 240),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width: i == current ? 22 : 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: i <= current ? p.copper : p.line,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                ],
               ),
-          ],
-        ],
+              const SizedBox(height: 8),
+              Text(
+                'Step ${current + 1} of ${_steps.length} · '
+                '${_steps[current].label}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: p.ink3,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-    );
-  }
-
-  Widget _stepItem(int index, int current) {
-    final done = index < current;
-    final active = index == current;
-    final on = done || active;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: on ? ThemeConstants.accent : ThemeConstants.surfaceVariant,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: active ? ThemeConstants.accent : ThemeConstants.border,
-              width: 2,
-            ),
-            boxShadow: active
-                ? [
-                    BoxShadow(
-                      color: ThemeConstants.accent.withValues(alpha: 0.30),
-                      blurRadius: 10,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          alignment: Alignment.center,
-          child: Icon(
-            done ? Icons.check_rounded : _steps[index].icon,
-            size: 18,
-            color: on ? ThemeConstants.onAccent : ThemeConstants.textTertiary,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          _steps[index].label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: active ? FontWeight.w800 : FontWeight.w500,
-            color: active
-                ? ThemeConstants.textPrimary
-                : ThemeConstants.textTertiary,
-          ),
-        ),
-      ],
     );
   }
 
@@ -469,14 +373,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: _field(_country, 'Country',
                   req: true, hint: 'USA', err: s.step1Errors['country'])),
         ]),
-        _dateField('Date of Birth', _dob, (v) => setState(() => _dob = v),
-            req: true),
-        if (s.step1Errors['dateOfBirth'] != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(s.step1Errors['dateOfBirth']!,
-                style: TextStyle(fontSize: 12, color: ThemeConstants.error)),
-          ),
+        // Date of Birth hidden, as on the website (optional in the API; the
+        // request leaves it out when empty).
+        // _dateField('Date of Birth', _dob, (v) => setState(() => _dob = v),
+        //     req: false),
         _euaBlock(s),
       ],
     );
@@ -486,7 +386,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     return _StepShell(
       icon: Icons.workspace_premium_rounded,
       title: 'Credentials / Licenses',
-      subtitle: 'This step is optional — you can add these later.',
+      subtitle: 'This step is optional, you can add these later.',
       children: [
         _field(_certName, 'Certification Name', hint: 'State License'),
         _field(_certOrg, 'Issuing Organization', hint: 'State Medical Board'),
@@ -753,7 +653,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       subtitle: 'Confirm your details and accept the agreement.',
       children: [
         _reviewRow(Icons.person_rounded, 'Practitioner',
-            s.form.fullName.isEmpty ? '—' : s.form.fullName, s.form.email),
+            s.form.fullName.isEmpty ? '--' : s.form.fullName, s.form.email),
         _divider(),
         _reviewRow(Icons.workspace_premium_outlined, 'Licenses',
             '${s.certifications.length} added', null),
@@ -780,7 +680,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       children: [
         const SizedBox(height: 4),
         InkWell(
-          onTap: () => _launch('https://www.hydrawav3.com/privacy'),
+          onTap: () => _launch(AppConfigStore.current.links.privacy),
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -788,11 +688,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               Icon(Icons.description_outlined,
                   size: 18, color: ThemeConstants.accent),
               const SizedBox(width: 8),
-              Text('Read the End User Agreement',
-                  style: TextStyle(
-                      color: ThemeConstants.accent,
-                      fontWeight: FontWeight.w700,
-                      decoration: TextDecoration.underline)),
+              Flexible(
+                child: Text('Read the End User Agreement',
+                    style: TextStyle(
+                        color: ThemeConstants.accent,
+                        fontWeight: FontWeight.w700,
+                        decoration: TextDecoration.underline)),
+              ),
             ]),
           ),
         ),
@@ -891,7 +793,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _label(label, req),
-          const SizedBox(height: 6),
           TextField(
             controller: c,
             obscureText: obscure,
@@ -906,48 +807,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _label(String text, bool req) {
-    return RichText(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: ThemeConstants.textSecondary,
-        ),
-        children: [
-          if (req)
-            TextSpan(
-              text: ' *',
-              style: TextStyle(
-                  color: ThemeConstants.error, fontWeight: FontWeight.w800),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget _label(String text, bool req) => AuthLabel(text, required: req);
 
   InputDecoration _inputDecoration(
-      {String? hint, String? error, Widget? suffix}) {
-    OutlineInputBorder border(Color c, [double w = 1.4]) => OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: c, width: w),
-        );
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: ThemeConstants.textTertiary, fontSize: 14),
-      errorText: error,
-      isDense: true,
-      filled: true,
-      fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.45),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      suffixIcon: suffix,
-      enabledBorder: border(ThemeConstants.border),
-      focusedBorder: border(ThemeConstants.accent, 1.6),
-      errorBorder: border(ThemeConstants.error),
-      focusedErrorBorder: border(ThemeConstants.error, 1.6),
-    );
-  }
+          {String? hint, String? error, Widget? suffix}) =>
+      authInputDecoration(context, hint: hint, error: error, suffix: suffix);
 
   /// Step-1 Account Type select. Options come from the public
   /// `user/account-types` endpoint; the selected value is the option's id,
@@ -961,9 +825,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _label('Account Type', true),
-          const SizedBox(height: 6),
           options.when(
             loading: () => DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: null,
               isDense: true,
               items: const [],
@@ -974,6 +838,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: null,
                   isDense: true,
                   items: const [],
@@ -1002,6 +867,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               final value =
                   types.any((t) => t.id == _accountType) ? _accountType : null;
               return DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: value,
                 isDense: true,
                 icon: Icon(Icons.keyboard_arrow_down_rounded,
@@ -1045,8 +911,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _label(label, req),
-          const SizedBox(height: 6),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: value,
             isDense: true,
             icon: Icon(Icons.keyboard_arrow_down_rounded,
@@ -1070,7 +936,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(label, req),
-        const SizedBox(height: 6),
         InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () async {
@@ -1243,11 +1108,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _bottomBar(OnboardingState s, bool isLast, bool canSubmit) {
+    final p = RefPalette.of(context);
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
       decoration: BoxDecoration(
-        color: ThemeConstants.surface,
-        border: Border(top: BorderSide(color: ThemeConstants.borderLight)),
+        color: p.bg,
+        border: Border(top: BorderSide(color: p.divider)),
       ),
       child: SafeArea(
         top: false,
@@ -1255,10 +1121,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           children: [
             if (s.currentStep > 0) ...[
               Expanded(
-                child: HwButton(
+                child: AuthOutlineButton(
                   label: 'Back',
-                  isOutlined: true,
-                  onPressed: (s.isSubmitting || s.isCreatingAccount)
+                  onTap: (s.isSubmitting || s.isCreatingAccount)
                       ? null
                       : () => ref
                           .read(onboardingControllerProvider.notifier)
@@ -1269,14 +1134,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             ],
             Expanded(
               flex: 2,
-              child: HwButton(
+              child: AuthPrimaryButton(
                 // Licenses (step 2) is optional → "Skip / Next" like the web.
                 label: isLast
                     ? 'Submit application'
                     : (s.currentStep == 1 ? 'Skip / Next' : 'Continue'),
                 // Step 1 provisions the account, so it has its own spinner.
-                isLoading: s.isSubmitting || s.isCreatingAccount,
-                onPressed: (isLast && !canSubmit) ? null : _onPrimary,
+                busy: s.isSubmitting || s.isCreatingAccount,
+                onTap: (isLast && !canSubmit) ? null : _onPrimary,
               ),
             ),
           ],
@@ -1574,61 +1439,53 @@ class _StepShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final showHeader = title != null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showHeader) ...[
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: ThemeConstants.accent.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(11),
+    final p = RefPalette.of(context);
+    return AuthCard(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title != null) ...[
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: p.tanSoft,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(icon, size: 20, color: p.copperInk),
                 ),
-                alignment: Alignment.center,
-                child: Icon(icon, size: 20, color: ThemeConstants.accent),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title!,
-                        style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: ThemeConstants.textPrimary)),
-                    const SizedBox(height: 2),
-                    Text(subtitle ?? '',
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            height: 1.3,
-                            color: ThemeConstants.textSecondary)),
-                  ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title!,
+                          style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              color: p.ink)),
+                      if ((subtitle ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(subtitle!,
+                            style: TextStyle(
+                                fontSize: 12.5, height: 1.3, color: p.ink3)),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Divider(height: 1, color: p.divider),
+            const SizedBox(height: 16),
+          ],
+          ...children,
         ],
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
-          decoration: BoxDecoration(
-            color: isDark ? ThemeConstants.surface : Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: ThemeConstants.borderLight),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: children,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1657,52 +1514,36 @@ class _OnboardingLogo extends StatelessWidget {
 class _SuccessView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const _OnboardingLogo(height: 44),
-              const SizedBox(height: 36),
-              Container(
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  color: ThemeConstants.success.withValues(alpha: 0.14),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(Icons.check_rounded,
-                    size: 40, color: ThemeConstants.success),
-              ),
-              const SizedBox(height: 22),
-              Text('Account created',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      color: ThemeConstants.textPrimary)),
-              const SizedBox(height: 8),
-              Text(
-                'Your account and business are set up. '
-                'Sign in with your username and password to get started.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 14,
-                    height: 1.4,
-                    color: ThemeConstants.textSecondary),
-              ),
-              const SizedBox(height: 28),
-              HwButton(
-                label: 'Sign in',
-                width: double.infinity,
-                onPressed: () => context.go(RoutePaths.login),
-              ),
-            ],
+    final p = RefPalette.of(context);
+    return AuthPage(
+      child: Column(
+        children: [
+          const _OnboardingLogo(height: 40),
+          const SizedBox(height: 32),
+          Container(
+            width: 76,
+            height: 76,
+            decoration: BoxDecoration(
+              color: p.goodSoft,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.check_rounded, size: 40, color: p.good),
           ),
-        ),
+          const SizedBox(height: 22),
+          const AuthHeading(
+            'Account created',
+            subtitle: 'Your account and business are set up. '
+                'Sign in with your username and password to get started.',
+          ),
+          const SizedBox(height: 28),
+          SizedBox(
+            width: double.infinity,
+            child: AuthPrimaryButton(
+              label: 'Sign in',
+              onTap: () => context.go(RoutePaths.login),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/api_endpoints.dart';
+import '../../../core/services/local_notification_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/mqtt_publish_client.dart';
 import '../../../core/constants/ble_constants.dart';
 import '../../../core/utils/logger.dart';
 import '../../auth/presentation/providers/auth_provider.dart';
 import '../../ble/services/ble_connector.dart';
+import '../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../intake/domain/intake_models.dart';
 import '../../protocols/domain/protocol_model.dart';
@@ -19,6 +23,7 @@ import 'background_session_runtime.dart';
 import 'session_sync_service.dart';
 import '../data/session_repository.dart';
 import '../domain/pending_session_outcome_model.dart';
+import '../domain/plus_reconnect_registry.dart';
 import '../domain/session_model.dart';
 import '../presentation/providers/pending_outcomes_provider.dart';
 
@@ -96,10 +101,10 @@ class DeviceTelemetry {
     // version (parses numeric), medium, run state, user mode, and the p1/p2 pad
     // objects (surfaced via sun/moon instead).
     'fw', 'm', 'rs', 'lm', 'p1', 'p2', 'pe', 'pw', 'l', 'v',
-    // Hidden readout chips (per product): temperature (tp), current (c),
-    // voltage (av), and the unidentified td/tl — excluded so they don't render
-    // on the device card.
-    'tp', 'c', 'av', 'td', 'tl',
+    // tp (temperature), c (current), and av (voltage) are surfaced — web
+    // parity — via sensorReadouts below. Only the unidentified td/tl stay
+    // hidden from the generic readout row.
+    'td', 'tl',
   };
 
   /// Numeric "extra" readings (temperature/voltage/current/cycle progress/…)
@@ -226,6 +231,46 @@ class SessionEngineState {
   /// meaningful while [protocolPlusOnBreakByDevice] is true for that device.
   final Map<String, int> protocolPlusBreakRemainingByDevice;
 
+  /// Local override for a device's WHOLE-SEQUENCE remaining seconds, set only
+  /// right after a restart's `START_PROTOCOL` event (see
+  /// [SessionEngine.setPlusRestartTimingOverride]) and cleared once the
+  /// backend feed's own remainingSeconds visibly reflects the restart again
+  /// (drops to or below this value) or a real switch replaces it.
+  ///
+  /// Backend restart currently sets `deviceStartTime = restartedAt`, which
+  /// zeroes the WHOLE-SEQUENCE wall clock the backend feed's remainingSeconds
+  /// is computed from — not just the current stage's. Right after a restart
+  /// that makes the feed briefly report close to the FULL session duration
+  /// remaining, which reads as the countdown jumping back to the very start
+  /// (and, since it then barely moves for a long stretch, as the UI being
+  /// "stuck"). The restart event itself DOES carry correct per-stage numbers
+  /// (`elapsedSeconds`/`remainingSeconds` for just this stage) — this map
+  /// holds the correctly reconstructed WHOLE-SEQUENCE remaining computed from
+  /// those, so the screen can show the right countdown immediately instead of
+  /// the backend's temporarily-wrong one.
+  final Map<String, int> protocolPlusRestartRemainingByDevice;
+
+  /// TOTAL seconds a Plus device has spent sitting on a BREAK waiting for its
+  /// next sub-protocol, accumulated across the whole run.
+  ///
+  /// The countdown (backend and local alike) is pure wall-clock from a single
+  /// start time, so every second of break is silently deducted from the
+  /// treatment total even though the unit is idle. A break stretched by a BLE
+  /// drop can be minutes, which is what made the timer reach 00:00 while the
+  /// device still had protocols left to run. Consumers add this back to the
+  /// remaining time (and subtract it from elapsed) so the clock tracks what the
+  /// hardware is actually doing.
+  final Map<String, int> protocolPlusBreakHoldByDevice;
+
+  /// True while a Plus device's countdown/ring is FROZEN waiting for it to come
+  /// back into BLE range. Set by [SessionEngine.handleBleDisconnect] the instant
+  /// a bound Plus device drops (mid-protocol or mid-break) and cleared by
+  /// [SessionEngine.handleBleReconnect]. Drives the global "bring device back in
+  /// range" reminder; the freeze itself is implemented by stopping that device's
+  /// [SessionEngine._deviceStopwatches] entry, so no separate hold-accounting is
+  /// needed here (unlike [protocolPlusBreakHoldByDevice]).
+  final Map<String, bool> protocolPlusAwaitingReconnectByDevice;
+
   /// Live device→app telemetry per device (faults, warnings, pad state, sensors).
   /// Empty until the first frame arrives over BLE notify or the backend channel.
   final Map<String, DeviceTelemetry> telemetryByDevice;
@@ -236,6 +281,13 @@ class SessionEngineState {
   final Map<String, List<ProtocolQuestion>> questionsByProtocolName;
 
   final String? error;
+
+  /// True once every bounded automatic retry to tell the backend this run is
+  /// over has failed. The run IS terminal locally; the backend has not (yet)
+  /// been told. The devices list screen uses this to keep a device's card
+  /// from freeing into "available" and to offer a manual way to finish the
+  /// stop from the session screen.
+  final bool backendStopUnresolved;
 
   const SessionEngineState({
     this.status = SessionStatus.idle,
@@ -260,9 +312,13 @@ class SessionEngineState {
     this.protocolPlusDelayByDevice = const {},
     this.protocolPlusOnBreakByDevice = const {},
     this.protocolPlusBreakRemainingByDevice = const {},
+    this.protocolPlusRestartRemainingByDevice = const {},
+    this.protocolPlusBreakHoldByDevice = const {},
+    this.protocolPlusAwaitingReconnectByDevice = const {},
     this.telemetryByDevice = const {},
     this.questionsByProtocolName = const {},
     this.error,
+    this.backendStopUnresolved = false,
   });
 
   SessionEngineState copyWith({
@@ -288,9 +344,13 @@ class SessionEngineState {
     Map<String, int>? protocolPlusDelayByDevice,
     Map<String, bool>? protocolPlusOnBreakByDevice,
     Map<String, int>? protocolPlusBreakRemainingByDevice,
+    Map<String, int>? protocolPlusRestartRemainingByDevice,
+    Map<String, int>? protocolPlusBreakHoldByDevice,
+    Map<String, bool>? protocolPlusAwaitingReconnectByDevice,
     Map<String, DeviceTelemetry>? telemetryByDevice,
     Map<String, List<ProtocolQuestion>>? questionsByProtocolName,
     String? error,
+    bool? backendStopUnresolved,
   }) {
     return SessionEngineState(
       status: status ?? this.status,
@@ -324,10 +384,20 @@ class SessionEngineState {
           protocolPlusOnBreakByDevice ?? this.protocolPlusOnBreakByDevice,
       protocolPlusBreakRemainingByDevice: protocolPlusBreakRemainingByDevice ??
           this.protocolPlusBreakRemainingByDevice,
+      protocolPlusRestartRemainingByDevice:
+          protocolPlusRestartRemainingByDevice ??
+              this.protocolPlusRestartRemainingByDevice,
+      protocolPlusBreakHoldByDevice:
+          protocolPlusBreakHoldByDevice ?? this.protocolPlusBreakHoldByDevice,
+      protocolPlusAwaitingReconnectByDevice:
+          protocolPlusAwaitingReconnectByDevice ??
+              this.protocolPlusAwaitingReconnectByDevice,
       telemetryByDevice: telemetryByDevice ?? this.telemetryByDevice,
       questionsByProtocolName:
           questionsByProtocolName ?? this.questionsByProtocolName,
       error: error,
+      backendStopUnresolved:
+          backendStopUnresolved ?? this.backendStopUnresolved,
     );
   }
 }
@@ -391,15 +461,38 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// post-session questions can be asked even after the live card is gone.
   /// Idempotent; only fires for sessions that actually ran (a draft was saved).
   void enqueuePendingOutcome() {
-    if (_pendingOutcomeEnqueued) return;
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: enqueuePendingOutcome() called — '
+      'alreadyEnqueued=$_pendingOutcomeEnqueued historyCaptured=$_historyCaptured '
+      'protocol=${state.protocol?.templateName} deviceIds=${state.deviceIds}',
+    );
+    if (_pendingOutcomeEnqueued) {
+      appLogger.i('🩺 OUTCOME-DEBUG: skipped — already enqueued this run');
+      return;
+    }
     // Snapshot every session that actually ran so the after-screen (or History
     // "Needs review") can finalize a single `/intake` POST. Pulse questions are
     // client-only — guests still log from the after screen without prompting.
-    if (!_historyCaptured) return; // never started running
-    if (state.protocol == null || state.deviceIds.isEmpty) return;
+    if (!_historyCaptured) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — _historyCaptured is false '
+        '(session never started running / draft never saved)',
+      );
+      return;
+    }
+    if (state.protocol == null || state.deviceIds.isEmpty) {
+      appLogger.w(
+        '🩺 OUTCOME-DEBUG: skipped — protocol or deviceIds missing '
+        '(protocol=${state.protocol}, deviceIds=${state.deviceIds})',
+      );
+      return;
+    }
     _pendingOutcomeEnqueued = true;
     try {
       final snapshot = _buildPendingOutcome();
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: snapshot built, enqueuing sessionId=${snapshot.sessionId}',
+      );
       unawaited(_ref.read(pendingOutcomesProvider.notifier).enqueue(snapshot));
     } catch (e) {
       _pendingOutcomeEnqueued = false;
@@ -430,8 +523,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             (name: plusName, durationSeconds: plusDuration);
         // Ordered sub-protocol names drive one question section each.
         final seq = state.protocolPlusSequenceByDevice[deviceId];
-        protocolNamesByDeviceId[deviceId] =
-            (seq != null && seq.isNotEmpty) ? List<String>.from(seq) : [plusName];
+        protocolNamesByDeviceId[deviceId] = (seq != null && seq.isNotEmpty)
+            ? List<String>.from(seq)
+            : [plusName];
       } else {
         final name = proto?.templateName ?? state.protocol!.templateName;
         final devTimer = state.deviceTimers[deviceId];
@@ -463,8 +557,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       deviceIds: List<String>.from(state.deviceIds),
       protocolByDeviceId: protocolByDeviceId,
       protocolNamesByDeviceId: protocolNamesByDeviceId,
-      questionsByProtocolName:
-          Map<String, List<ProtocolQuestion>>.from(state.questionsByProtocolName),
+      questionsByProtocolName: Map<String, List<ProtocolQuestion>>.from(
+          state.questionsByProtocolName),
       clientType: resolvedClientType,
       clientId: _clientId,
       discomfortBefore: null,
@@ -495,6 +589,142 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// lands — this is what drives the break countdown in the tick loop.
   final Map<String, Duration> _plusSegmentEndByDevice = {};
 
+  /// Device-elapsed at which the CURRENT break began, for a Plus device that is
+  /// on break right now. Absent when the device is mid-protocol.
+  final Map<String, Duration> _plusBreakStartedAt = {};
+
+  /// Accumulated duration of every COMPLETED break for a Plus device. The
+  /// in-progress break is added on top by [_plusBreakHold].
+  ///
+  /// Breaks are dead time: the firmware has finished one sub-protocol and is
+  /// idle until the next START_PROTOCOL lands. The countdown is wall-clock, so
+  /// without this every break is deducted from the treatment total — and a
+  /// break stretched by a BLE outage (the switch can't be delivered until the
+  /// unit is back) drained minutes, which is what made the display hit 00:00
+  /// while the device was still running.
+  final Map<String, Duration> _plusBreakHoldByDevice = {};
+
+  /// Plus device ids currently BLE-disconnected, per [handleBleDisconnect] /
+  /// [handleBleReconnect]. Deliberately NOT used to freeze anything by
+  /// itself — the firmware keeps running the current sub-protocol regardless
+  /// of the app's BLE link, so the countdown must keep advancing through a
+  /// mid-protocol disconnect. It only matters once a device is ALSO on break
+  /// ([_computeBreakState]): that combination is what
+  /// [SessionEngineState.protocolPlusAwaitingReconnectByDevice] (computed each
+  /// tick in [_syncDisplayedTimerFromStopwatch]) surfaces to the UI.
+  final Set<String> _plusDisconnectedIds = {};
+
+  /// This engine's own contribution to the shared
+  /// [plusAwaitingReconnectDeviceIdsProvider] registry — tracked so a change
+  /// (or disposal) can cleanly remove exactly these ids without touching
+  /// another engine instance's entries.
+  Set<String> _publishedAwaitingReconnectIds = const {};
+
+  /// Pushes this engine's current awaiting-reconnect device ids into the
+  /// GLOBAL registry so [PlusReconnectWatchdog] can find them without needing
+  /// to know this engine's family key (see plus_reconnect_registry.dart for
+  /// why that lookup is unreliable). No-op when nothing changed.
+  void _publishAwaitingReconnectIds(Set<String> nextIds) {
+    if (setEquals(nextIds, _publishedAwaitingReconnectIds)) return;
+    try {
+      final registryNotifier =
+          _ref.read(plusAwaitingReconnectDeviceIdsProvider.notifier);
+      final updated = Set<String>.from(registryNotifier.state)
+        ..removeAll(_publishedAwaitingReconnectIds)
+        ..addAll(nextIds);
+      registryNotifier.state = updated;
+      _publishedAwaitingReconnectIds = nextIds;
+    } catch (e) {
+      appLogger.d(
+        'Session: awaiting-reconnect registry publish ignored (container disposed)',
+      );
+    }
+  }
+
+  /// Total break time to discount for [id] — completed breaks plus the one in
+  /// progress. Add to remaining / subtract from elapsed to get a clock that
+  /// tracks the hardware.
+  Duration _plusBreakHold(String id) {
+    final done = _plusBreakHoldByDevice[id] ?? Duration.zero;
+    final startedAt = _plusBreakStartedAt[id];
+    if (startedAt == null) return done;
+    final current = _deviceElapsed(id) - startedAt;
+    return current > Duration.zero ? done + current : done;
+  }
+
+  /// Track STUCK entry/exit and bank the elapsed stuck time on exit. Runs at
+  /// the top of every tick so the hold is fresh before completion is evaluated.
+  ///
+  /// "Stuck" — not just "on break" — mirrors exactly the condition that
+  /// freezes the display and fires the pause mirror below
+  /// (`awaitingReconnectByDevice` in [_syncDisplayedTimerFromStopwatch],
+  /// recomputed independently here since this runs earlier in the same tick):
+  /// break fully run out (past `segEnd + delay`, not just past `segEnd`) AND
+  /// the device disconnected. A device that stays connected through its break,
+  /// or reconnects before the break even runs out, is never "stuck" and never
+  /// banks anything — its countdown just drains normally like a connected
+  /// break always has.
+  ///
+  /// This used to bank the WHOLE break (from `segEnd` — the moment the
+  /// PREVIOUS protocol ended — regardless of connection), which over-gave: the
+  /// display froze at the value from BEFORE the break even started, instead of
+  /// the value at the moment it actually got stuck, and the freeze mirror call
+  /// below (fired only once the device is actually "awaiting reconnect") had
+  /// already told the backend to pause well AFTER hold-banking had started —
+  /// so a chunk of "given back" time was for a normal break span the backend
+  /// itself never stopped counting through. Banking only the stuck span keeps
+  /// this in lockstep with the backend's own pause/resume window.
+  void _updatePlusBreakHold() {
+    for (final id in _plusDeviceIds()) {
+      final segEnd = _plusSegmentEndByDevice[id];
+      final status = state.deviceStatuses[id];
+      final delay = state.protocolPlusDelayByDevice[id] ?? 0;
+      final breakExhaustedAt =
+          segEnd == null ? null : segEnd + Duration(seconds: delay);
+      final stuck = breakExhaustedAt != null &&
+          status == SessionStatus.running &&
+          !_isPlusDeviceOnFinalProtocol(id) &&
+          _deviceElapsed(id) >= breakExhaustedAt &&
+          _plusDisconnectedIds.contains(id);
+
+      if (stuck) {
+        // Bank the START at the predicted exhaustion point, not at "now" — the
+        // tick that notices is up to 250ms late, and on a resumed app the
+        // wall-clock reconcile can jump much further.
+        _plusBreakStartedAt.putIfAbsent(id, () => breakExhaustedAt);
+      } else if (_plusBreakStartedAt.containsKey(id)) {
+        final startedAt = _plusBreakStartedAt.remove(id)!;
+        final spent = _deviceElapsed(id) - startedAt;
+        if (spent > Duration.zero) {
+          _plusBreakHoldByDevice[id] =
+              (_plusBreakHoldByDevice[id] ?? Duration.zero) + spent;
+          appLogger.i(
+            'ProtocolPlus: $id was stuck for ${spent.inSeconds}s — total break '
+            'hold now ${_plusBreakHoldByDevice[id]!.inSeconds}s (countdown is '
+            'extended by this so 00:00 matches the device)',
+          );
+        }
+      }
+    }
+  }
+
+  /// Publishable snapshot of [_plusBreakHold] for every Plus device, in whole
+  /// seconds. Returns the EXISTING map when nothing changed so the state stays
+  /// referentially stable and the tick doesn't rebuild the UI needlessly.
+  Map<String, int> _breakHoldSecondsByDevice() {
+    final next = <String, int>{};
+    for (final id in _plusDeviceIds()) {
+      final hold = _plusBreakHold(id);
+      if (hold > Duration.zero) next[id] = hold.inSeconds;
+    }
+    final current = state.protocolPlusBreakHoldByDevice;
+    if (next.length == current.length &&
+        next.entries.every((e) => current[e.key] == e.value)) {
+      return current;
+    }
+    return next;
+  }
+
   /// Wall-clock start of the CURRENT uninterrupted `rs:"stop"` streak per Plus
   /// device. Seeded by the first stop frame, cleared by any play/pause frame, by
   /// a landed switch, and by [reset]. The tick loop turns a long-enough streak
@@ -520,6 +750,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// session (each Plus device has its own `serverSessionId`).
   void Function(String deviceId)? onPlusDeviceStoppedByUser;
 
+  /// Which BACKEND session a given device belongs to.
+  ///
+  /// One launch does not mean one backend session, and the two shapes differ:
+  /// the normal devices share ONE session that holds several devices, while every
+  /// Protocol Plus device gets a session of its OWN. So "the backend session for
+  /// this run" is not a single value — it depends on the device.
+  ///
+  /// Without this, every per-device pause/resume went to
+  /// [normalServerSessionIdProvider]: correct for a normal device, wrong for a
+  /// Plus one (the identity lookup matches nothing in a session that device isn't
+  /// in), and null for a Plus-only run, where the mirror silently did nothing at
+  /// all. [ProtocolPlusController] sets this from its bindings; unset, or
+  /// returning null, falls back to the normal session as before.
+  String? Function(String deviceId)? backendSessionIdForDevice;
+
+  /// The backend session to address [deviceId] on — its own if one is known,
+  /// otherwise the normal subset's.
+  String? _backendSessionIdFor(String deviceId) {
+    final mapped = backendSessionIdForDevice?.call(deviceId);
+    if (mapped != null && mapped.isNotEmpty) return mapped;
+    return _ref.read(normalServerSessionIdProvider(sessionId));
+  }
+
   /// How long a Plus device must report `rs:"stop"` uninterrupted, outside the
   /// break window and with no switch pending, before we call it a user stop.
   /// Telemetry streams roughly every 3s, so this is ~2 consecutive frames.
@@ -535,17 +788,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// [_plusSegmentEndByDevice] is our ESTIMATE of the firmware's runtime and the
   /// device stopwatch can drift across a suspend, so a unit that finishes a few
   /// seconds "early" by our clock must not be mistaken for a user stop.
-  static const Duration _plusBreakPreGrace = Duration(seconds: 15);
-
-  /// How far AFTER the nominal break end a stop still reads as the break. A
-  /// healthy but late switch costs up to 12s waiting for reconnect
-  /// (applyProtocolPlusSwitch) + ~4s for STOP→config→PLAY + a retry ≈ 22s; 30s
-  /// leaves headroom for server-side jitter.
   ///
-  /// Both graces are deliberately generous: a false positive tears down a live
-  /// treatment mid-break, while a false negative only DELAYS detection (the
-  /// window always expires and the pending flags always clear).
-  static const Duration _plusBreakPostGrace = Duration(seconds: 30);
+  /// Some cycle-based protocols (e.g. `cycle1`/`cycle5` edge cycles with short
+  /// per-rep durations) finish noticeably earlier than [Protocol.totalDurationSeconds]
+  /// predicts — observed ~24s early and reproducible — so this needs more
+  /// headroom than ordinary clock drift alone would require.
+  static const Duration _plusBreakPreGrace = Duration(minutes: 2);
+
+  // There is deliberately NO post-break grace any more. It used to be 30s, after
+  // which an idle device was called a user stop — see [_isInsidePlusBreakWindow]
+  // for why a late switch is not evidence of anything.
 
   Future<void> _stateUpdateQueue = Future.value();
 
@@ -578,6 +830,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// True once the backend session for this run has been told to stop.
   bool _backendSessionEnded = false;
 
+  /// True while [_attemptBackendStop] is mid-retry — guards a manual retry
+  /// (devices list tap → session screen → Stop All) or the periodic sweep
+  /// from piling a second attempt on top of one already running.
+  bool _backendStopInFlight = false;
+
+  /// Backoff schedule for [_attemptBackendStop]: immediate, then +5s, +15s,
+  /// +45s. Bounded on purpose — this is a safety net for a flaky POST, not a
+  /// substitute for [retryBackendStopIfNeeded] being callable again later by
+  /// the sweep or a manual retry.
+  static const List<Duration> _backendStopRetryDelays = [
+    Duration.zero,
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 45),
+  ];
+
   /// End the BACKEND session as soon as the run goes terminal — from the ENGINE,
   /// not the live card.
   ///
@@ -593,23 +861,107 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// The backend session is already gone (it was stopped from the web / another
   /// phone, or dropped out of the live feed), so [_endBackendSessionOnce] must
   /// not POST a stop for it when this engine follows it into a terminal state.
-  void markBackendSessionEnded() => _backendSessionEnded = true;
+  void markBackendSessionEnded() {
+    _backendSessionEnded = true;
+    _setBackendStopUnresolved(false);
+  }
 
   void _endBackendSessionOnce() {
-    if (_backendSessionEnded) return;
+    if (_backendSessionEnded || _backendStopInFlight) return;
     final backendId = _ref.read(normalServerSessionIdProvider(sessionId));
     if (backendId == null || backendId.isEmpty) return;
-    _backendSessionEnded = true;
-    appLogger.i('Session: ending backend session $backendId (run terminal)');
-    unawaited(
-      _ref.read(sessionSyncServiceProvider).stopServerSession(backendId),
-    );
+    unawaited(_attemptBackendStop(backendId));
+  }
+
+  /// Re-attempt the backend stop for this run. Safe to call any number of
+  /// times: no-ops if already confirmed stopped or a retry is already in
+  /// flight. Called by the devices-list "Stop pending" tap (indirectly, via
+  /// the session screen's existing Stop All) and by the periodic sweep
+  /// piggybacked on [LiveSessionsNotifier]'s poll.
+  Future<void> retryBackendStopIfNeeded() async {
+    if (_backendSessionEnded || _backendStopInFlight) return;
+    final backendId = _ref.read(normalServerSessionIdProvider(sessionId));
+    if (backendId == null || backendId.isEmpty) return;
+    await _attemptBackendStop(backendId);
+  }
+
+  /// Runs [attempt] with the [_backendStopRetryDelays] backoff until it
+  /// succeeds or every bounded attempt is exhausted. Shared by
+  /// [_attemptBackendStop] (whole-session stop) and the per-device stop mirror
+  /// in [_mirrorDeviceLifecycleToBackend], so there's one retry policy instead
+  /// of two copies of the same loop.
+  Future<bool> _runWithBoundedRetry(
+    Future<void> Function() attempt,
+    String logLabel,
+  ) async {
+    for (final delay in _backendStopRetryDelays) {
+      if (delay > Duration.zero) await Future.delayed(delay);
+      if (!_isActive) return false; // engine reset/replaced mid-retry
+      try {
+        await attempt();
+        return true;
+      } catch (e) {
+        appLogger.w('Session: $logLabel attempt failed: $e');
+      }
+    }
+    return false;
+  }
+
+  void _setBackendStopUnresolved(bool value) {
+    if (!_isActive || state.backendStopUnresolved == value) return;
+    try {
+      state = state.copyWith(backendStopUnresolved: value);
+    } catch (_) {
+      // notifier disposed
+    }
+  }
+
+  /// The bounded-retry attempt shared by [_endBackendSessionOnce] and
+  /// [retryBackendStopIfNeeded]. Only marks the backend session ended once the
+  /// POST actually succeeds — a failed attempt no longer orphans the session
+  /// forever (the old fire-and-forget call set the "done" flag before the
+  /// network call even resolved). If every bounded attempt fails, flags
+  /// [SessionEngineState.backendStopUnresolved] instead of giving up silently,
+  /// so the sweep and the manual fallback both know there's unfinished work.
+  Future<void> _attemptBackendStop(String backendId) async {
+    _backendStopInFlight = true;
+    try {
+      final ok = await _runWithBoundedRetry(
+        () =>
+            _ref.read(sessionSyncServiceProvider).stopServerSession(backendId),
+        'backend stop for $backendId',
+      );
+      if (ok) {
+        _backendSessionEnded = true;
+        _setBackendStopUnresolved(false);
+        appLogger
+            .i('Session: backend session $backendId stopped (run terminal)');
+      } else {
+        // Every bounded attempt failed — flag it instead of pretending the
+        // backend was told. A later manual retry or the sweep can still succeed.
+        _setBackendStopUnresolved(true);
+        appLogger.e('Session: giving up on backend stop for $backendId after '
+            '${_backendStopRetryDelays.length} attempts — flagged unresolved');
+      }
+    } finally {
+      _backendStopInFlight = false;
+    }
   }
 
   /// Public, read-only view of the session transport (the underlying [state] is
   /// protected on StateNotifier). Used by [ProtocolPlusController] to decide
   /// whether a held switch is gated on a BLE link.
   SessionTransport get transport => state.transport;
+
+  /// Public, read-only views of a few more [state] fields — same reasoning as
+  /// [transport]. Used by [ProtocolPlusController._applyRestartTimingOverride]
+  /// to reconstruct a restarted stage's true whole-sequence remaining from
+  /// data already tracked locally.
+  Map<String, List<int>> get protocolPlusDurationsByDevice =>
+      state.protocolPlusDurationsByDevice;
+  Map<String, int> get protocolPlusDelayByDevice =>
+      state.protocolPlusDelayByDevice;
+  Map<String, TimerState> get deviceTimers => state.deviceTimers;
 
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
@@ -696,6 +1048,33 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final ok = await connector.writeToDevice(mac, [0x01]);
     appLogger.i('Session: BLE raw PLAY attempt 1/1 for $mac → $ok');
     return ok;
+  }
+
+  /// BLE-only: arm the firmware's alarm-mute window via `{"muteSeconds": N}`
+  /// (firmware V30.4+ — `AlarmMuteUntilMillis = now + N`). N<=0 cancels;
+  /// firmware caps at 3600. Time-based and wall-clock (does NOT pause with the
+  /// session), so we only arm it while a Plus run is actively RUNNING.
+  ///
+  /// Protocol Plus use: armed once, ~10s before protocol[0]'s predicted end,
+  /// to span (rest of the stack − final protocol − margin). That window
+  /// swallows protocol[0]'s completion chime and every mid-sequence
+  /// stop/start chime, and closes just before the final sub-protocol so its
+  /// own completion beep still sounds — net 2 beeps (first start, last end)
+  /// instead of six for a 3-stage stack. See [_maybeArmPlusMute].
+  final Set<String> _plusMuteArmed = {};
+  Future<void> _setDeviceMuteSeconds(String mac, int seconds) async {
+    if (state.transport != SessionTransport.ble) return;
+    try {
+      final connector = _ref.read(bleConnectorProvider);
+      if (!connector.isConnected(mac)) return;
+      final ok = await connector.writeJsonToDevice(
+        mac,
+        utf8.encode(jsonEncode({'muteSeconds': seconds})),
+      );
+      appLogger.i('Session: BLE muteSeconds=$seconds for $mac → $ok');
+    } catch (e) {
+      appLogger.w('Session: muteSeconds write failed for $mac: $e');
+    }
   }
 
   Future<void> _publishWifiPlayCmd(int playCmd) async {
@@ -849,6 +1228,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     appLogger.i(
         '🔎 rs-reconcile ACT: $deviceId rs=$normalized (status=${state.deviceStatuses[deviceId]})');
 
+    // `estop` is NOT ambiguous the way `stop` is: the firmware only emits it when
+    // the unit's EMERGENCY STOP was hit, never as the idle between two stacked
+    // sub-protocols. So it is acted on immediately for EVERY device — including a
+    // Protocol Plus one, which otherwise returns just below and defers to the
+    // streak/break-window reasoning in [_evaluatePlusDeviceStops].
+    if (normalized == 'estop') {
+      _handleDeviceReportedEstop(deviceId, isPlus: deviceIsPlus);
+      return;
+    }
+
     // Protocol Plus lifecycle is NOT decided here. The firmware PHYSICALLY STOPS
     // between stacked sub-protocols — and our own switch sends STOP first and
     // waits ~4s before PLAY — so a single `rs:stop` frame is ambiguous: it is
@@ -882,22 +1271,67 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         }
         break;
       case 'stop':
-        if (current != SessionStatus.stopped &&
-            current != SessionStatus.completed) {
-          appLogger.i(
-              'Session: device $deviceId reported rs=stop → stopping that device');
-          // Use the force-stop path (NOT stopDevice): the firmware stops and
-          // then drops the BLE link, so by the time this runs the device may
-          // already be disconnected — and stopDevice deliberately skips a
-          // disconnected device. force-stop registers it regardless and
-          // suppresses the auto-reconnect so it doesn't come back.
+        // A NORMAL (non-Plus — Plus already returned above) device reporting
+        // `rs:"stop"` has finished its protocol and is ending the session on
+        // its own — this is what "natural completion" actually looks like on
+        // the wire. There is no ambiguity here the way there is for a Plus
+        // device (no stacked sub-protocol to wait through), so act on it
+        // immediately. Previously this case didn't exist at all, so a
+        // session's own natural completion never queued the post-session
+        // outcomes screen or finalized history — only an app-initiated
+        // stop() did.
+        if (current == SessionStatus.running ||
+            current == SessionStatus.paused) {
+          appLogger.i('Session: device $deviceId reported rs=stop → '
+              'treating as natural completion');
           _forceDeviceStopped(deviceId);
-          // Web parity: also drive the BACKEND stop for just this device
-          // (stopAll:false) so the server ends/deducts it and every other
-          // client's live feed reconciles — not only our local state.
-          unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
         }
         break;
+      // 'estop' is handled above — before the Plus early-return — so it applies
+      // to Plus devices too.
+    }
+  }
+
+  /// A device reported `rs:"estop"` — its EMERGENCY STOP was pressed on the unit.
+  /// Stop THAT device (the rest of a multi-device session keeps running) and end
+  /// its server session so the backend deducts it and every other client's live
+  /// feed reconciles.
+  ///
+  /// Unlike a plain `rs:"stop"`, this needs no confirmation window: an e-stop is
+  /// never the firmware's expected idle between two stacked sub-protocols, so a
+  /// [isPlus] device is torn down on the first frame instead of waiting for
+  /// [_evaluatePlusDeviceStops] to weigh the streak against the break window.
+  void _handleDeviceReportedEstop(String deviceId, {required bool isPlus}) {
+    final current = state.deviceStatuses[deviceId];
+    if (current == null ||
+        current == SessionStatus.stopped ||
+        current == SessionStatus.completed) {
+      return;
+    }
+    appLogger.w('Session: device $deviceId reported rs=estop → stopping that '
+        'device (plus=$isPlus, status=$current)');
+
+    // Any stop streak this device had accumulated is moot now that it is going
+    // terminal — leaving it would have the tick loop re-fire the same stop.
+    _plusStopSince.remove(deviceId);
+
+    // Use the force-stop path (NOT stopDevice): the firmware stops and then
+    // drops the BLE link, so by the time this runs the device may already be
+    // disconnected — and stopDevice deliberately skips a disconnected device.
+    // force-stop registers it regardless and suppresses the auto-reconnect so
+    // it doesn't come back.
+    _forceDeviceStopped(deviceId);
+
+    if (isPlus) {
+      // A Plus device owns its OWN server session. The controller closes it and
+      // drops any switch held for it, behind the double-post guard that keeps
+      // the several stop paths from double-charging the unit — so this must not
+      // also post the stop itself.
+      onPlusDeviceStoppedByUser?.call(deviceId);
+    } else {
+      // Web parity: drive the BACKEND stop for just this device (stopAll:false)
+      // so the server ends/deducts it — not only our local state.
+      unawaited(_mirrorDeviceLifecycleToBackend(deviceId, 'stop'));
     }
   }
 
@@ -913,11 +1347,28 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// streak; any play/pause frame breaks it.
   void _recordPlusRunState(String id, String normalized) {
     if (normalized == 'stop') {
+      final isNewStreak = !_plusStopSince.containsKey(id);
       _plusStopSince.putIfAbsent(id, DateTime.now);
+      if (isNewStreak) {
+        // DIAG-PLUS-LOG: everything the break-vs-user-stop classifier will use
+        // to judge this streak, captured at the moment it STARTS — so a
+        // misclassification a few seconds/minutes later (see
+        // `_evaluatePlusDeviceStops`) can be traced back to what the engine
+        // actually believed at t=0, not just the final verdict.
+        appLogger.i(
+          'ProtocolPlus: $id reported rs=stop — starting stop streak '
+          '(elapsed=${_deviceElapsed(id)}, segEnd=${_plusSegmentEndByDevice[id]}, '
+          'onFinal=${_isPlusDeviceOnFinalProtocol(id)}, '
+          'insideBreakWindowNow=${_isInsidePlusBreakWindow(id)}, '
+          'switchInFlight=${_plusSwitchInFlight.contains(id)}, '
+          'switchPendingExternal=${_plusSwitchPendingExternal.contains(id)}, '
+          'deviceStatus=${state.deviceStatuses[id]}, sessionStatus=${state.status})',
+        );
+      }
     } else if (normalized == 'play' || normalized == 'pause') {
       if (_plusStopSince.remove(id) != null) {
-        appLogger.i(
-            'ProtocolPlus: $id reported $normalized — stop streak cleared');
+        appLogger
+            .i('ProtocolPlus: $id reported $normalized — stop streak cleared');
       }
     }
   }
@@ -943,9 +1394,37 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // falls back to the much longer unknown-segment confirmation window.
     if (segEnd == null) return false;
     final elapsed = _deviceElapsed(id);
+    // NO UPPER BOUND. Once a device is past its segment end with protocols still
+    // to come, it is idle waiting for the next START_PROTOCOL — and there is no
+    // deadline by which that has to arrive. The server holds queued switches for
+    // the whole of a pause, and a BLE outage holds them until the unit is back,
+    // so "the break has run 30s past its nominal end" says nothing about whether
+    // the user stopped the unit. The window used to close there, which tore down
+    // live treatments that were simply waiting for their next protocol.
+    //
+    // What is lost: a STOP pressed on the hardware DURING a break is no longer
+    // detected while the break lasts. It surfaces when the switch finally lands
+    // and the device refuses it. That is the right trade — a false positive kills
+    // a running treatment, a false negative only delays the teardown.
+    return elapsed >= segEnd - _plusBreakPreGrace;
+  }
+
+  /// What is LEFT of [id]'s current break — the gap the server puts between two
+  /// sub-protocols. Zero when the device is mid-protocol, on the final protocol,
+  /// or the break has already elapsed.
+  ///
+  /// [ProtocolPlusController] uses this on reconnect: a switch held through a BLE
+  /// outage must not be pushed the instant the unit comes back if the break it
+  /// belongs to is still running — the break is part of the protocol, so the
+  /// device serves the rest of it and only then takes the next protocol.
+  Duration remainingPlusBreak(String id) {
+    if (_isPlusDeviceOnFinalProtocol(id)) return Duration.zero;
+    final segEnd = _plusSegmentEndByDevice[id];
+    if (segEnd == null) return Duration.zero;
     final delay = Duration(seconds: state.protocolPlusDelayByDevice[id] ?? 0);
-    return elapsed >= segEnd - _plusBreakPreGrace &&
-        elapsed <= segEnd + delay + _plusBreakPostGrace;
+    if (delay <= Duration.zero) return Duration.zero;
+    final left = (segEnd + delay) - _deviceElapsed(id);
+    return left > Duration.zero ? left : Duration.zero;
   }
 
   /// Turn a long-enough `rs:"stop"` streak into a device-initiated stop.
@@ -970,6 +1449,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final status = state.deviceStatuses[id];
       if (status != SessionStatus.running && status != SessionStatus.paused) {
         _plusStopSince.remove(id); // already terminal / not started
+        continue;
+      }
+      // A paused run is SUPPOSED to leave the device idle: the app told it to
+      // stop, and the server is holding this device's remaining switches until
+      // resume. Reading that idle as "the user stopped the unit" would end a
+      // treatment the practitioner deliberately paused.
+      if (status == SessionStatus.paused ||
+          state.status == SessionStatus.paused) {
         continue;
       }
       // Our own switch sends STOP first and waits ~4s before PLAY, and a held
@@ -1013,14 +1500,34 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     String deviceId,
     String action,
   ) async {
-    final backendId = _ref.read(normalServerSessionIdProvider(sessionId));
+    // The session that actually HOLDS this device — a Plus device owns one, the
+    // normal devices share one. Posting an identity-keyed pause to the wrong
+    // session matches nothing and fails silently.
+    final backendId = _backendSessionIdFor(deviceId);
     if (backendId == null || backendId.isEmpty) return;
     final sync = _ref.read(sessionSyncServiceProvider);
+    // The 'stop' case gets the same bounded retry as the whole-session stop
+    // (a single failed POST used to just log and move on, silently orphaning
+    // this device on the backend) — everything else keeps the old best-effort
+    // behaviour, since pause/resume aren't what pins a device "in use" forever.
+    if (action == 'stop') {
+      final ok = await _runWithBoundedRetry(
+        () => sync.stopServerSessionDeviceByIdentity(backendId, deviceId),
+        'per-device stop mirror for $deviceId',
+      );
+      if (ok) {
+        appLogger.i(
+            'Session: mirrored rs=stop for $deviceId → backend session $backendId');
+      } else {
+        _setBackendStopUnresolved(true);
+        appLogger.e('Session: giving up on per-device stop mirror for '
+            '$deviceId after ${_backendStopRetryDelays.length} attempts — '
+            'flagged unresolved');
+      }
+      return;
+    }
     try {
       switch (action) {
-        case 'stop':
-          await sync.stopServerSessionDeviceByIdentity(backendId, deviceId);
-          break;
         case 'pause':
           await sync.pauseServerSessionDeviceByIdentity(backendId, deviceId);
           break;
@@ -1056,8 +1563,32 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.stop();
     }
     final overallStatus = _deriveOverallStatus(statuses);
+    // Snap THIS device's own timer to fully elapsed. The live card trusts the
+    // BACKEND clock right up until `deviceStatuses[id]` goes terminal
+    // (`useBackendTimer` gates on exactly that) — so a run that already hit
+    // 00:00 on the backend clock while the device kept physically running a
+    // few extra seconds (normal — the firmware's own finish isn't perfectly
+    // synced to the countdown) was displaying correctly right up to THIS
+    // moment. The instant `rs:stop` lands here, the card switches its source
+    // to this LOCAL `TimerState` — which, until now, was never actually
+    // finalized: whatever partial `elapsed` it happened to be sitting at (it
+    // isn't kept in lockstep second-by-second while the backend clock is the
+    // trusted source) is what got shown, e.g. a stale "00:49" flashing up
+    // right as the card hands off to the post-session sheet, instead of
+    // staying at 00:00 the way it had already been reading.
+    final deviceTimers = Map<String, TimerState>.from(state.deviceTimers);
+    final existingTimer = deviceTimers[deviceId];
+    if (existingTimer != null &&
+        existingTimer.elapsed < existingTimer.totalDuration) {
+      deviceTimers[deviceId] =
+          existingTimer.copyWith(elapsed: existingTimer.totalDuration);
+    }
     try {
-      state = state.copyWith(deviceStatuses: statuses, status: overallStatus);
+      state = state.copyWith(
+        deviceStatuses: statuses,
+        status: overallStatus,
+        deviceTimers: deviceTimers,
+      );
     } catch (_) {
       return; // notifier disposed
     }
@@ -1065,6 +1596,21 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         'newStatuses=$statuses');
     if (overallStatus == SessionStatus.stopped ||
         overallStatus == SessionStatus.completed) {
+      // The device itself reporting `rs=stop` (natural completion on the
+      // hardware, or an external/firmware-side stop) is a terminal
+      // transition exactly like a manual stop() or _onTick's own
+      // local-timer completion — it must also queue the post-session
+      // outcome. Without this, a session whose FIRMWARE ends it first
+      // (the common case: the device finishes its programmed duration and
+      // reports rs=stop before the app's local timer even notices) never
+      // got the after-screen or its final history entry — only an
+      // app-initiated stop()/_onTick completion did, because those two
+      // call enqueuePendingOutcome() and this path never did.
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _forceDeviceStopped reached terminal '
+        'overallStatus=$overallStatus, calling enqueuePendingOutcome()',
+      );
+      enqueuePendingOutcome();
       unawaited(_syncBackgroundRuntime('stopped'));
     } else {
       _pushNotificationSync();
@@ -1080,6 +1626,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   static const Set<String> _telemetryKeys = {
+    // The web displays these live device metrics. A metrics-only frame is still
+    // telemetry and must update the mobile session card.
+    'tp',
+    'c',
+    'av',
+    // Per-pad frames can arrive without a warning/fault/state field.
+    'p1',
+    'p2',
     'sun',
     'moon',
     'pad',
@@ -1135,12 +1689,80 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     return null;
   }
 
+  /// When a pause/resume was applied to the engine FROM a remote lifecycle
+  /// event (SESSION_PAUSED / SESSION_RESUMED off the socket), not from a
+  /// local button. The session screen's Plus server-sync
+  /// (`_maybeSyncProtocolPlusServer`) checks this: a status transition that
+  /// happened right after a remote event must NOT be POSTed back to the
+  /// server it came from — doing so makes the backend re-broadcast, which
+  /// flips the engine again, which re-POSTs… an infinite pause/resume loop
+  /// (only visible once the backend has a queued sub-protocol switch to
+  /// hold, which is why it shows up mid-stack, not on protocol[0]).
+  DateTime? _lastRemoteLifecycleAt;
+  DateTime? get lastRemoteLifecycleAt => _lastRemoteLifecycleAt;
+
+  /// Apply a remote lifecycle change to ONE device — UI-only reconciliation, no
+  /// device commands re-issued.
+  ///
+  /// The per-device counterpart to [applyRemoteLifecycle]. A Protocol Plus run
+  /// registers every device as its OWN backend session, so a SESSION_PAUSED /
+  /// SESSION_RESUMED names a single unit; applying it session-wide dragged every
+  /// other device in a multi-device run along with it.
+  void applyRemoteDeviceLifecycle(String deviceId, SessionStatus remoteStatus) {
+    if (!_isActive) return;
+    // Stamp BEFORE the state change below fires the screen listener, so the
+    // Plus server-sync sees "this came from a remote event" and skips it.
+    _lastRemoteLifecycleAt = DateTime.now();
+    // Ignore the echo of our OWN connectivity-freeze mirror
+    // (_mirrorDeviceLifecycleToBackend, called from the tick loop when a Plus
+    // device freezes/unfreezes waiting to reconnect): the backend broadcasts
+    // SESSION_PAUSED/SESSION_RESUMED back to every client watching this
+    // session, including us. Applying that here would flip deviceStatuses to
+    // `paused`, which makes _computeBreakState stop treating the device as
+    // on-break, which immediately fires the OPPOSITE mirror call — a loop
+    // that flips pause/resume every tick and, worse, hits the backend's
+    // resume path (which resets ITS OWN elapsed clock) over and over. While
+    // this device is in [_plusDisconnectedIds] we already know its true
+    // state locally; a remote echo for it carries no new information.
+    if (_plusDisconnectedIds.contains(deviceId)) return;
+    final current = state.deviceStatuses[deviceId];
+    if (current == null || current == remoteStatus) return;
+
+    switch (remoteStatus) {
+      case SessionStatus.paused:
+        if (current != SessionStatus.running) return;
+        _deviceStopwatches[deviceId]?.stop();
+        break;
+      case SessionStatus.running:
+        if (current != SessionStatus.paused) return;
+        _deviceStopwatches[deviceId]?.start();
+        break;
+      default:
+        return;
+    }
+
+    final statuses = Map<String, SessionStatus>.from(state.deviceStatuses)
+      ..[deviceId] = remoteStatus;
+    final overall = _deriveOverallStatus(statuses);
+    state = state.copyWith(deviceStatuses: statuses, status: overall);
+
+    // Resuming one device may bring the whole run out of `paused`, which is
+    // when the shared ticker was cancelled — restart it or the countdown stays
+    // frozen for every device.
+    if (overall == SessionStatus.running && _timer == null) {
+      _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
+      _anchorWallClock();
+      _syncDisplayedTimerFromStopwatch();
+    }
+  }
+
   /// Apply a remote session lifecycle change (another client / the backend
   /// paused, resumed, or stopped this session) WITHOUT re-issuing device
   /// commands — UI-only reconciliation, mirroring the web's socket handlers.
   void applyRemoteLifecycle(SessionStatus remoteStatus) {
     if (!_isActive) return;
     if (state.status == remoteStatus) return;
+    _lastRemoteLifecycleAt = DateTime.now();
     switch (remoteStatus) {
       case SessionStatus.paused:
         if (state.status != SessionStatus.running) return;
@@ -1261,6 +1883,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               applyStartDelay: _shouldApplyStartDelay(
                 transportId: id,
                 advancedSettings: deviceSettings,
+                selectedDelayedDeviceId: delayedDeviceId,
+                candidateDeviceIds: selectedDeviceIds,
               ),
             );
           }).reduce((a, b) => a > b ? a : b);
@@ -1289,6 +1913,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
               applyStartDelay: _shouldApplyStartDelay(
                 transportId: id,
                 advancedSettings: settingsByDevice[id] ?? advancedSettings,
+                selectedDelayedDeviceId: delayedDeviceId,
+                candidateDeviceIds: selectedDeviceIds,
               ),
             ),
           ),
@@ -1335,6 +1961,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _monotonicAnchor = Duration.zero;
     _deviceClockOffset.clear();
     _plusSegmentEndByDevice.clear();
+    _plusBreakStartedAt.clear();
+    _plusBreakHoldByDevice.clear();
+    _plusDisconnectedIds.clear();
     _startInProgress = false;
     _deviceStopwatches
       ..clear()
@@ -1686,6 +2315,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         );
       });
 
+      // Protocol Plus: the alarm-mute window is armed later, ~10s before
+      // protocol[0]'s predicted end (see _maybeArmPlusMute in _onTick) — NOT
+      // here, so protocol[0]'s own start chime is heard first.
+      _plusMuteArmed.clear();
+
       _beginRuntimeTimer();
     } finally {
       _startInProgress = false;
@@ -1699,8 +2333,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Future<bool> applyProtocolPlusSwitch(
     String mac,
     Protocol newProtocol,
-    int protocolIndex,
-  ) async {
+    int protocolIndex, {
+    // Set only by a RESTART (same protocol/index, re-applied): the backend's
+    // restart response is authoritative about what's actually running on
+    // this device right now, so use it as-is instead of re-deriving from
+    // the protocol + previously-stored settings the way a normal
+    // START_PROTOCOL switch does. Null for every normal switch — behavior
+    // there is unchanged.
+    AdvancedSettings? advancedOverride,
+  }) async {
     if (!_isActive) return false;
     // Never resurrect a device that has already stopped. A START_PROTOCOL can
     // arrive late — after the user stopped the unit and we ended its run — and
@@ -1727,6 +2368,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         mac,
         newProtocol,
         protocolIndex,
+        advancedOverride: advancedOverride,
       );
     } finally {
       _plusSwitchInFlight.remove(mac);
@@ -1736,9 +2378,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Future<bool> _applyProtocolPlusSwitchInner(
     String mac,
     Protocol newProtocol,
-    int protocolIndex,
-  ) async {
-
+    int protocolIndex, {
+    AdvancedSettings? advancedOverride,
+  }) async {
     // Reflect the new protocol per-device + advance the sequence indicator so
     // the live session screen highlights the now-active protocol chip.
     final updatedByDevice = Map<String, Protocol>.from(state.protocolByDevice)
@@ -1747,18 +2389,84 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     // switch payload uses that protocol's own cycle1/cycle5 (edge cycle) and
     // vibration range — not the previous protocol's. Otherwise every protocol
     // in the sequence inherits protocol[0]'s edge-cycle flags.
+    //
+    // BUT the four user-facing Protocol Plus toggles/sliders (vibration
+    // on/off, lights, flip, hot/cold %) must carry through EVERY switch —
+    // they're a session-wide choice made once at launch, not something that
+    // should silently reset to default the moment the sequence advances.
+    // Recompute them fresh against THIS protocol's own base values each
+    // time (never reuse a stale computed result from a previous switch),
+    // then layer the previous device's chosen fields on top of the newly
+    // protocol-derived ones.
+    //
+    // A restart (advancedOverride != null) skips all of that: the backend
+    // just told us exactly what's applied to this device right now, so we
+    // trust it verbatim rather than re-deriving.
+    final previousSettings =
+        state.advancedSettingsByDevice[mac] ?? const AdvancedSettings();
+    final protocolDerivedSettings = advancedOverride ??
+        _advancedSettingsForProtocol(newProtocol).copyWith(
+          vibrationMode: previousSettings.vibrationMode,
+          lights: previousSettings.lights,
+          flipSettings: previousSettings.flipSettings,
+          hotPercent: previousSettings.hotPercent,
+          coldPercent: previousSettings.coldPercent,
+        );
     final updatedSettingsByDevice =
         Map<String, AdvancedSettings>.from(state.advancedSettingsByDevice)
-          ..[mac] = _advancedSettingsForProtocol(newProtocol);
+          ..[mac] = protocolDerivedSettings;
     final updatedIndexByDevice =
         Map<String, int>.from(state.protocolPlusIndexByDevice)
           ..[mac] = protocolIndex;
 
+    // A restart (advancedOverride != null, same protocol/index re-applied)
+    // must REWIND the whole-run clock back to the exact point THIS stage
+    // began — not reset to a fresh per-stage clock. The Plus countdown is one
+    // continuous whole-sequence clock (matches the web): restarting stage 1
+    // rewinds to session start; restarting stage 2 rewinds to stage 1's
+    // duration + the break already spent, i.e. exactly where the clock stood
+    // the moment stage 2's own switch first landed. Capture that point (the
+    // OLD segment end minus this stage's own duration) before it gets
+    // overwritten below, and rewind _deviceClockOffset by the gap between
+    // "now" and that point — the same mechanism already used for drift
+    // correction elsewhere, just negative here. This keeps this device's own
+    // LOCAL bookkeeping (break detection, cycle position) consistent.
+    //
+    // The on-screen countdown itself comes from the backend feed, which is
+    // WRONG right after a restart: the backend sets `deviceStartTime =
+    // restartedAt`, zeroing the WHOLE-SEQUENCE clock instead of rewinding it
+    // to just this stage — so the feed briefly reports close to the full
+    // session duration remaining. That is compensated by
+    // [SessionEngine.setPlusRestartTimingOverride], called by the caller with
+    // the restart event's own correct per-stage numbers, once this function
+    // returns.
+    final stageDurationSeconds = _plusProtocolDurationSeconds(newProtocol);
+    if (advancedOverride != null) {
+      final oldSegEnd = _plusSegmentEndByDevice[mac];
+      final stageStartElapsed = (oldSegEnd != null)
+          ? oldSegEnd - Duration(seconds: stageDurationSeconds)
+          : Duration.zero;
+      final rewindBy = _deviceElapsed(mac) - stageStartElapsed;
+      if (rewindBy > Duration.zero) {
+        _deviceClockOffset[mac] =
+            (_deviceClockOffset[mac] ?? Duration.zero) - rewindBy;
+      }
+    } else {
+      // A REAL switch — any restart override left over from the stage that
+      // just ended is moot now; the backend feed is trusted for the new
+      // stage like normal.
+      _clearPlusRestartTimingOverride(mac);
+    }
+
     // The switch landing IS the end of the break: this protocol now runs, so
     // re-base the segment end to "now + this protocol's runtime" and clear any
     // break flag for the device. The next break begins when this elapses.
-    _plusSegmentEndByDevice[mac] = _deviceElapsed(mac) +
-        Duration(seconds: _plusProtocolDurationSeconds(newProtocol));
+    // (After the rewind above, `_deviceElapsed(mac)` on a restart is back to
+    // stageStartElapsed, so this still lands the segment end at exactly
+    // stageStartElapsed + stageDuration — the same point a normal switch
+    // would compute.)
+    _plusSegmentEndByDevice[mac] =
+        _deviceElapsed(mac) + Duration(seconds: stageDurationSeconds);
     // This switch's PLAY restarts the device, so whatever stop streak was
     // running belonged to the break before it.
     _plusStopSince.remove(mac);
@@ -1844,6 +2552,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       await Future<void>.delayed(const Duration(milliseconds: 800));
 
       // 2) Push the new protocol config.
+      appLogger.i('ProtocolPlus: BLE config payload for $mac:\n$payloadStr');
       final okPayload = await _sendLargePayload(mac, payloadStr);
       if (!okPayload) {
         appLogger.e(
@@ -1940,6 +2649,75 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     } else {
       _plusSwitchPendingExternal.remove(mac);
     }
+  }
+
+  /// Wall-clock moment [setPlusRestartTimingOverride] last set an override for
+  /// each device — used to tick the override down between ticks without
+  /// re-deriving it from the (now-stale) event data every second.
+  final Map<String, DateTime> _plusRestartOverrideSetAt = {};
+
+  /// Record the WHOLE-SEQUENCE remaining seconds computed from a restart
+  /// event's authoritative per-stage numbers (see
+  /// [SessionEngineState.protocolPlusRestartRemainingByDevice] for why this
+  /// is needed — the backend feed's own remainingSeconds is briefly wrong
+  /// right after a restart). Ticked down every second in [_onTick] and
+  /// cleared once the backend feed's own value has caught up or a real
+  /// switch/stop makes it moot.
+  void setPlusRestartTimingOverride(String mac, int remainingSeconds) {
+    if (!_isActive || remainingSeconds <= 0) return;
+    _plusRestartOverrideSetAt[mac] = DateTime.now();
+    try {
+      state = state.copyWith(
+        protocolPlusRestartRemainingByDevice: {
+          ...state.protocolPlusRestartRemainingByDevice,
+          mac: remainingSeconds,
+        },
+      );
+    } catch (_) {}
+  }
+
+  /// Drop [mac]'s restart timing override (a real switch or stop replaces it,
+  /// or the caller decided the backend feed has caught up).
+  void _clearPlusRestartTimingOverride(String mac) {
+    _plusRestartOverrideSetAt.remove(mac);
+    if (!state.protocolPlusRestartRemainingByDevice.containsKey(mac)) return;
+    try {
+      state = state.copyWith(
+        protocolPlusRestartRemainingByDevice: {
+          ...state.protocolPlusRestartRemainingByDevice,
+        }..remove(mac),
+      );
+    } catch (_) {}
+  }
+
+  /// Tick down every device's restart-timing override by the real wall-clock
+  /// gap since it was last set/ticked, and drop it once it reaches zero (the
+  /// stage the restart put us at has itself now elapsed — the backend feed is
+  /// trusted again from here, same as any other device that reached 0).
+  void _tickPlusRestartTimingOverrides() {
+    final current = state.protocolPlusRestartRemainingByDevice;
+    if (current.isEmpty) return;
+    final updated = <String, int>{};
+    final now = DateTime.now();
+    for (final entry in current.entries) {
+      final mac = entry.key;
+      final since = _plusRestartOverrideSetAt[mac];
+      final elapsed = since == null ? 0 : now.difference(since).inSeconds;
+      final left = entry.value - elapsed;
+      if (left <= 0) {
+        _plusRestartOverrideSetAt.remove(mac);
+        continue;
+      }
+      updated[mac] = left;
+    }
+    if (updated.length == current.length &&
+        updated.entries.every((e) => current[e.key] == e.value)) {
+      return; // nothing actually changed this tick — keep state stable
+    }
+    _plusRestartOverrideSetAt.updateAll((mac, _) => now);
+    try {
+      state = state.copyWith(protocolPlusRestartRemainingByDevice: updated);
+    } catch (_) {}
   }
 
   /// Device-elapsed (monotonic + slept-time catch-up) for [id].
@@ -2056,6 +2834,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _stopwatch.start();
     }
     _initPlusSegmentEnds();
+    _cancelStalePlusMuteIfDisabled();
     _anchorWallClock();
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 250), _onTick);
@@ -2198,16 +2977,27 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// Public wrapper over the firmware payload builder, for at-home client
   /// sessions that run a single device directly over BLE (no backend session,
   /// default advanced settings). Mirrors the web `templateToRS35Payload`.
+  ///
+  /// [leaseKey] is the logged-in client's `leaseId` (from their JWT). It is sent
+  /// as `leaseKey` so the firmware can check the run against the lease it was
+  /// loaded with via `setLeaseID`. Omitted from the payload when absent, so a
+  /// practitioner-side run is byte-identical to before.
   Map<String, dynamic> buildFirmwarePayload(
     Protocol p, {
     required String mac,
+    String? leaseKey,
   }) {
-    return _protocolToRs35Payload(
+    final payload = _protocolToRs35Payload(
       p,
       mac: mac,
       advancedSettings: const AdvancedSettings(),
       applyStartDelay: false,
     );
+    final key = leaseKey?.trim();
+    if (key != null && key.isNotEmpty) {
+      payload['leaseKey'] = key;
+    }
+    return payload;
   }
 
   Map<String, dynamic> _protocolToRs232Json(
@@ -2219,6 +3009,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     final applyDelay = _shouldApplyStartDelay(
       transportId: transportId,
       advancedSettings: advancedSettings,
+      selectedDelayedDeviceId: state.delayedDeviceId,
+      candidateDeviceIds: state.deviceIds,
     );
     return _protocolToRs35Payload(
       p,
@@ -2236,36 +3028,6 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }) {
     final cycles = p.cycles;
 
-    // Intensity mapping from web sender (0–11).
-    const hotMap = <int, int>{
-      0: 0,
-      1: 50,
-      2: 55,
-      3: 60,
-      4: 65,
-      5: 70,
-      6: 75,
-      7: 80,
-      8: 85,
-      9: 90,
-      10: 95,
-      11: 100,
-    };
-    const coldMap = <int, int>{
-      0: 0,
-      1: 150,
-      2: 160,
-      3: 170,
-      4: 180,
-      5: 190,
-      6: 200,
-      7: 210,
-      8: 220,
-      9: 230,
-      10: 240,
-      11: 250,
-    };
-
     List<String> leftFuncs = cycles.map((c) => c.leftFunction).toList();
     List<String> rightFuncs = cycles.map((c) => c.rightFunction).toList();
 
@@ -2280,14 +3042,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       rightFuncs = rightFuncs.map(flip).toList();
     }
 
-    final hotPwm = hotMap[advancedSettings.hotLevel.clamp(0, 11)] ?? 70;
-    final coldPwm = coldMap[advancedSettings.coldLevel.clamp(0, 11)] ?? 190;
-    final pwmHot = advancedSettings.hotPack
-        ? cycles.map((_) => hotPwm).toList()
-        : cycles.map((c) => c.hotPwm.toInt()).toList();
-    final pwmCold = advancedSettings.coldPack
-        ? cycles.map((_) => coldPwm).toList()
-        : cycles.map((c) => c.coldPwm.toInt()).toList();
+    final pwmHot = cycles
+        .map((c) => applyIndividualPercent(
+              c.hotPwm,
+              advancedSettings.hotPercent,
+              kMaxHotPwm,
+            ))
+        .toList();
+    final pwmCold = cycles
+        .map((c) => applyIndividualPercent(
+              c.coldPwm,
+              advancedSettings.coldPercent,
+              kMaxColdPwm,
+            ))
+        .toList();
 
     final vibMode = advancedSettings.vibrationMode;
     final vibMin = switch (vibMode) {
@@ -2341,59 +3109,73 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     };
   }
 
-  int _computeFirmwareTotalDurationSeconds(
+  static int _computeFirmwareTotalDurationSeconds(
     Protocol p,
-    AdvancedSettings advancedSettings,
-  ) {
+    AdvancedSettings advancedSettings, {
+    bool applyStartDelay = false,
+  }) {
     final cycles = p.cycles;
     // No cycles to compute from (e.g. a Protocol Plus parent entry) → fall back
     // to the server-provided total. Real sub-protocols always carry cycles here.
     if (cycles.isEmpty) return p.totalDurationSeconds;
 
-    // Mirror web calculateFirmwareTotalDuration: sum EVERY cycle's active time,
-    // adding the trailing inter-cycle pause for all cycles except the last. The
-    // old code summed only the first three cycles and, for <3-cycle protocols,
-    // returned the server's nominal totalDuration — which could leak a whole-
-    // sequence (Protocol Plus) total into a single sub-protocol's firmware
-    // command, making the firmware's self-stop clock run far past the app's
-    // "completed" so the device kept running.
-    int baseTimeline = 0;
-    for (var i = 0; i < cycles.length; i++) {
-      final c = cycles[i];
-      baseTimeline +=
-          c.repetitions * ((c.durationSeconds + c.pauseSeconds).toInt());
-      if (i < cycles.length - 1) {
-        baseTimeline += c.cyclePause.toInt();
-      }
-    }
-
-    if (p.sessions > 1) {
-      baseTimeline = (baseTimeline * p.sessions) +
-          (p.sessionPause.toInt() * (p.sessions - 1));
-    }
-
+    // Match the firmware payload semantics used by the web implementation.
     final edgeCycleDuration = _effectiveEdgeCycleDurationSeconds(
       p,
       advancedSettings,
     );
 
+    int total = applyStartDelay ? advancedSettings.startDelay : 0;
+
     if (advancedSettings.cycle1Initiation) {
-      baseTimeline += edgeCycleDuration + 30;
-    }
-    if (advancedSettings.cycle5Completion) {
-      baseTimeline += edgeCycleDuration + 30;
+      total += edgeCycleDuration + 30;
     }
 
-    return baseTimeline;
+    for (var session = 0; session < p.sessions; session++) {
+      for (var i = 0; i < 3; i++) {
+        final c = cycles[i];
+        final reps = max(1, c.repetitions);
+        total += reps * c.durationSeconds.toInt();
+        total += (reps - 1) * c.pauseSeconds.toInt();
+
+        if (i < 2) {
+          total += c.cyclePause.toInt();
+        }
+      }
+
+      if (session < p.sessions - 1) {
+        total += p.sessionPause.toInt();
+      }
+    }
+
+    if (advancedSettings.cycle5Completion) {
+      // Matches the backend's buildPadTimeline (session.service.ts): the
+      // trailing edge cycle's lead-in pause is the protocol's own
+      // sessionPause, not a fixed 30s — the backend is the source of truth
+      // the device's real runtime is measured against, so this must track
+      // it exactly rather than an older fixed constant.
+      total += p.sessionPause.toInt() + edgeCycleDuration;
+    }
+
+    return total;
   }
 
+  /// [selectedDelayedDeviceId] and [candidateDeviceIds] are explicit
+  /// parameters — NOT read from `state` here — because [loadSession] calls
+  /// this to compute the very state (durations/timers) it hasn't assigned
+  /// yet. Reading `state.delayedDeviceId` at that point would see whatever
+  /// the PREVIOUS session left behind, not the new one just passed in — the
+  /// bug that made a start delay silently apply to no device at all when a
+  /// prior run's stale delayedDeviceId didn't match any device in the new
+  /// run.
   bool _shouldApplyStartDelay({
     required String transportId,
     required AdvancedSettings advancedSettings,
+    required String? selectedDelayedDeviceId,
+    required List<String> candidateDeviceIds,
   }) {
-    final selectedDelayedDeviceId = state.delayedDeviceId;
     final hasSelectedDelayedDevice = selectedDelayedDeviceId != null &&
-        state.deviceIds.contains(selectedDelayedDeviceId);
+        candidateDeviceIds.contains(selectedDelayedDeviceId);
     return advancedSettings.startDelay > 0 &&
         (!hasSelectedDelayedDevice || selectedDelayedDeviceId == transportId);
   }
@@ -2403,14 +3185,14 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     AdvancedSettings advancedSettings, {
     required bool applyStartDelay,
   }) {
-    final baseDuration = _computeFirmwareTotalDurationSeconds(
+    return _computeFirmwareTotalDurationSeconds(
       p,
       advancedSettings,
+      applyStartDelay: applyStartDelay,
     );
-    return baseDuration + (applyStartDelay ? advancedSettings.startDelay : 0);
   }
 
-  int _effectiveEdgeCycleDurationSeconds(
+  static int _effectiveEdgeCycleDurationSeconds(
     Protocol p,
     AdvancedSettings advancedSettings,
   ) {
@@ -2418,6 +3200,52 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
             advancedSettings.cycle5Completion)
         ? 9
         : p.edgecycleduration.toInt();
+  }
+
+  /// PUBLIC entry point for the exact same duration formula used for the BLE
+  /// firmware payload — for callers outside this class (e.g.
+  /// [protocol_plus_controller.dart]'s backend session registration) that
+  /// need to report the delay/cycle1/cycle5-ADJUSTED duration rather than the
+  /// protocol's plain [Protocol.totalDurationSeconds]. Without this, the
+  /// backend session record (which the live session screen treats as the
+  /// timer's single source of truth) is told a shorter duration than what the
+  /// device actually received, so the on-screen countdown runs out before the
+  /// physical unit finishes — looking like the delay/edge cycles "aren't
+  /// happening" even though the device got them correctly.
+  static int computeEffectiveTotalDurationSeconds(
+    Protocol p,
+    AdvancedSettings advancedSettings, {
+    required bool applyStartDelay,
+  }) {
+    return _computeFirmwareTotalDurationSeconds(
+      p,
+      advancedSettings,
+      applyStartDelay: applyStartDelay,
+    );
+  }
+
+  /// Hardware ceiling for a single cycle's hot/cold PWM value — matches the
+  /// firmware's 0–11 intensity map (`hotMap`/`coldMap` above): level 11 tops
+  /// out at 100 (hot) / 250 (cold).
+  static const int kMaxHotPwm = 100;
+  static const int kMaxColdPwm = 250;
+
+  /// Scales ONE cycle's hot/cold PWM value by [percent] independently — no
+  /// pooling, no coupling with any other cycle. [basePwm] is always the
+  /// protocol's ORIGINAL value for this cycle (never a previously-adjusted
+  /// result), so repeated adjustments recompute fresh each time rather than
+  /// compounding.
+  ///
+  /// `new = basePwm × (1 + percent / 100)`, clamped to `[0, maxPwm]`. A
+  /// cycle whose base value is 0 always stays 0 at any percent — that falls
+  /// out of the multiplication itself, no special-casing needed.
+  static int applyIndividualPercent(
+    double basePwm,
+    double percent,
+    int maxPwm,
+  ) {
+    final scaled = basePwm * (1 + percent / 100);
+    return scaled.clamp(0, maxPwm.toDouble()).round();
   }
 
   Future<void> pause() async {
@@ -2627,10 +3455,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           'break; ending run + cancelling server schedule',
         );
       } else {
-        // Normal run: a disconnected device keeps running autonomously, so
-        // flipping it to stopped would desync app vs device. Leave it alone.
-        appLogger.w('Session: stopDevice skipped — $deviceId not connected');
-        return;
+        // Normal run, device out of reach. We can't halt the firmware — it goes
+        // on running its loaded protocol until it finishes — but we MUST still
+        // end it locally and tell the backend.
+        //
+        // Returning early here (the old behaviour) made Stop a silent no-op on
+        // exactly the device the user was trying to free: the server went on
+        // believing it was RUNNING, so its tokens stayed locked, it kept a slot
+        // against the plan's concurrent-device limit, and the device list showed
+        // it as "Running — controlled elsewhere" with no way to reclaim it.
+        appLogger.w(
+          'Session: stopDevice — $deviceId not connected; ending it locally and '
+          'releasing it on the backend (the unit finishes its current protocol '
+          'on its own)',
+        );
       }
     }
     _deviceStopwatches[deviceId]?.stop();
@@ -2676,14 +3514,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
   /// A BLE disconnect is a CONNECTIVITY event, NOT a session-ending one. The
   /// Hydra firmware keeps running the loaded protocol autonomously after the
-  /// link drops, so we keep the session and its timers running and never
-  /// force-stop anything — parity with the web app, whose `gattserverdisconnected`
-  /// handler only updates a connection badge and leaves the run alive.
+  /// link drops, so for a NORMAL protocol we keep the session and its timers
+  /// running and never force-stop anything — parity with the web app, whose
+  /// `gattserverdisconnected` handler only updates a connection badge and
+  /// leaves the run alive.
   ///
-  /// Applies to ALL BLE sessions (normal protocol and Protocol Plus). The BLE
-  /// connector auto-reconnects in the background; if a Protocol Plus switch is
-  /// due while disconnected, the write path reconnects on demand. The run ends
-  /// only on its natural timer completion (or an explicit user stop) — not here.
+  /// Protocol Plus is different: its firmware timing is re-armed by each
+  /// `START_PROTOCOL` config write at a sub-protocol boundary, so the app's
+  /// displayed progress can silently drift ahead of what the disconnected
+  /// device actually did. For a Plus device we therefore FREEZE its countdown
+  /// and progress ring by stopping its [_deviceStopwatches] entry (every
+  /// display/break computation reads off that Stopwatch's `.elapsed`, so
+  /// stopping it freezes both with no extra bookkeeping) and flag it via
+  /// [SessionEngineState.protocolPlusAwaitingReconnectByDevice], which drives
+  /// the global "bring the device back in range" reminder. The run still never
+  /// auto-stops here — only [handleBleReconnect] (or an explicit user stop)
+  /// moves it forward again.
   Future<void> handleBleDisconnect(String deviceId) async {
     if (!_isActive) return;
     if (state.transport != SessionTransport.ble) return;
@@ -2695,6 +3541,24 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       return;
     }
 
+    // A Plus device's firmware keeps running its CURRENT sub-protocol
+    // autonomously after the link drops (same as a normal device) — so mid-
+    // protocol we must NOT freeze anything, just like the normal-device path
+    // below. Only record that the device is disconnected; the tick loop
+    // (_syncDisplayedTimerFromStopwatch → _computeBreakState) is what decides
+    // whether that matters, by checking this set once the device's elapsed
+    // time actually reaches the break boundary. See handleBleReconnect and
+    // the awaitingByDevice computation in _syncDisplayedTimerFromStopwatch.
+    if (state.protocolPlusSequenceByDevice.containsKey(deviceId)) {
+      _plusDisconnectedIds.add(deviceId);
+      appLogger.w(
+        'Session: Protocol Plus device=$deviceId disconnected — its current '
+        'protocol keeps running untouched; will freeze only if it reaches a '
+        'break still disconnected (session=$sessionId)',
+      );
+      return;
+    }
+
     // Intentionally do NOT mark the device/session stopped, freeze its timer, or
     // stop the background runtime — the session continues through the disconnect.
     // The live connection state for the UI is tracked separately via
@@ -2703,6 +3567,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       'Session: BLE device=$deviceId disconnected — keeping the session '
       'running (no forced stop; auto-reconnect in progress; session=$sessionId)',
     );
+  }
+
+  /// Clears the disconnected flag [handleBleDisconnect] set for a Plus
+  /// device. If the device was frozen waiting on a break, the next tick's
+  /// [_computeBreakState] pass sees it as connected again and the countdown
+  /// resumes on its own — no direct Stopwatch manipulation needed here.
+  void handleBleReconnect(String deviceId) {
+    if (!_isActive) return;
+    _plusDisconnectedIds.remove(deviceId);
   }
 
   SessionRecord? getSessionRecord({
@@ -2797,7 +3670,12 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _repetition = 0;
     _isProtocolPlus = false;
     _protocolPlusDeviceIds.clear();
+    _plusMuteArmed.clear();
+    _lastRemoteLifecycleAt = null;
     _plusSegmentEndByDevice.clear();
+    _plusBreakStartedAt.clear();
+    _plusBreakHoldByDevice.clear();
+    _plusDisconnectedIds.clear();
     _lastRsByDevice.clear();
     _clearPlusStopTracking();
     onPlusDeviceStoppedByUser = null;
@@ -2823,11 +3701,122 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _evaluatePlusDeviceStops();
     if (!_isActive || state.status != SessionStatus.running) return;
     _reconcileClockFromWall();
+    _tickPlusRestartTimingOverrides();
+    _maybeArmPlusMute();
     _syncDisplayedTimerFromStopwatch();
+  }
+
+  /// `{"muteSeconds": N}` is a firmware-side WALL-CLOCK window — once armed
+  /// (during a previous run with the Devices List mute switch ON), the
+  /// firmware honours it for the full N seconds regardless of what any later
+  /// app session does. Turning the switch OFF only stops [_maybeArmPlusMute]
+  /// from arming a NEW window going forward; it does nothing about one
+  /// already running on the device from an earlier ON run — which is why a
+  /// fresh run right after switching OFF could still play silently for a
+  /// while. Send an explicit cancel (`muteSeconds: 0`, which the firmware
+  /// contract defines as "cancel") at the start of every Plus/BLE run while
+  /// the switch is OFF, so OFF actually means "not muted," not just "won't
+  /// mute again." Cheap and safe to send even when nothing was ever armed.
+  Future<void> _cancelStalePlusMuteIfDisabled() async {
+    if (!_isProtocolPlus) return;
+    if (state.transport != SessionTransport.ble) return;
+    bool enabled;
+    try {
+      enabled = _ref.read(protocolPlusMuteEnabledProvider);
+    } catch (e) {
+      appLogger.w('Session: protocolPlusMuteEnabledProvider read failed: $e');
+      return;
+    }
+    if (enabled) return; // arming path (_maybeArmPlusMute) owns this case
+    for (final mac in _plusDeviceIds()) {
+      unawaited(_setDeviceMuteSeconds(mac, 0));
+    }
+  }
+
+  /// Protocol Plus beep policy (firmware `{"muteSeconds": N}`): once per run,
+  /// ~10s before protocol[0]'s predicted end, arm ONE mute window that runs
+  /// until 15s before the whole stack's own end. That swallows every chime
+  /// EXCEPT the very first (protocol[0]'s start, already played) and the very
+  /// last (the final sub-protocol's own completion, in that trailing 15s
+  /// gap) — so a 3-stage run beeps twice instead of six times. Explicitly
+  /// includes the final sub-protocol's START chime in the muted span (it
+  /// lands ~finalProtocolDuration before the end, well inside the window).
+  ///
+  /// Only fires while a Plus run is actively RUNNING (mute is wall-clock and
+  /// does NOT pause with the session — arming during a pause would let it
+  /// drain uselessly). If the run is paused before the arm point and later
+  /// resumed, the ~10s-before-end check simply fires whenever it's next
+  /// reached. A long pause AFTER arming can still let the window expire
+  /// mid-stack (accepted — no re-arm on resume by request).
+  void _maybeArmPlusMute() {
+    if (!_isProtocolPlus) return;
+    if (state.transport != SessionTransport.ble) return;
+    // Devices List screen global switch — opt-in, default OFF. Off means the
+    // firmware is left to beep on every sub-protocol switch as usual; nothing
+    // in this function runs (no {"muteSeconds"} write is ever sent).
+    //
+    // Defensive: this read must NEVER be allowed to throw out of _onTick — an
+    // uncaught exception there stops the periodic Timer's remaining work for
+    // that tick and can cascade into the run looking like it "just ends."
+    // Treat any read failure as "off" and keep the run alive; the tick loop
+    // (and this device's session) matters far more than one muted beep.
+    try {
+      if (!_ref.read(protocolPlusMuteEnabledProvider)) return;
+    } catch (e) {
+      appLogger.w('Session: protocolPlusMuteEnabledProvider read failed: $e');
+      return;
+    }
+    const armLead = Duration(seconds: 10);
+    // Trailing gap left un-muted so the FINAL sub-protocol's own completion
+    // beep sounds. Only its END — its start (which lands ~its whole
+    // duration earlier) is still inside the muted window.
+    const endMargin = 15;
+    for (final mac in _plusDeviceIds()) {
+      if (_plusMuteArmed.contains(mac)) continue;
+      if (state.deviceStatuses[mac] != SessionStatus.running) continue;
+      // Nothing to mute if there's no stack after protocol[0].
+      if (_isPlusDeviceOnFinalProtocol(mac)) continue;
+      final seg = _plusSegmentEndByDevice[mac];
+      if (seg == null) continue;
+      // `seg` is protocol[0]'s runtime only — it does NOT include a Start
+      // Delay, but `_deviceElapsed` starts counting the moment the app's
+      // timer does, while the device is still in its sDelay wait. Add the
+      // delay back so the arm fires ~armLead before protocol[0]'s REAL end,
+      // not that much earlier. Zero delay → unchanged.
+      final startDelay = Duration(
+        seconds: state.advancedSettingsByDevice[mac]?.startDelay ?? 0,
+      );
+      final protocol0End = seg + startDelay;
+      // Wait until we're within the arm-lead of protocol[0]'s predicted end.
+      if (_deviceElapsed(mac) < protocol0End - armLead) continue;
+
+      final total = state.deviceTimers[mac]?.totalDuration;
+      if (total == null) {
+        _plusMuteArmed.add(mac); // give up quietly; don't retry every tick
+        continue;
+      }
+      final remaining = total.inSeconds - _deviceElapsed(mac).inSeconds;
+      // Cover everything from now until 15s before the WHOLE STACK ends —
+      // i.e. through the final sub-protocol's start and almost all of its
+      // run, leaving only its completion chime audible.
+      final n = remaining - endMargin;
+      _plusMuteArmed.add(mac);
+      if (n <= 0) continue; // stack too short to bother
+      appLogger.i(
+        'ProtocolPlus: arming muteSeconds=$n for $mac '
+        '(remaining=${remaining}s, endMargin=${endMargin}s)',
+      );
+      unawaited(_setDeviceMuteSeconds(mac, n));
+    }
   }
 
   void _syncDisplayedTimerFromStopwatch() {
     if (!_isActive || state.status != SessionStatus.running) return;
+
+    // Refresh break bookkeeping BEFORE completion is judged below — a device
+    // sitting on a break must not be counted as having spent that time
+    // treating, or it "finishes" while the hardware still has protocols to run.
+    _updatePlusBreakHold();
 
     final elapsed = _effectiveElapsed;
     final protocol = state.protocol;
@@ -2860,8 +3849,15 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       final timerState = updatedTimers[id];
       if (sw == null || timerState == null) continue;
       if (status == SessionStatus.running) {
-        final devElapsed =
+        final rawElapsed =
             sw.elapsed + (_deviceClockOffset[id] ?? Duration.zero);
+        // Time spent idle between stacked protocols is not treatment time.
+        // Discounting it here is what stops the countdown draining across a
+        // break (especially one stretched by a BLE outage) and reaching 00:00
+        // while the unit still has protocols left to run.
+        final breakHold =
+            _isPlusDevice(id) ? _plusBreakHold(id) : Duration.zero;
+        final devElapsed = rawElapsed - breakHold;
         if (devElapsed >= timerState.totalDuration) {
           // Protocol Plus: a MID-sequence protocol finishing is NOT the end of
           // the session — the firmware stops itself and the next protocol
@@ -2881,8 +3877,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
           // Clean end: on the last sub-protocol and its own segment has elapsed.
           // The segment-end guard avoids an early cut-off when the last switch
           // landed late (segEnd pushed past the total) — let it finish first.
+          // NOTE: compared against RAW elapsed. `_plusSegmentEndByDevice` is
+          // recorded in raw device-elapsed terms (it is re-based from
+          // `_deviceElapsed` on every switch), so measuring it with the
+          // break-discounted clock would make the final protocol look unfinished
+          // for exactly as long as the run has spent on breaks.
           final finalProtocolDone =
-              onFinal && (segEnd == null || devElapsed >= segEnd);
+              onFinal && (segEnd == null || rawElapsed >= segEnd);
           // Watchdog: well past the whole-sequence total but NOT on the final
           // sub-protocol → a mid-sequence START_PROTOCOL switch was lost and
           // none is realistically still coming. End the run instead of hanging
@@ -2942,6 +3943,48 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     final (onBreakByDevice, breakRemainingByDevice) =
         _computeBreakState(updatedStatuses);
+    final breakHoldByDevice = _breakHoldSecondsByDevice();
+    // A Plus device is "awaiting reconnect" only once it's ACTUALLY sitting on
+    // a break, disconnected, AND the break itself has fully counted down (i.e.
+    // we're at the moment the next protocol would be sent but can't be) — not
+    // for a mid-protocol drop, which the firmware rides out on its own, and
+    // not for the start of a break, which must be allowed to run to its own
+    // end before anything freezes. This is what freezes the card's display
+    // and drives the global reconnect nag; see handleBleDisconnect.
+    final awaitingReconnectByDevice = <String, bool>{
+      for (final id in onBreakByDevice.keys)
+        if (onBreakByDevice[id] == true &&
+            _plusDisconnectedIds.contains(id) &&
+            (breakRemainingByDevice[id] ?? 0) <= 0)
+          id: true,
+    };
+    _publishAwaitingReconnectIds(awaitingReconnectByDevice.keys.toSet());
+
+    // Mirror the freeze to the BACKEND too — its own countdown is server-side
+    // wall-clock and has no idea this device is disconnected, so without this
+    // it keeps draining (visible to every other client watching the live
+    // feed) even though this app's own display/ring are now frozen. Reuses
+    // the same pause/resume mirror as the manual Pause button
+    // (_mirrorDeviceLifecycleToBackend) but WITHOUT touching local
+    // deviceStatuses — the device must stay "running" locally so the
+    // Plus break/switch reconciliation keeps working exactly as before.
+    final previouslyAwaiting = state.protocolPlusAwaitingReconnectByDevice;
+    for (final id in _plusDeviceIds()) {
+      final wasAwaiting = previouslyAwaiting[id] == true;
+      final isAwaiting = awaitingReconnectByDevice[id] == true;
+      if (isAwaiting && !wasAwaiting) {
+        unawaited(_mirrorDeviceLifecycleToBackend(id, 'pause'));
+        // The break has fully run out and the device is still out of range —
+        // this is the exact moment the next protocol in the stack would be
+        // sent but can't be. Chime the phone once per disconnect episode so
+        // the user knows to bring the device back in range.
+        unawaited(_ref
+            .read(localNotificationServiceProvider)
+            .notifyDeviceOutOfRangeBeforeNextProtocol());
+      } else if (!isAwaiting && wasAwaiting) {
+        unawaited(_mirrorDeviceLifecycleToBackend(id, 'resume'));
+      }
+    }
 
     try {
       state = state.copyWith(
@@ -2957,6 +4000,8 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         status: overallStatus,
         protocolPlusOnBreakByDevice: onBreakByDevice,
         protocolPlusBreakRemainingByDevice: breakRemainingByDevice,
+        protocolPlusBreakHoldByDevice: breakHoldByDevice,
+        protocolPlusAwaitingReconnectByDevice: awaitingReconnectByDevice,
       );
     } catch (e) {
       appLogger.d('Session: tick state update ignored (notifier disposed)');
@@ -2964,6 +4009,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
     if (overallStatus == SessionStatus.completed ||
         overallStatus == SessionStatus.stopped) {
+      appLogger.i(
+        '🩺 OUTCOME-DEBUG: _onTick reached terminal overallStatus='
+        '$overallStatus, calling enqueuePendingOutcome()',
+      );
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();
@@ -3143,6 +4192,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _telemetrySub = null;
     _clearPlusStopTracking();
     _stopwatch.stop();
+    _publishAwaitingReconnectIds(const {});
     super.dispose();
   }
 }

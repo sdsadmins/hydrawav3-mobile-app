@@ -13,6 +13,7 @@ import '../../../pad_placement/presentation/widgets/anatomy_scene_flag.dart';
 import '../../../pad_placement/presentation/widgets/anatomy_scene_view.dart';
 import '../../../pad_placement/presentation/widgets/pad_anatomy_view.dart';
 import '../../domain/performance_models.dart';
+import '../widgets/pad_geometry_diagram.dart';
 import 'go_to_session.dart';
 
 // The set palette now lives in `pad_placement/domain/set_colors.dart` — the same
@@ -58,6 +59,9 @@ class PadMapScreen extends ConsumerStatefulWidget {
 }
 
 class _PadMapScreenState extends ConsumerState<PadMapScreen> {
+  static const _sunLegend = Color(0xFFE11D48);
+  static const _moonLegend = Color(0xFF2563EB);
+
   // Both controllers exist because `kUseAnatomyScenePerformance` decides which
   // stage is built; the zoom cluster dispatches to whichever is live.
   final _anatomy = AnatomySceneController();
@@ -75,8 +79,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// null = the spec's "All areas" chip.
   int? _focusSet;
 
-  /// Sets the engine authored but held back this session.
+  /// Sets the engine authored but whose role doesn't apply to this case at all.
   int get _withheldCount => widget.payload.withheldSets.length;
+
+  /// Sets the engine authored WITH pads, sequenced into a later session.
+  int get _deferredCount => widget.payload.deferredSets.length;
   late String _view;
   bool _showLabels = true;
   bool _showMuscles = false;
@@ -86,9 +93,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   // chain reads identically in both clients.
 
   /// Muscle Mode: the target muscle IS the indicator — painted red (Sun) / blue (Moon) with NO disc
-  /// and NO badge on the body — and the un-targeted skin goes solid. Web parity:
-  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults ON, matching the web view.
-  bool _muscleMode = true;
+  /// and NO badge on the body — and the un-targeted skin goes solid.
+  /// `padStyle="muscle"` + `transparentBody={!muscleMode}`. Defaults OFF (mobile-only choice, not
+  /// web parity): the body opens transparent/x-ray so the pads read against the skeleton first.
+  bool _muscleMode = false;
 
   /// Off = the focused set only. On = the whole chain at once.
   bool _showAllSets = false;
@@ -102,7 +110,32 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
 
   /// What the mirror toggle reads. Bilateral overrides it, so say BOTH rather than naming a side that
   /// is not what is on screen.
-  String get _mirrorLabel => _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
+  String get _mirrorLabel =>
+      _bilateral ? 'BOTH' : (_mirrored ? 'LEFT' : 'RIGHT');
+
+  /// A "sling" chain (`directional_mode: "sling"`) authors its pads on
+  /// DELIBERATELY opposite sides of each other within the same set — e.g. a
+  /// diagonal oblique sling with the Sun pad on the right hip and the Moon
+  /// pad on the left lat, encoding one cross-body pattern, not "this whole
+  /// chain happens to be on the right." Mirror/Bilateral both act on every
+  /// pad's side uniformly (`_effectiveSide` flips each pad the same
+  /// direction; bilateral duplicates each pad to both sides) — either one
+  /// applied to a sling chain scrambles the authored cross-body relationship
+  /// rather than producing a meaningful mirrored/bilateral version of it. Every
+  /// other observed `directional_mode` ("anatomical", etc.) keeps every pad on
+  /// one consistent side, where a uniform flip/duplicate is exactly correct.
+  bool get _isSlingChain =>
+      widget.payload.chain?.directionalMode.toLowerCase() == 'sling';
+
+  /// [_mirrored] / [_bilateral] as actually applied to `markers()` — forced
+  /// off for a sling chain regardless of the raw toggle state, so a stray
+  /// `setState` (or the toggle being flipped before this getter's chip
+  /// disables it on the next frame) can never scramble a sling chain's
+  /// authored cross-body pattern. The UI chips in [_viewOptions] disable the
+  /// controls too, but resolving the effective value here as well means the
+  /// stage can never disagree with what the (disabled) chips say.
+  bool get _effectiveMirrored => _mirrored && !_isSlingChain;
+  bool get _effectiveBilateral => _bilateral && !_isSlingChain;
 
   /// One source of truth for which pads are visible, so the stage, legend and notes cannot disagree.
   int? get _visibleSetIndex => _showAllSets ? null : _focusSet;
@@ -116,6 +149,18 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     _data = PadPlacementViewData.from(widget.payload);
     _recovery = RecoveryPlacement.fromPayload(widget.payload);
     _view = _data.viewFor(null);
+    // Seed the toggle from the engine's own request ONLY when EVERY pad in
+    // the chain asked for both sides — that is the only case where "BOTH" is
+    // an honest description of the whole screen. A single bilateral pad in an
+    // otherwise one-sided chain used to force this true for the WHOLE chain,
+    // which (a) mislabelled the toggle "BOTH" when most pads were one-sided,
+    // and (b) disabled the Mirror control for the rest of the chain (see
+    // `_viewOptions`'s `enabled: !_bilateral`), silently defeating a
+    // practitioner's Left/Right pick. `markers()`'s own `padBoth` check
+    // already draws an individually-bilateral pad on both sides regardless of
+    // this toggle, so nothing is lost by not force-setting it here.
+    _bilateral = _data.pads.isNotEmpty &&
+        _data.pads.every((p) => p.pad.renderBothSides);
   }
 
   /// The set colour for chips, legend swatches and set-note badges.
@@ -155,7 +200,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// The one case that still needs the empty list is the flat "Muscles" overlay:
   /// the viewer only falls through to `applyFlatHighlight()` when there is no
   /// per-marker selection to express, so a non-empty list would suppress it.
-  List<Map<String, dynamic>> _activeMarkers(List<Map<String, dynamic>> markers) {
+  List<Map<String, dynamic>> _activeMarkers(
+      List<Map<String, dynamic>> markers) {
     if (_visibleSetIndex == null && _highlightMuscles.isNotEmpty) {
       return const [];
     }
@@ -163,7 +209,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   bool _isUnmapped(ResolvedPad pad) =>
-      pad.isUnmapped || _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
+      pad.isUnmapped ||
+      _unmappedByViewer.contains('${pad.setIndex}:${pad.role}');
 
   List<String> get _highlightMuscles {
     // Muscle Mode already colours every target muscle by role, from the markers themselves. Handing
@@ -172,7 +219,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     if (_muscleMode) return const [];
     if (!_showMuscles) return const [];
     return _data
-        .padsFor(_visibleSetIndex)
+        .padsFor(_visibleSetIndex, includeDeferred: _showAllSets)
         .expand((p) => p.pad.targetMuscles)
         .toSet()
         .toList();
@@ -205,6 +252,26 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                     HwSpace.s4, 0, HwSpace.s4, HwSpace.s5),
                 children: [
                   _head(p, sets.length),
+                  // A single line directly under the title block explaining
+                  // where a NAMED travelling side actually landed — shown for
+                  // every card where the user asked the complaint travels
+                  // somewhere, whether the engine served that side or not.
+                  // Absent for every other card (most of them). `travel.reason`
+                  // (record ids, authoring terms) is NEVER rendered — only
+                  // `travel.plain`, the one sentence the API already wrote for
+                  // this.
+                  if (_recovery case final r?)
+                    if (r.travelPlain.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        r.travelPlain,
+                        style: TextStyle(
+                          fontSize: HwType.cap,
+                          height: 1.4,
+                          color: p.ink2,
+                        ),
+                      ),
+                    ],
                   const SizedBox(height: HwSpace.s3),
                   // A composed point or a rerouted pathway changes what the
                   // whole placement MEANS, so they sit above it, not below.
@@ -220,9 +287,22 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   _legend(p, sets),
                   const SizedBox(height: HwSpace.s3),
                   for (final set in _shownSets(sets)) _setNote(p, set),
+                  if (widget.payload.deferredSets.isNotEmpty) ...[
+                    HwEyebrow(
+                        'Sequence into later sessions · '
+                        '${widget.payload.deferredSets.length} set${widget.payload.deferredSets.length == 1 ? '' : 's'}'),
+                    const SizedBox(height: HwSpace.s2),
+                    for (final set in widget.payload.deferredSets)
+                      _deferredNote(p, set),
+                  ],
                   for (final set in widget.payload.withheldSets)
                     _withheldNote(p, set),
                   _sessionGuidance(p),
+                  // What this chain is FOR, straight from the protocol record —
+                  // web parity with the "Common injuries" and "Performance
+                  // improvements" blocks. Both were already on the payload and
+                  // simply never rendered here.
+                  _chainOutcomes(p),
                   _padGuide(p),
                   // Driver → thermal → intent → reassessment → disclaimers,
                   // in the web panel's order.
@@ -267,7 +347,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// step with the model. Notes describing a set that is not drawn is the mismatch this avoids.
   List<PadSet> _shownSets(List<PadSet> sets) {
     final index = _visibleSetIndex;
-    if (index == null) return sets;
+    if (index == null) {
+      return _showAllSets
+          ? [...sets, ...widget.payload.deferredSets]
+          : sets;
+    }
     return index >= 0 && index < sets.length ? [sets[index]] : sets;
   }
 
@@ -292,8 +376,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           '$count placement set${count == 1 ? '' : 's'}'
           // Web parity with "N set(s) of max M": say when the point authors more
           // than this session applies, so the count never reads as the whole
-          // story.
-          '${_withheldCount == 0 ? '' : ' · $_withheldCount more authored'}'
+          // story — and say WHY separately for "later session" (role applies,
+          // just not yet) vs "not applicable" (role doesn't apply to this case).
+          '${_deferredCount == 0 ? '' : ' · $_deferredCount later session'}'
+          '${_withheldCount == 0 ? '' : ' · $_withheldCount not applicable'}'
           '${widget.payload.contextLine.isEmpty ? '' : ' · ${widget.payload.contextLine}'}',
           style: TextStyle(fontSize: HwType.cap, color: p.ink3),
         ),
@@ -337,18 +423,63 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             selected: _focusSet == null,
             onTap: () => _focus(null),
           ),
-          for (var i = 0; i < sets.length; i++) ...[
+          for (final set in sets) ...[
             const SizedBox(width: HwSpace.s2),
-            _setChip(p, i, sets[i]),
+            _setChip(p, widget.payload.markerIndexOf(set), set),
           ],
-          // Sets the engine authored but held back. They sit here, after the
-          // ones that apply, so "2 sets authored, 1 applied" is visible at the
-          // control where sets are picked rather than only in the guidance copy.
+          // Sets authored WITH pads but sequenced into a later session — the
+          // role applies, it just isn't applied yet. Sits before the
+          // not-applicable chips, matching the order they're explained below.
+          for (final set in widget.payload.deferredSets) ...[
+            const SizedBox(width: HwSpace.s2),
+            _deferredChip(p, set),
+          ],
+          // Sets the engine authored but whose role doesn't apply to this case
+          // at all. They sit here, after the ones that apply, so "3 sets
+          // authored, 2 applied, 1 not applicable" is visible at the control
+          // where sets are picked rather than only in the guidance copy.
           for (final set in widget.payload.withheldSets) ...[
             const SizedBox(width: HwSpace.s2),
             _withheldChip(p, set),
           ],
         ],
+      ),
+    );
+  }
+
+  /// A deferred set has real pads, just not drawn this session. Tapping it
+  /// focuses the 3D view on it too — same as an applied set's chip
+  /// (`_focus`) — so the practitioner can actually SEE what's next in the
+  /// chain, not just read its cue text.
+  Widget _deferredChip(RefPalette p, PadSet set) {
+    return HwPress(
+      scale: 0.92,
+      onTap: () {
+        _focus(widget.payload.markerIndexOf(set));
+        _explainDeferred(set);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: p.chipBg,
+          borderRadius: BorderRadius.circular(HwRadius.md),
+          border: Border.all(color: p.line, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.schedule_rounded, size: 13, color: p.ink3),
+            const SizedBox(width: HwSpace.s2),
+            Text(
+              'Set ${widget.payload.displayIndexOf(set)} · later session',
+              style: TextStyle(
+                fontSize: HwType.sm,
+                fontWeight: FontWeight.w600,
+                color: p.ink3,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -369,10 +500,10 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline_rounded, size: 13, color: p.ink3),
+            Icon(Icons.block_rounded, size: 13, color: p.ink3),
             const SizedBox(width: HwSpace.s2),
             Text(
-              'Set ${set.setIndex} · not this session',
+              'Set ${widget.payload.displayIndexOf(set)} · not applicable',
               style: TextStyle(
                 fontSize: HwType.sm,
                 fontWeight: FontWeight.w600,
@@ -397,14 +528,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       builder: (_) => SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-              HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
+          padding:
+              const EdgeInsets.fromLTRB(HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Set ${set.setIndex}'
+                'Set ${widget.payload.displayIndexOf(set)}'
                 '${set.role.trim().isEmpty ? '' : ' · ${set.role}'}',
                 style: TextStyle(
                   fontSize: HwType.lg,
@@ -414,7 +545,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                'Authored on this point, not applied this session',
+                'Authored on this point, doesn’t apply to this case',
                 style: TextStyle(fontSize: HwType.cap, color: p.ink3),
               ),
               const SizedBox(height: HwSpace.s3),
@@ -428,6 +559,64 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   color: p.ink2,
                 ),
               ),
+              const SizedBox(height: HwSpace.s4),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A deferred set's own Sun/Moon, read straight off [PadSet] rather than
+  /// through [_data.padOf] — `_data.sets` is `appliedSets` only, and this
+  /// text should read the same whether or not the 3D resolver could place it
+  /// (`_data.deferredPads` backs the 3D focus triggered alongside this sheet,
+  /// but the cue text itself doesn't depend on that resolution succeeding).
+  /// [Pad.cue] is used as-is: it's already "everything the practitioner needs
+  /// if 3D can't place it".
+  void _explainDeferred(PadSet set) {
+    final p = RefPalette.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(HwRadius.xl)),
+      ),
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding:
+              const EdgeInsets.fromLTRB(HwSpace.s4, 0, HwSpace.s4, HwSpace.s4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.payload.titleOf(set),
+                style: TextStyle(
+                  fontSize: HwType.lg,
+                  fontWeight: FontWeight.w800,
+                  color: p.ink,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Authored with pads, sequenced for a later session'
+                '${set.role.trim().isEmpty ? '' : ' · ${set.role}'}',
+                style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+              ),
+              const SizedBox(height: HwSpace.s3),
+              if (set.sun != null)
+                Text('Sun: ${set.sun!.cue}',
+                    style: TextStyle(
+                        fontSize: HwType.sm, height: 1.5, color: p.ink2)),
+              if (set.sun != null && set.moon != null)
+                const SizedBox(height: HwSpace.s1),
+              if (set.moon != null)
+                Text('Moon: ${set.moon!.cue}',
+                    style: TextStyle(
+                        fontSize: HwType.sm, height: 1.5, color: p.ink2)),
               const SizedBox(height: HwSpace.s4),
             ],
           ),
@@ -484,7 +673,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               TextSpan(
                 children: [
                   TextSpan(
-                    text: 'Set ${set.setIndex}',
+                    text: 'Set ${widget.payload.displayIndexOf(set)}',
                     style: TextStyle(
                       fontSize: HwType.sm,
                       fontWeight: FontWeight.w700,
@@ -531,6 +720,11 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           // claims every drag that starts on it, so the model is turned by
           // dragging it. A button that flips to a fixed view — and a pill
           // naming that view — both stop being true the moment you rotate.
+          Positioned(
+            top: HwSpace.s3,
+            left: HwSpace.s3,
+            child: _sunMoonLegend(p),
+          ),
           Positioned(
             top: HwSpace.s3,
             right: HwSpace.s3,
@@ -581,24 +775,120 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     );
   }
 
+  Widget _sunMoonLegend(RefPalette p) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(HwRadius.md),
+        border: Border.all(color: p.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _legendToken(_sunLegend, '☀', 'Sun'),
+          const SizedBox(width: 12),
+          _legendToken(_moonLegend, '☾', 'Moon'),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendToken(Color color, String symbol, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            symbol,
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
   /// The 3D stage.
   ///
   /// The option mapping follows the web performance flow exactly:
-  ///   • `padStyle: 'muscle'` when Muscle Mode is on — the target muscle IS the
-  ///     indicator, so no pad and no badge are drawn.
+  ///   • `padStyle: 'muscle'` ALWAYS — the target muscle IS the indicator, so
+  ///     no pad and no badge are ever drawn on this stage. The Muscle Mode
+  ///     toggle no longer switches styles; it only switches `transparentBody`
+  ///     below, so switching it off still shows the same coloured muscle, just
+  ///     through a see-through body instead of a solid one.
   ///   • `transparentBody: !muscleMode` — this is the web's actual pairing
   ///     (`transparentBody={!muscleMode}`). Muscle Mode reads as "solid body";
   ///     with it off you get the X-ray, which the older viewer could not do at
   ///     all because it shared one material across every mesh.
-  ///   • `colorBySet` + `showSetLinks` are always on here: this is the surface
-  ///     where a chain of sets has to read as a chain.
-  Widget _stage() {
-    final p = RefPalette.of(context);
+  ///   • `showSetLinks` is always on here: this is the surface where a chain of
+  ///     sets has to read as a chain, and the labelled arc is what carries the
+  ///     set identity.
+  ///   • `colorBySet` is deliberately OFF. With it on, focusing a set repainted
+  ///     the pads and muscles in that set's palette colour, so the same pad
+  ///     changed colour depending on which set was selected and Sun/Moon stopped
+  ///     being readable at a glance. Role colour (Sun red / Moon blue) is the
+  ///     one thing on this model that must never move.
+  /// The single source of truth for what the stage shows — markers, style and
+  /// every view flag. Both [_stage] (inline) and [_openFullscreen] (edge to
+  /// edge) build their `AnatomySceneView` from THIS, rather than each keeping
+  /// its own copy of the same field list — two copies is exactly how they drifted
+  /// before (the fullscreen one kept `padStyle: _muscleMode ? 'muscle' : 'badge'`
+  /// after the inline stage moved to always-`'muscle'`, so expanding with Muscle
+  /// Mode off silently swapped every pad from muscle-colour to badge style).
+  /// Only `key`, `controller`, `backgroundCss` and the callbacks vary per call
+  /// site — those stay as constructor arguments on top of this.
+  ({
+    List<Map<String, dynamic>> markers,
+    List<String> setRoles,
+    String padStyle,
+    bool transparentBody,
+    int? focusSetIndex,
+    bool dimUnselected,
+    List<Map<String, dynamic>> activeMarkers,
+    List<String> highlightMuscles,
+  }) _stageOptions() {
     final markers = _data.markers(
       focusSetIndex: _visibleSetIndex,
-      mirrored: _mirrored,
-      bilateral: _bilateral,
+      mirrored: _effectiveMirrored,
+      bilateral: _effectiveBilateral,
+      includeDeferred: _showAllSets,
     );
+    return (
+      markers: markers,
+      setRoles: _data.sets.map((s) => s.role).toList(),
+      // Always the muscle-coloured style — the Muscle Mode toggle only flips
+      // transparentBody below now, not which style draws.
+      padStyle: 'muscle',
+      transparentBody: !_muscleMode,
+      focusSetIndex: _visibleSetIndex,
+      dimUnselected: !_showAllSets,
+      activeMarkers: _activeMarkers(markers),
+      highlightMuscles: _highlightMuscles,
+    );
+  }
+
+  Widget _stage() {
+    final p = RefPalette.of(context);
 
     void handleUnmapped(Set<String> keys) {
       if (!mounted || keys.isEmpty) return;
@@ -606,6 +896,12 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     }
 
     if (!kUseAnatomyScenePerformance) {
+      final markers = _data.markers(
+        focusSetIndex: _visibleSetIndex,
+        mirrored: _effectiveMirrored,
+        bilateral: _effectiveBilateral,
+        includeDeferred: _showAllSets,
+      );
       return PadAnatomyView(
         markers: markers,
         view: _view,
@@ -618,21 +914,22 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       );
     }
 
+    final o = _stageOptions();
     return AnatomySceneView(
-      markers: markers,
+      markers: o.markers,
       source: MarkerSource.performance,
       // Drives the "Set N · Role" text on each arc.
-      setRoles: _data.sets.map((s) => s.role).toList(),
+      setRoles: o.setRoles,
       view: _view,
       showLabels: _showLabels,
-      padStyle: _muscleMode ? 'muscle' : 'badge',
-      transparentBody: !_muscleMode,
-      colorBySet: true,
+      padStyle: o.padStyle,
+      transparentBody: o.transparentBody,
+      colorBySet: false,
       showSetLinks: true,
-      focusSetIndex: _visibleSetIndex,
-      dimUnselected: !_showAllSets,
-      activeMarkers: _activeMarkers(markers),
-      highlightMuscles: _highlightMuscles,
+      focusSetIndex: o.focusSetIndex,
+      dimUnselected: o.dimUnselected,
+      activeMarkers: o.activeMarkers,
+      highlightMuscles: o.highlightMuscles,
       // Matching the card behind it rather than staying transparent lets the
       // WebView composite opaquely, which is a measurable win while orbiting.
       backgroundCss: _cssOf(p.card2),
@@ -671,36 +968,27 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   void _openFullscreen() {
-    final sets = _data.sets;
+    // Built from the exact same [_stageOptions] the inline stage just rendered
+    // from — not a second, hand-copied field list — so expanding can never show
+    // anything the collapsed stage didn't already show.
+    final o = _stageOptions();
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AnatomySceneFullscreenScreen(
-          markers: _data.markers(
-            focusSetIndex: _visibleSetIndex,
-            mirrored: _mirrored,
-            bilateral: _bilateral,
-          ),
+          markers: o.markers,
           source: MarkerSource.performance,
-          setRoles: sets.map((s) => s.role).toList(),
+          setRoles: o.setRoles,
           title: 'Pad placements',
           initialView: _view,
           initialShowLabels: _showLabels,
-          padStyle: _muscleMode ? 'muscle' : 'badge',
-          transparentBody: !_muscleMode,
-          colorBySet: true,
+          padStyle: o.padStyle,
+          transparentBody: o.transparentBody,
+          colorBySet: false,
           showSetLinks: true,
-          focusSetIndex: _visibleSetIndex,
-          dimUnselected: !_showAllSets,
-          // Same rule as the inline stage — full screen has to colour the sets
-          // the same way, or expanding one changes what it shows.
-          activeMarkers: _activeMarkers(
-            _data.markers(
-              focusSetIndex: _visibleSetIndex,
-              mirrored: _mirrored,
-              bilateral: _bilateral,
-            ),
-          ),
-          highlightMuscles: _highlightMuscles,
+          focusSetIndex: o.focusSetIndex,
+          dimUnselected: o.dimUnselected,
+          activeMarkers: o.activeMarkers,
+          highlightMuscles: o.highlightMuscles,
         ),
       ),
     );
@@ -726,7 +1014,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// Mirror is DISABLED while Bilateral is on rather than silently doing nothing: bilateral already
   /// draws both sides, so mirroring it would be a no-op, and a control that looks live but changes
   /// nothing is worse than one that plainly says it does not apply.
+  ///
+  /// Both are ALSO disabled for a [_isSlingChain] chain: its pads are
+  /// authored on deliberately opposite sides of each other within one set, so
+  /// a uniform flip (Mirror) or duplicate-to-both-sides (Bilateral) would
+  /// scramble that authored cross-body relationship rather than producing a
+  /// meaningful mirrored/bilateral version of it.
   Widget _viewOptions(RefPalette p) {
+    final slingLocked = _isSlingChain;
     return Padding(
       padding: const EdgeInsets.only(top: HwSpace.s3),
       child: Wrap(
@@ -747,15 +1042,18 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
           ),
           _optionChip(
             p,
-            label: 'Mirror — showing $_mirrorLabel',
-            active: _mirrored && !_bilateral,
-            enabled: !_bilateral,
+            label: slingLocked
+                ? 'Mirror: fixed pattern (sling)'
+                : 'Mirror: showing $_mirrorLabel',
+            active: _mirrored && !_bilateral && !slingLocked,
+            enabled: !_bilateral && !slingLocked,
             onTap: () => setState(() => _mirrored = !_mirrored),
           ),
           _optionChip(
             p,
-            label: 'Bilateral — both sides at once',
-            active: _bilateral,
+            label: 'Bilateral, both sides at once',
+            active: _bilateral && !slingLocked,
+            enabled: !slingLocked,
             onTap: () => setState(() => _bilateral = !_bilateral),
           ),
         ],
@@ -781,7 +1079,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            active ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+            active
+                ? Icons.check_box_rounded
+                : Icons.check_box_outline_blank_rounded,
             size: 13,
             color: active ? Colors.white : p.ink3,
           ),
@@ -851,7 +1151,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       spacing: HwSpace.s4,
       runSpacing: HwSpace.s1,
       children: [
-        for (var i = 0; i < sets.length; i++)
+        for (final set in sets)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -859,13 +1159,13 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 width: 10,
                 height: 10,
                 decoration: BoxDecoration(
-                  color: _setColor(p, i),
+                  color: _setColor(p, widget.payload.markerIndexOf(set)),
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),
               const SizedBox(width: HwSpace.s1 + 2),
               Text(
-                'Set ${sets[i].setIndex}',
+                'Set ${widget.payload.displayIndexOf(set)}',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w700,
@@ -879,7 +1179,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   }
 
   Widget _setNote(RefPalette p, PadSet set) {
-    final i = _data.sets.indexOf(set);
+    final i = widget.payload.markerIndexOf(set);
     final sun = _data.padOf(i, 'sun');
     final moon = _data.padOf(i, 'moon');
     final offView = [sun, moon]
@@ -887,8 +1187,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         .where((r) => r.view != _view && r.view != 'side')
         .toList();
 
-    return Padding
-      (padding: const EdgeInsets.only(bottom: HwSpace.s3),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
       child: HwCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -896,25 +1196,6 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 26,
-                  height: 26,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _setColor(p, i).withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(HwRadius.xs),
-                    border: Border.all(color: _setColor(p, i), width: 1.5),
-                  ),
-                  child: Text(
-                    '${set.setIndex}',
-                    style: TextStyle(
-                      fontSize: HwType.cap,
-                      fontWeight: FontWeight.w800,
-                      color: _setColor(p, i),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: HwSpace.s3),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -924,7 +1205,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              set.title,
+                              widget.payload.titleOf(set),
                               style: TextStyle(
                                 fontSize: HwType.base,
                                 fontWeight: FontWeight.w700,
@@ -958,7 +1239,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             if (offView.isNotEmpty) ...[
               const SizedBox(height: HwSpace.s2),
               Text(
-                'On ${offView.first.view} — rotate to see',
+                'On ${offView.first.view}, rotate to see',
                 style: TextStyle(
                   fontSize: HwType.cap,
                   fontWeight: FontWeight.w500,
@@ -970,14 +1251,34 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             if (sun != null) _padLine(p, sun),
             if (moon != null) _padLine(p, moon),
             if (PadGeometryInfo.of(set.padGeometry) case final geometry?) ...[
-              Text(
-                geometry.intent,
-                style: TextStyle(
-                  fontSize: HwType.eyebrow,
-                  height: 1.5,
-                  fontStyle: FontStyle.italic,
-                  color: p.ink3,
-                ),
+              // The diagram sits WITH its sentence, not up beside the chip: the
+              // picture says how the pair relates and the sentence says why, and
+              // splitting them left the chip's one-word "reads" carrying the
+              // whole idea on its own.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PadGeometryDiagram(
+                    geometry: set.padGeometry,
+                    padColor: p.copperInk,
+                    bodyColor: p.ink3,
+                    linkColor: p.copper,
+                    captionColor: p.ink3,
+                    width: 72,
+                  ),
+                  const SizedBox(width: HwSpace.s2),
+                  Expanded(
+                    child: Text(
+                      geometry.intent,
+                      style: TextStyle(
+                        fontSize: HwType.eyebrow,
+                        height: 1.5,
+                        fontStyle: FontStyle.italic,
+                        color: p.ink3,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: HwSpace.s1),
             ],
@@ -987,6 +1288,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                 data: Theme.of(context)
                     .copyWith(dividerColor: Colors.transparent),
                 child: ExpansionTile(
+                  initiallyExpanded: true,
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: const EdgeInsets.only(bottom: HwSpace.s2),
                   title: Text(
@@ -1151,7 +1453,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                         borderRadius: BorderRadius.circular(HwRadius.xs),
                       ),
                       child: Text(
-                        'Placement not mapped — follow the written cue',
+                        'Placement not mapped: follow the written cue',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -1184,6 +1486,105 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   /// The card for a set the engine authored but did not apply. Deliberately
   /// muted and pad-less — it is here so the practitioner can see the set exists
   /// and what would bring it in, not so it can be run.
+  /// A deferred set's card in the "Sequence into later sessions" list — full
+  /// Sun/Moon placement, same as an applied set's [_setNote], but tagged
+  /// LATER SESSION instead of drawn on the model. Reads pads straight off
+  /// [PadSet] (see [_explainDeferred]) rather than through [_data].
+  Widget _deferredNote(RefPalette p, PadSet set) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: p.chipBg,
+                    borderRadius: BorderRadius.circular(HwRadius.xs),
+                    border: Border.all(color: p.line, width: 1.5),
+                  ),
+                  child: Text(
+                    '${set.setIndex}',
+                    style: TextStyle(
+                      fontSize: HwType.cap,
+                      fontWeight: FontWeight.w800,
+                      color: p.ink3,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: HwSpace.s3),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.payload.titleOf(set),
+                              style: TextStyle(
+                                fontSize: HwType.base,
+                                fontWeight: FontWeight.w700,
+                                color: p.ink,
+                              ),
+                            ),
+                          ),
+                          if (set.padGeometry.trim().isNotEmpty) ...[
+                            const SizedBox(width: HwSpace.s2),
+                            _geometryChip(p, set.padGeometry),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          if (set.role.trim().isNotEmpty)
+                            Expanded(
+                              child: Text(
+                                '${_roleLabel(set.role)}'
+                                '${set.sessionPriority > 0 ? ' · priority ${set.sessionPriority}' : ''}',
+                                style: TextStyle(
+                                  fontSize: HwType.eyebrow,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.3,
+                                  color: p.copperInk,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: HwSpace.s2),
+                          const HwPill('later session'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: HwSpace.s2),
+            if (set.sun != null)
+              Text('☀ ${set.sun!.cue}',
+                  style: TextStyle(
+                      fontSize: HwType.cap, height: 1.5, color: p.ink2)),
+            if (set.moon != null) ...[
+              const SizedBox(height: 3),
+              Text('☾ ${set.moon!.cue}',
+                  style: TextStyle(
+                      fontSize: HwType.cap, height: 1.5, color: p.ink2)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _withheldNote(RefPalette p, PadSet set) {
     return Padding(
       padding: const EdgeInsets.only(bottom: HwSpace.s3),
@@ -1224,7 +1625,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        set.title,
+                        widget.payload.titleOf(set),
                         style: TextStyle(
                           fontSize: HwType.base,
                           fontWeight: FontWeight.w700,
@@ -1320,6 +1721,64 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     );
   }
 
+  /// "Common injuries" and "Performance improvements" — what the selected chain
+  /// is for, as the web renders them under the stage.
+  ///
+  /// Both lists are authored on the protocol record and already parsed into
+  /// [ChainInfo]; they were simply never shown on this screen. Each block is
+  /// dropped entirely when its list is empty rather than rendered as an empty
+  /// heading, which is what the web does and what keeps a sparse chain from
+  /// looking broken.
+  ///
+  /// Performance-only: a recovery placement carries no chain, so this is a
+  /// no-op there.
+  Widget _chainOutcomes(RefPalette p) {
+    final chain = widget.payload.chain;
+    if (chain == null) return const SizedBox.shrink();
+
+    final injuries = chain.injuryRiskReduction
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final benefits = chain.performanceRomBenefits
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (injuries.isEmpty && benefits.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: HwCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (injuries.isNotEmpty) ...[
+              const HwEyebrow('Common injuries'),
+              const SizedBox(height: HwSpace.s2),
+              Text(
+                'Injuries commonly seen in this role:',
+                style: TextStyle(
+                  fontSize: HwType.cap,
+                  height: 1.5,
+                  color: p.ink2,
+                ),
+              ),
+              const SizedBox(height: HwSpace.s2),
+              _bullets(p, injuries),
+            ],
+            if (injuries.isNotEmpty && benefits.isNotEmpty)
+              const SizedBox(height: HwSpace.s2),
+            if (benefits.isNotEmpty) ...[
+              const HwEyebrow('Performance improvements'),
+              const SizedBox(height: HwSpace.s2),
+              _bullets(p, benefits),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── recovery detail ────────────────────────────────────────────────────────
   //
   // Everything `/recovery-engine-v3/resolve` returns beyond the pads, in the
@@ -1404,7 +1863,9 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('•', style: TextStyle(fontSize: HwType.cap, color: p.copperInk)),
+                  Text('•',
+                      style:
+                          TextStyle(fontSize: HwType.cap, color: p.copperInk)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1494,16 +1955,16 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
 
   /// The notices that must sit ABOVE the placement, because they change what the
   /// placement means: a composed point, and a rerouted pathway.
+  ///
+  /// A composed placement is common enough (any tier-2/3 fallback) that a
+  /// full-width card for it reads as an alarm every time — it isn't one. It
+  /// gets a small inline symbol with the same explanation in a tooltip
+  /// instead of [_notice]'s big card. The rerouted-pathway notice is rarer
+  /// and genuinely changes what the practitioner is looking at, so it keeps
+  /// the full card.
   List<Widget> _recoveryNotices(RefPalette p, RecoveryPlacement r) {
     return [
-      if (r.isComposed)
-        _notice(
-          p,
-          'Composed placement — not authored',
-          'This placement was composed by the engine rather than taken from an '
-              'authored point. Read it as a starting position, not a prescription.',
-          tint: p.mid,
-        ),
+      if (r.isComposed) _composedBadge(p),
       if (r.pathwayRerouted)
         _notice(
           p,
@@ -1515,12 +1976,46 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
     ];
   }
 
+  /// Small "composed, not authored" indicator — a symbol + label the
+  /// practitioner can tap/long-press for the full explanation, replacing what
+  /// used to be a full-width [_notice] card for this (common, non-alarming)
+  /// case.
+  Widget _composedBadge(RefPalette p) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: HwSpace.s3),
+      child: Tooltip(
+        message: 'This placement was composed by the engine rather than '
+            'taken from an authored point. Read it as a starting position, '
+            'not a prescription.',
+        triggerMode: TooltipTriggerMode.tap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome_outlined, size: 15, color: p.mid),
+            const SizedBox(width: 5),
+            Text(
+              'Composed placement',
+              style: TextStyle(
+                fontSize: HwType.eyebrow,
+                fontWeight: FontWeight.w700,
+                color: p.mid,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Icon(Icons.info_outline, size: 13, color: p.mid.withValues(alpha: 0.7)),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Everything below the pads.
   List<Widget> _recoveryDetail(RefPalette p, RecoveryPlacement r) {
     return [
       // DRIVER — the core teaching: the driver, not the site.
       _recoveryBlock(p, 'Driver', [
-        if (r.driverDescription.trim().isNotEmpty) _body(p, r.driverDescription),
+        if (r.driverDescription.trim().isNotEmpty)
+          _body(p, r.driverDescription),
         _metaRow(p, 'Case', r.caseType),
         _metaRow(p, 'You reported it travels to', r.referralTargetReported),
         _metaRow(p, 'Lymphatic hub', r.lymphaticRegion),
@@ -1546,7 +2041,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         p,
         'Thermal',
         [
-          if (r.thermalRationale.trim().isNotEmpty) _body(p, r.thermalRationale),
+          if (r.thermalRationale.trim().isNotEmpty)
+            _body(p, r.thermalRationale),
           if (r.thermalDowngrade.trim().isNotEmpty)
             _notice(p, 'Adjusted from Fast switch', r.thermalDowngrade,
                 tint: p.mid),
@@ -1623,7 +2119,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         if (r.reassessmentNoteMessage.trim().isNotEmpty)
           _body(
             p,
-            'Note — ${r.reassessmentNoteLabel}. ${r.reassessmentNoteMessage}'
+            'Note: ${r.reassessmentNoteLabel}. ${r.reassessmentNoteMessage}'
             '${r.reassessmentTestsOffered.isEmpty ? '' : ' This region’s authored tests: ${r.reassessmentTestsOffered.join('; ')}.'}',
           ),
         if (r.expectedWindow.trim().isNotEmpty)
@@ -1631,7 +2127,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
             p,
             'Typical window',
             '${r.expectedWindow}'
-            '${r.expectedWindowNote.trim().isEmpty ? '' : ' — ${r.expectedWindowNote}'}',
+                '${r.expectedWindowNote.trim().isEmpty ? '' : ' (${r.expectedWindowNote})'}',
           ),
       ]),
 
@@ -1647,12 +2143,14 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
       _collapsible(p, 'Data notes on this point', r.reviewFlags),
 
       if (r.recoveryId.trim().isNotEmpty)
-        _sourceLine(p, [
-          r.recoveryId,
-          if (r.pointVersion.trim().isNotEmpty) 'v${r.pointVersion}',
-          if (r.generation.trim().isNotEmpty) r.generation,
-          if (r.pointSource.trim().isNotEmpty) r.pointSource,
-        ].join(' · ')),
+        _sourceLine(
+            p,
+            [
+              r.recoveryId,
+              if (r.pointVersion.trim().isNotEmpty) 'v${r.pointVersion}',
+              if (r.generation.trim().isNotEmpty) r.generation,
+              if (r.pointSource.trim().isNotEmpty) r.pointSource,
+            ].join(' · ')),
       if (r.practitionerDisclaimer.trim().isNotEmpty)
         _sourceLine(p, r.practitionerDisclaimer),
     ];
@@ -1663,8 +2161,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
   Widget _claim(RefPalette p, String text) => Container(
         width: double.infinity,
         margin: const EdgeInsets.only(top: 4, bottom: HwSpace.s1),
-        padding: const EdgeInsets.fromLTRB(HwSpace.s3, HwSpace.s2, HwSpace.s3,
-            HwSpace.s2),
+        padding: const EdgeInsets.fromLTRB(
+            HwSpace.s3, HwSpace.s2, HwSpace.s3, HwSpace.s2),
         decoration: BoxDecoration(
           color: p.tanSoft,
           borderRadius: BorderRadius.circular(HwRadius.sm),
@@ -1685,7 +2183,8 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         padding: const EdgeInsets.only(bottom: HwSpace.s3),
         child: Text(
           text,
-          style: TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
+          style:
+              TextStyle(fontSize: HwType.eyebrow, height: 1.5, color: p.ink3),
         ),
       );
 
@@ -1754,7 +2253,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
         ),
         child: Text(
           'Some pads in this set aren’t mapped to the 3D model yet, so no marker '
-          'is drawn for them. Use the written placement above — a marker in the '
+          'is drawn for them. Use the written placement above; a marker in the '
           'wrong place would be worse than none.',
           style: TextStyle(fontSize: HwType.cap, color: p.mid, height: 1.5),
         ),

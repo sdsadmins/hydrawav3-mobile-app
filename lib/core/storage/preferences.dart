@@ -19,6 +19,7 @@ class PreferencesService {
   static const _autoConnectEnabledKey = 'auto_connect_enabled';
   static const _recentProtocolIdsKey = 'recent_protocol_ids';
   static const _sessionDevicesVerticalKey = 'session_devices_vertical';
+  static const _textScaleKey = 'text_scale';
 
   final SharedPreferences _prefs;
 
@@ -76,4 +77,10 @@ class PreferencesService {
       _prefs.getBool(_sessionDevicesVerticalKey) ?? true;
   Future<void> setSessionDevicesVertical(bool vertical) =>
       _prefs.setBool(_sessionDevicesVerticalKey, vertical);
+
+  // App-wide text scale multiplier applied on top of the base text sizes.
+  // Defaults to 1.0 (100%).
+  double get textScale => _prefs.getDouble(_textScaleKey) ?? 1.0;
+  Future<void> setTextScale(double scale) =>
+      _prefs.setDouble(_textScaleKey, scale);
 }

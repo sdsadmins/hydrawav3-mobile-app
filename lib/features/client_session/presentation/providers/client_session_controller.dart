@@ -268,9 +268,14 @@ class ClientSessionController extends StateNotifier<ClientSessionState> {
     try {
       final engine =
           _ref.read(sessionEngineFamilyProvider('client-home').notifier);
+      // The lease this client logged in under (the JWT's `leaseId` claim). The
+      // firmware matches it against the lease loaded by `setLeaseID`, so it has
+      // to ride along with every at-home run.
+      final leaseKey = _ref.read(clientAuthProvider).session?.leaseId;
       final payload = engine.buildFirmwarePayload(
         protocol,
         mac: state.connectedMac,
+        leaseKey: leaseKey,
       );
 
       final wrote = await _connector.writeJsonToDevice(

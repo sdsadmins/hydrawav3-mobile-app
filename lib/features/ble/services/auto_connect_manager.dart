@@ -38,8 +38,13 @@ class AutoConnectManager {
   StreamSubscription<Map<String, BleConnectionStatus>>? _connSub;
   Timer? _watchdog;
 
-  /// Cap simultaneous connects to avoid BLE radio thrash on some Android stacks.
-  static const int _maxConcurrent = 3;
+  /// Cap simultaneous connects to avoid BLE radio thrash on some Android
+  /// stacks. Serialized to 1: the phone has exactly one shared BLE radio, and
+  /// each reconnect's connect+MTU+priority+discovery burst can already starve
+  /// an unrelated already-connected device of its own radio time (see
+  /// [BleConnector.requestConnectionPriority]'s guard against this) — running
+  /// several of those bursts in parallel only compounds that risk.
+  static const int _maxConcurrent = 1;
 
   /// Connects we kicked off and are awaiting.
   final Set<String> _inFlight = <String>{};
@@ -87,8 +92,23 @@ class AutoConnectManager {
     _lastStates = Map.of(states);
   }
 
-  void _ensureScanning() {
-    if (!_ref.read(autoConnectEnabledProvider)) return;
+  /// Ask the manager to (re)connect [deviceId] now — the manual counterpart to
+  /// the automatic connected→disconnected trigger in [_onConnStates].
+  ///
+  /// Goes through the same scan-then-connect path rather than connecting to a
+  /// constructed MAC, which is the only form that works on iOS: there
+  /// `remoteId` is an opaque per-install UUID, and you can only connect to a
+  /// peripheral the scan actually discovered.
+  void requestReconnect(String deviceId) {
+    if (_ref.read(bleConnectorProvider).isConnected(deviceId)) return;
+    _wantReconnect.add(deviceId);
+    appLogger.i('AutoConnect: manual reconnect requested for $deviceId');
+    // `force`: an explicit user tap must scan even when auto-connect is off.
+    _ensureScanning(force: true);
+  }
+
+  void _ensureScanning({bool force = false}) {
+    if (!force && !_ref.read(autoConnectEnabledProvider)) return;
     if (_inFlight.isNotEmpty) return; // don't scan during active connects
     final repo = _ref.read(bleRepositoryProvider);
     if (repo.isScanning) return;
@@ -97,7 +117,10 @@ class AutoConnectManager {
   }
 
   void _onScanResults(List<ScanResult> results) {
-    if (!_ref.read(autoConnectEnabledProvider)) return;
+    // With auto-connect off we still honour an EXPLICIT reconnect request
+    // (the live card's SCAN button) — but nothing else.
+    final autoOn = _ref.read(autoConnectEnabledProvider);
+    if (!autoOn && _wantReconnect.isEmpty) return;
 
     const expectedUuid = BleConstants.preferredServiceUuid;
     if (expectedUuid == null || expectedUuid.isEmpty) return;
@@ -112,6 +135,7 @@ class AutoConnectManager {
       if (_inFlight.contains(id)) continue;
       if (connecting.contains(id)) continue;
       if (connector.isConnected(id)) continue;
+      if (!autoOn && !_wantReconnect.contains(id)) continue;
 
       final isHydrawave = result.advertisementData.serviceUuids.any(
         (u) => BleConstants.normalizeUuid(u.str) == targetUuid,
@@ -146,9 +170,16 @@ class AutoConnectManager {
       final current = _ref.read(bleConnectingIdsProvider);
       _ref.read(bleConnectingIdsProvider.notifier).state = {...current}
         ..remove(id);
-      // connectDevice stopped the scan; re-arm it if anything is still pending
-      // (e.g. a second device that dropped at the same time).
-      if (_inFlight.isEmpty && _wantReconnect.isNotEmpty) {
+      // connectDevice always stops the scan — re-arm it whenever auto-connect
+      // is still on, not only when something is pending reconnect. Without
+      // this, connecting to a device for the FIRST time (never in
+      // _wantReconnect, since that set is only for devices that dropped)
+      // left the scan stopped for good: on the device list screen, device A
+      // would connect fine but device B would never be discovered until the
+      // user tapped Scan manually. _ensureScanning() already no-ops
+      // correctly on its own (auto-connect off / still connecting / already
+      // scanning), so this is safe to call unconditionally here.
+      if (_inFlight.isEmpty) {
         _ensureScanning();
       }
     }

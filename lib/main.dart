@@ -2,9 +2,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
+import 'core/config/app_config_store.dart';
+import 'core/services/local_notification_service.dart';
 import 'core/storage/preferences.dart';
 import 'core/utils/logger.dart'; // TEMP-LOG-EXPORT
 import 'features/auth/presentation/providers/auth_provider.dart';
@@ -26,9 +29,18 @@ void main() async {
   }
 
   await initFileLogging(); // TEMP-LOG-EXPORT: persist logs to a file for field debugging
+  await LocalNotificationService.instance.initialize();
 
   // Initialize SharedPreferences
   final sharedPrefs = await SharedPreferences.getInstance();
+
+  // Base URLs, links and app gates from the server (mobile-app-config):
+  // saved copy, then a quick fetch (≤2.5s). Must run before anything builds
+  // a Dio client, so every API call this run uses the same URLs.
+  try {
+    AppConfigStore.appVersion = (await PackageInfo.fromPlatform()).version;
+  } catch (_) {}
+  await AppConfigStore.load(sharedPrefs);
 
   runApp(
     ProviderScope(

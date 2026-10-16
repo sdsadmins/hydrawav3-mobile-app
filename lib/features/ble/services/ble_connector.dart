@@ -307,13 +307,32 @@ class BleConnector {
       // (LINK_SUPERVISION_TIMEOUT), which blanks out telemetry until reconnect.
       // High priority keeps the link active so frames arrive reliably. Android
       // only; no-op / harmless on iOS.
-      try {
-        await device.requestConnectionPriority(
-          connectionPriorityRequest: ConnectionPriority.high,
+      //
+      // BUT: this is the single biggest radio-time grab in the whole connect
+      // sequence — it tells the OS to service THIS link far more often, on a
+      // phone with exactly one shared BLE radio. Requesting it while OTHER
+      // devices already hold a live connection can starve them of their own
+      // scheduled radio time past their supervision timeout, disconnecting a
+      // device that never actually left range — collateral damage from this
+      // device's reconnect, not a fault of its own. Only ask for HIGH when
+      // this is the only device around; otherwise stay at the OS default
+      // (balanced) so the radio has room to keep servicing everyone else.
+      final otherDevicesConnected =
+          _connectedDevices.keys.any((id) => id != deviceId);
+      if (!otherDevicesConnected) {
+        try {
+          await device.requestConnectionPriority(
+            connectionPriorityRequest: ConnectionPriority.high,
+          );
+          appLogger.i('BLE: requested HIGH connection priority for $deviceId');
+        } catch (e) {
+          appLogger.w('BLE: requestConnectionPriority failed for $deviceId: $e');
+        }
+      } else {
+        appLogger.i(
+          'BLE: skipping HIGH connection priority for $deviceId — other '
+          'devices are already connected, avoid starving their radio time',
         );
-        appLogger.i('BLE: requested HIGH connection priority for $deviceId');
-      } catch (e) {
-        appLogger.w('BLE: requestConnectionPriority failed for $deviceId: $e');
       }
 
       // Discover services
@@ -532,6 +551,20 @@ class BleConnector {
   /// out-of-range event.
   bool isReconnectSuppressed(String deviceId) =>
       _manualDisconnects.contains(deviceId);
+
+  /// Undo [suppressReconnect] for [deviceId] without connecting.
+  ///
+  /// Suppression is otherwise cleared ONLY inside [connect] — but the
+  /// scan-driven reconnect path never reaches [connect] for a suppressed
+  /// device, so a unit that was ever force-stopped (a spurious `rs:stop`, a
+  /// Protocol Plus break false-positive) could never be recovered. The manual
+  /// SCAN control on the live session card calls this first so the user always
+  /// has a way back.
+  void clearReconnectSuppression(String deviceId) {
+    if (!_manualDisconnects.remove(deviceId)) return;
+    _reconnectAttempts.remove(deviceId);
+    appLogger.i('BLE: auto-reconnect suppression cleared for $deviceId');
+  }
 
   /// Disconnect a specific device.
   Future<void> disconnect(String deviceId) async {

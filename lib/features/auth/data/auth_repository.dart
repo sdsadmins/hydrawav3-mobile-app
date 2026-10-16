@@ -125,6 +125,9 @@ class AuthRepository {
     );
   }
 
+  Future<void> requestPasswordReset(String email) =>
+      _remoteSource.requestPasswordReset(email);
+
   Future<void> forgotPassword(String id) {
     return _remoteSource.forgotPassword(id);
   }

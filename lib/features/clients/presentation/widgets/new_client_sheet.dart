@@ -2,29 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../devices/presentation/widgets/plan_sheet.dart';
+import '../../../devices/presentation/widgets/session_plan_widgets.dart';
 import '../../../intake/presentation/widgets/option_picker.dart';
 import '../../data/client_repository.dart';
 import '../../domain/client_model.dart';
 import '../providers/client_providers.dart';
 
-/// Bottom sheet to create a new client (`POST /clients`). On success the new
-/// client is selected for the session and returned.
+/// Sheet to create a new client (`POST /clients`), in the v6 intake look
+/// (`55-intake`). On success the new client is selected for the session and
+/// returned. The fields are the ones the backend takes for a clinic client:
+/// its name is generated server-side, and age, height and weight are required.
 Future<Client?> showNewClientSheet(BuildContext context, WidgetRef ref) {
-  return showModalBottomSheet<Client>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    backgroundColor: ThemeConstants.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: _NewClientForm(ref: ref),
-    ),
+  return showPlanSheet<Client>(
+    context,
+    title: 'New client intake',
+    subtitle: 'Age, height and weight are required',
+    builder: (_) => _NewClientForm(ref: ref),
   );
 }
 
@@ -121,169 +117,121 @@ class _NewClientFormState extends State<_NewClientForm> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'New Client Intake Form',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: ThemeConstants.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            _field('Nickname (Optional)', _nickname, hint: 'Enter nickname'),
-            const SizedBox(height: 12),
-            _field('Age', _age,
-                hint: 'Enter age',
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
-            const SizedBox(height: 12),
-            PickerField(
-              label: 'Gender',
-              value: _gender,
-              placeholder: 'Select Gender',
-              onTap: () async {
-                final picked = await showOptionPicker<String>(
-                  context,
-                  title: 'Gender',
-                  options: const ['Male', 'Female', 'Other'],
-                  labelOf: (v) => v,
-                  selected: _gender,
-                );
-                if (picked != null) setState(() => _gender = picked);
-              },
-            ),
-            const SizedBox(height: 12),
-            // Height in feet + inches (web parity), converted to cm on submit.
-            Text(
-              'Height',
-              style: TextStyle(
-                color: ThemeConstants.textSecondary,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _field(null, _feet,
-                      hint: '0',
-                      suffixText: 'ft',
+    final dark = PlanTones.dark(context);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const PlanFieldLabel('Nickname', tag: 'optional'),
+          PlanTextField(controller: _nickname, hint: 'What you call them'),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const PlanFieldLabel('Age'),
+                    PlanTextField(
+                      controller: _age,
+                      hint: 'Enter age',
                       keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _field(null, _inches,
-                      hint: '0',
-                      suffixText: 'in',
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // Weight in pounds (web parity), converted to kg on submit.
-            _field('Weight', _pounds,
-                hint: 'Enter weight',
-                suffixText: 'lbs',
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true)),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Create Client'),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _field(
-    String? label,
-    TextEditingController controller, {
-    String? hint,
-    String? suffixText,
-    TextInputType? keyboardType,
-    List<TextInputFormatter>? inputFormatters,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (label != null) ...[
-          Text(
-            label,
-            style: TextStyle(
-              color: ThemeConstants.textSecondary,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-        TextField(
-          controller: controller,
-          keyboardType: keyboardType,
-          inputFormatters: inputFormatters,
-          style: TextStyle(color: ThemeConstants.textPrimary, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: TextStyle(color: ThemeConstants.textTertiary),
-            // Use suffixIcon (not suffixText) so the unit stays visible even
-            // when the field is empty/unfocused.
-            suffixIcon: suffixText == null
-                ? null
-                : Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      suffixText,
-                      style: TextStyle(
-                        color: ThemeConstants.textSecondary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const PlanFieldLabel('Gender'),
+                    PlanPress(
+                      onTap: () async {
+                        final picked = await showOptionPicker<String>(
+                          context,
+                          title: 'Gender',
+                          options: const ['Male', 'Female', 'Other'],
+                          labelOf: (v) => v,
+                          selected: _gender,
+                        );
+                        if (picked != null) setState(() => _gender = picked);
+                      },
+                      scale: .98,
+                      child: PlanSelectBox(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _gender ?? 'Select',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: _gender == null
+                                      ? PlanTones.sub(context)
+                                      : (dark
+                                          ? const Color(0xFFF1E4D6)
+                                          : const Color(0xFF1A1A1A)),
+                                ),
+                              ),
+                            ),
+                            Icon(Icons.expand_more_rounded,
+                                size: 20, color: PlanTones.sub(context)),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-            suffixIconConstraints:
-                const BoxConstraints(minWidth: 0, minHeight: 0),
-            filled: true,
-            fillColor: ThemeConstants.surfaceVariant.withValues(alpha: 0.6),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: ThemeConstants.border),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: ThemeConstants.border),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: ThemeConstants.accent),
-            ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          // Height in feet + inches (web parity), converted to cm on submit.
+          const PlanFieldLabel('Height'),
+          Row(
+            children: [
+              Expanded(
+                child: PlanTextField(
+                  controller: _feet,
+                  hint: '0',
+                  unit: 'ft',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: PlanTextField(
+                  controller: _inches,
+                  hint: '0',
+                  unit: 'in',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Weight in pounds (web parity), converted to kg on submit.
+          const PlanFieldLabel('Weight'),
+          PlanTextField(
+            controller: _pounds,
+            hint: 'Enter weight',
+            unit: 'lbs',
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          ),
+          const SizedBox(height: 20),
+          PlanPrimaryButton(
+            label: 'Create client',
+            busy: _saving,
+            onTap: _submit,
+          ),
+        ],
+      ),
     );
   }
 }

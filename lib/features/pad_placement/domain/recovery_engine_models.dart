@@ -715,6 +715,19 @@ class RecoveryPlacement {
   final bool pathwayRerouted;
   final String requestedPathway;
 
+  /// A complaint that travels to a named side (e.g. "low back pain that
+  /// travels to the right glute") — the travelling pads can land on a
+  /// different side than the one the user named, because the authored record
+  /// is written that way or that side has no authored placement. [travelPlain]
+  /// is the ONE user-facing sentence explaining what happened either way; show
+  /// it verbatim directly under the card's title block, never render nothing
+  /// silently when it's set. Empty when no side was named (most cards).
+  ///
+  /// [travelReason] is operator/debug text (record ids, authoring terms) —
+  /// NEVER render it; it exists only for logs.
+  final String travelPlain;
+  final String travelReason;
+
   /// `authored` / `composed`. A COMPOSED placement must be impossible to mistake
   /// for an authored one — the web marks the whole frame, not a badge, because a
   /// badge is what gets cropped out of a screenshot.
@@ -773,6 +786,8 @@ class RecoveryPlacement {
     this.reassessmentTestsOffered = const [],
     this.pathwayRerouted = false,
     this.requestedPathway = '',
+    this.travelPlain = '',
+    this.travelReason = '',
     this.pointSource = '',
     this.pointVersion = '',
     this.reviewFlags = const [],
@@ -861,6 +876,11 @@ class RecoveryPlacement {
 
     final finding = (assessment['finding'] ?? '').toString();
     final driverDescription = (driver['description'] ?? '').toString();
+    final referralTargetReported = _firstNonEmpty([
+          assessment['referral_target_reported'],
+          assessment['referral_target'],
+        ]) ??
+        '';
 
     return RecoveryPlacement(
       recoveryId: (point['recovery_id'] ?? '').toString(),
@@ -901,11 +921,7 @@ class RecoveryPlacement {
           (_map(data['presentation'])['aspect'] ?? '').toString(),
       tissueType: (driver['tissue_type'] ?? '').toString(),
       lymphaticRegion: (driver['lymphatic_region'] ?? '').toString(),
-      referralTargetReported: _firstNonEmpty([
-            assessment['referral_target_reported'],
-            assessment['referral_target'],
-          ]) ??
-          '',
+      referralTargetReported: referralTargetReported,
       thermalRecommendationOnly: thermal['recommendation_only'] == true,
       thermalAlternatives:
           _strings(thermal['alternatives']).map(_humanize).toList(),
@@ -937,6 +953,13 @@ class RecoveryPlacement {
       pathwayRerouted: _map(data['pathwayRouting'])['rerouted'] == true,
       requestedPathway:
           (_map(data['pathwayRouting'])['requested'] ?? '').toString(),
+      // `travel.plain` is the only field of `travel` ever shown — `reason` is
+      // operator text (record ids, authoring terms). Absent `travel`, or a
+      // null/blank `plain`, is every card where no travelling side was named
+      // (most of them) — empty string here means "render nothing", matching
+      // the API's own "if travel is absent or plain is null, render nothing".
+      travelPlain: (_map(data['travel'])['plain'] ?? '').toString(),
+      travelReason: (_map(data['travel'])['reason'] ?? '').toString(),
       pointSource: (point['source'] ?? '').toString(),
       pointVersion: (point['version'] ?? '').toString(),
       reviewFlags: _reviewFlags(data['reviewFlags']),
@@ -952,6 +975,7 @@ class RecoveryPlacement {
         movementTest: _movementTestOf(assessment),
         thermalMode: (thermal['mode'] ?? '').toString(),
         mechanism: (intent['mechanism_rationale'] ?? '').toString(),
+        referralLabel: _humanize(referralTargetReported),
       ),
       raw: data,
     );
@@ -974,60 +998,73 @@ class RecoveryPlacement {
     required String movementTest,
     required String thermalMode,
     required String mechanism,
+    String referralLabel = '',
   }) {
-    final rawSets = data['sets'];
+    final chain = _map(data['chain']);
     final sets = <PadSet>[];
 
+    // `chain.apply_now[]` is the authoritative "applied this session" list —
+    // it is what `session.sets_returned` counts and what `guidance` describes.
+    // Top-level `data['sets']` is the FALLBACK for envelopes with no `chain`
+    // block at all, not a second source read alongside it — reading both would
+    // double the same sets under two different indices.
+    final applyNow = chain['apply_now'];
+    final rawSets =
+        (applyNow is List && applyNow.isNotEmpty) ? applyNow : data['sets'];
     if (rawSets is List) {
       for (final row in rawSets.whereType<Map>()) {
-        final set = Map<String, dynamic>.from(row);
-        final pads = set['pads'];
-        Pad? sun;
-        Pad? moon;
-        if (pads is List) {
-          for (final p in pads.whereType<Map>()) {
-            final pad = _normalisePad(Map<String, dynamic>.from(p));
-            final role = (pad['pad_label'] ?? '').toString().toLowerCase();
-            if (role == 'sun') {
-              sun ??= Pad.fromJson(pad);
-            } else if (role == 'moon') {
-              moon ??= Pad.fromJson(pad);
-            }
-          }
-        }
-        if (sun == null && moon == null) continue;
-
-        final note = (set['note'] ?? '').toString().trim();
-        sets.add(PadSet(
-          setIndex: _int(set['set_index'], sets.length + 1),
-          // `primary_site` → `primary site`, so the pad map's role line reads as
-          // words. It uppercases whatever it is handed.
-          role: _humanize((set['set_role'] ?? '').toString()).toLowerCase(),
-          placementLabel: note.isEmpty ? regionLabel : note,
-          // The authored reasoning, which is what the card's "Why this
-          // placement" expander is for. Set-level note first when there is one:
-          // it is about THIS set, where the mechanism is about the whole point.
-          clinicalReasoning: note.isEmpty ? mechanism : '$note\n\n$mechanism',
-          sun: sun,
-          moon: moon,
-          padGeometry: (set['pad_geometry'] ?? '').toString(),
-        ));
+        final set = _setFrom(
+          Map<String, dynamic>.from(row),
+          regionLabel: regionLabel,
+          referralLabel: referralLabel,
+          mechanism: mechanism,
+          fallbackIndex: sets.length + 1,
+        );
+        if (set != null) sets.add(set);
       }
     }
 
-    // Sets the point AUTHORS but the engine held back this session, each with
-    // the reason. `document_sets: 2` with one applied set is the normal case —
-    // set 2 exists, it just doesn't apply — and listing it is the only way the
-    // practitioner learns it's there and what would bring it in.
+    // `chain.sequence_later[]` — authored WITH full pad geometry, but next in
+    // the chain rather than applied now. These are NOT withheld: the role
+    // applies to this case, it is simply sequenced for a later session.
+    final sequenceLater = chain['sequence_later'];
+    if (sequenceLater is List) {
+      for (final row in sequenceLater.whereType<Map>()) {
+        final map = Map<String, dynamic>.from(row);
+        final index = _int(map['set_index'], 0);
+        if (index > 0 && sets.any((s) => s.setIndex == index)) continue;
+        final set = _setFrom(
+          map,
+          regionLabel: regionLabel,
+          referralLabel: referralLabel,
+          mechanism: mechanism,
+          fallbackIndex: sets.length + 1,
+          deferred: true,
+        );
+        if (set != null) sets.add(set);
+      }
+    }
+
+    // Sets the point AUTHORS but whose ROLE does not apply to this case at all
+    // (`chain.conditional.withheld_sets[]` / `chain.referral.withheld_sets[]`,
+    // e.g. a rom-followup set on a discomfort pathway). These carry NO pad
+    // geometry — that is the point — only the reason, so the practitioner can
+    // see the set exists and what would bring it in.
     for (final row in _withheldRows(data)) {
       final index = _int(row['set_index'], 0);
       if (index <= 0) continue;
-      if (sets.any((s) => s.setIndex == index)) continue; // applied — not held
+      if (sets.any((s) => s.setIndex == index)) {
+        continue; // applied or deferred — not withheld
+      }
+      final role = (row['set_role'] ?? '').toString();
       final note = (row['note'] ?? '').toString().trim();
+      final fallback = _isReferralRole(role) && referralLabel.isNotEmpty
+          ? referralLabel
+          : regionLabel;
       sets.add(PadSet(
         setIndex: index,
-        role: _humanize((row['set_role'] ?? '').toString()).toLowerCase(),
-        placementLabel: note.isEmpty ? regionLabel : note,
+        role: _humanize(role).toLowerCase(),
+        placementLabel: note.isEmpty ? fallback : note,
         withheld: true,
         withheldReason: (row['reason'] ?? '').toString().trim(),
       ));
@@ -1065,6 +1102,70 @@ class RecoveryPlacement {
       raw: data,
     );
   }
+
+  /// Builds one [PadSet] from a `chain.apply_now[]` / `chain.sequence_later[]`
+  /// row. Returns null when the row carries no Sun or Moon pad — a row with
+  /// only a role's applicability note (no `pads`) is not a drawable set, even
+  /// when it isn't formally withheld.
+  static PadSet? _setFrom(
+    Map<String, dynamic> set, {
+    required String regionLabel,
+    required String mechanism,
+    required int fallbackIndex,
+    String referralLabel = '',
+    bool deferred = false,
+  }) {
+    final pads = set['pads'];
+    Pad? sun;
+    Pad? moon;
+    if (pads is List) {
+      for (final p in pads.whereType<Map>()) {
+        final pad = _normalisePad(Map<String, dynamic>.from(p));
+        final role = (pad['pad_label'] ?? '').toString().toLowerCase();
+        if (role == 'sun') {
+          sun ??= Pad.fromJson(pad);
+        } else if (role == 'moon') {
+          moon ??= Pad.fromJson(pad);
+        }
+      }
+    }
+    if (sun == null && moon == null) return null;
+
+    final note = (set['note'] ?? '').toString().trim();
+    final setRole = (set['set_role'] ?? '').toString();
+    // A referral-link set is physically on a DIFFERENT area than the
+    // complaint (e.g. complaint "Low back", referral set on "Calf"). When the
+    // point authors no per-set `note` for it, falling back to the complaint's
+    // own [regionLabel] mislabels it — every set in the placement reads as
+    // "Low back" even though the drawn pads are correctly on the calf. Fall
+    // back to the referral's own target region instead, when known.
+    final fallbackLabel = _isReferralRole(setRole) && referralLabel.isNotEmpty
+        ? referralLabel
+        : regionLabel;
+    return PadSet(
+      setIndex: _int(set['set_index'], fallbackIndex),
+      // `primary_site` → `primary site`, so the pad map's role line reads as
+      // words. It uppercases whatever it is handed.
+      role: _humanize(setRole).toLowerCase(),
+      placementLabel: note.isEmpty ? fallbackLabel : note,
+      // The authored reasoning, which is what the card's "Why this
+      // placement" expander is for. Set-level note first when there is one:
+      // it is about THIS set, where the mechanism is about the whole point.
+      clinicalReasoning: note.isEmpty ? mechanism : '$note\n\n$mechanism',
+      sun: sun,
+      moon: moon,
+      padGeometry: (set['pad_geometry'] ?? '').toString(),
+      deferred: deferred,
+      sessionPriority: _int(set['session_priority'], 0),
+    );
+  }
+
+  /// `referral_link` (and any authored variant containing "referral") is a set
+  /// physically located at the referral TARGET, not the complaint site — the
+  /// one role whose label should fall back to the target region, not the
+  /// region the whole placement is keyed under.
+  static bool _isReferralRole(String setRole) =>
+      setRole.toLowerCase().contains('referral');
 
   static Map<String, dynamic> _normalisePad(Map<String, dynamic> pad) => {
         ...pad,

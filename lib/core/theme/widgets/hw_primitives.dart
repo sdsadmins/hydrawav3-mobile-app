@@ -418,16 +418,26 @@ class HwRow extends StatelessWidget {
   final Widget? leading;
   final String title;
   final String? subtitle;
+  /// Optional content displayed below the subtitle in the row's text column.
+  final Widget? belowSubtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
+
+  /// Caps the title to this many lines (with ellipsis) instead of the
+  /// default unbounded wrap. Null (the default) keeps every existing HwRow
+  /// call site's current behavior — only opt in where a long name needs a
+  /// fixed line count (e.g. a scrollable list of protocol names).
+  final int? titleMaxLines;
 
   const HwRow({
     super.key,
     this.leading,
     required this.title,
     this.subtitle,
+    this.belowSubtitle,
     this.trailing,
     this.onTap,
+    this.titleMaxLines,
   });
 
   @override
@@ -448,6 +458,9 @@ class HwRow extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  maxLines: titleMaxLines,
+                  overflow:
+                      titleMaxLines != null ? TextOverflow.ellipsis : null,
                   style: TextStyle(
                     fontSize: HwType.base,
                     fontWeight: FontWeight.w600,
@@ -464,6 +477,10 @@ class HwRow extends StatelessWidget {
                       color: p.ink2,
                     ),
                   ),
+                ],
+                if (belowSubtitle != null) ...[
+                  const SizedBox(height: HwSpace.s2),
+                  belowSubtitle!,
                 ],
               ],
             ),
@@ -1077,6 +1094,53 @@ class HwStatusBanner extends StatelessWidget {
               fontSize: HwType.eyebrow,
               fontWeight: FontWeight.w700,
               color: fg,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small notice for feature-gated surfaces that should not be tapped yet.
+class HwComingSoonBanner extends StatelessWidget {
+  final String label;
+  final bool compact;
+
+  const HwComingSoonBanner({
+    super.key,
+    this.label = 'Coming soon',
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 12,
+        vertical: compact ? 4 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: p.midSoft,
+        borderRadius: BorderRadius.circular(HwRadius.pill),
+        border: Border.all(color: p.mid.withValues(alpha: .28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.schedule_rounded,
+            size: compact ? 12 : 14,
+            color: p.mid,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: compact ? HwType.eyebrow : HwType.cap,
+              fontWeight: FontWeight.w800,
+              color: p.mid,
             ),
           ),
         ],

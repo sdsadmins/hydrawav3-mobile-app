@@ -8,10 +8,30 @@ import '../../../../core/utils/logger.dart';
 import '../../../../core/storage/preferences.dart';
 import '../../domain/active_session_model.dart';
 import '../../services/background_session_runtime.dart';
+import '../../services/session_engine.dart';
 
 final activeSessionsProvider =
     StateNotifierProvider<ActiveSessionsNotifier, List<ActiveSession>>((ref) {
   return ActiveSessionsNotifier(ref.read(sharedPreferencesProvider));
+});
+
+/// Device ids belonging to a local session whose engine has gone terminal but
+/// the backend stop hasn't been confirmed yet (see
+/// [SessionEngineState.backendStopUnresolved]). The devices list screen must
+/// not silently free these into "available" — they need their own tri-state
+/// (available / in-use / pending-stop) so the practitioner can see the stop
+/// hasn't actually landed and go finish it from the session screen.
+final pendingBackendStopDeviceIdsProvider = Provider<Set<String>>((ref) {
+  final sessions = ref.watch(activeSessionsProvider);
+  final ids = <String>{};
+  for (final session in sessions) {
+    final unresolved = ref.watch(
+      sessionEngineFamilyProvider(session.id)
+          .select((s) => s.backendStopUnresolved),
+    );
+    if (unresolved) ids.addAll(session.deviceIds);
+  }
+  return ids;
 });
 
 class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
@@ -125,11 +145,31 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
     required List<String> deviceIds,
     required String transport,
     List<Map<String, String>> protocolPlusBindings = const [],
+    // The session's real, delay/cycle-adjusted total duration. THIS WAS
+    // NEVER ACTUALLY SET ANYWHERE — every ActiveSession silently defaulted
+    // to totalDurationSeconds=0, which meant nothing that reads this field
+    // to decide "is this session overdue" (the outcome-gate watchdog) could
+    // ever fire, for any session, ever. Pass the real value from the caller.
+    int totalDurationSeconds = 0,
   }) async {
     if (sessionId != null) {
       for (final session in state) {
         if (session.id == sessionId) {
           appLogger.i('Session already exists for ID, returning: $sessionId');
+          // A caller that now has the real duration (and the earlier
+          // creator didn't) should still get it recorded — e.g. the
+          // launch-time call races the screen's own bootstrap call.
+          if (totalDurationSeconds > 0 &&
+              session.totalDurationSeconds <= 0) {
+            state = [
+              for (final s in state)
+                if (s.id == sessionId)
+                  s.copyWith(totalDurationSeconds: totalDurationSeconds)
+                else
+                  s,
+            ];
+            unawaited(_saveActiveSessions());
+          }
           return sessionId;
         }
       }
@@ -149,13 +189,15 @@ class ActiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       deviceStatuses: {for (final id in deviceIds) id: SessionStatus.running},
       deviceNames: {},
       protocolPlusBindings: protocolPlusBindings,
+      totalDurationSeconds: totalDurationSeconds,
     );
 
     state = [...state, newSession];
     await _saveActiveSessions();
 
     appLogger.i(
-        'Created new active session: $newSessionId with ${deviceIds.length} devices');
+        'Created new active session: $newSessionId with ${deviceIds.length} devices '
+        '(totalDurationSeconds=$totalDurationSeconds)');
     return newSessionId;
   }
 

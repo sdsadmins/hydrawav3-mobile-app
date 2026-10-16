@@ -10,6 +10,7 @@ import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../clients/domain/client_model.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../protocols/domain/protocol_model.dart';
+import '../../../../core/utils/logger.dart';
 import '../../domain/pending_session_outcome_model.dart';
 import '../../domain/question_answer_model.dart';
 import '../providers/pending_outcomes_provider.dart';
@@ -77,6 +78,10 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
   @override
   void initState() {
     super.initState();
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: SessionAfterScreen.initState — sessionId=${widget.sessionId}, '
+      'pendingExists=${ref.read(pendingOutcomesProvider.notifier).getById(widget.sessionId) != null}',
+    );
     _outcomes = ref.read(pendingOutcomesProvider.notifier);
     // Hold back the automatic save while the user is answering, so their
     // answers still ride along on the single `/intake` POST.
@@ -94,6 +99,10 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
 
   @override
   void dispose() {
+    appLogger.i(
+      '🩺 OUTCOME-DEBUG: SessionAfterScreen.dispose — sessionId=${widget.sessionId}, '
+      'logged=$_logged',
+    );
     // Left by ANY route — back gesture, nav tab, system back — still logs the
     // session, with whatever was answered.
     if (!_logged) {
@@ -258,7 +267,7 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
                     Text('⏹', style: TextStyle(fontSize: 40, color: p.ink)),
                     const SizedBox(height: HwSpace.s2),
                     Text(
-                      'Stopped with ${_fmtRemaining(_remainingSeconds)} remaining — '
+                      'Stopped with ${_fmtRemaining(_remainingSeconds)} remaining, '
                       'logged as stopped early. No outcome or score is recorded for partial sessions.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
@@ -287,8 +296,8 @@ class _SessionAfterScreenState extends ConsumerState<SessionAfterScreen> {
                     const SizedBox(height: HwSpace.s1),
                     Text(
                       pending?.clientId == null
-                          ? 'Guest session logged — tag a player next time to build their history.'
-                          : 'Session logged — capture readiness next time to see the before → after story.',
+                          ? 'Guest session logged, tag a player next time to build their history.'
+                          : 'Session logged, capture readiness next time to see the before → after story.',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: HwType.sm, color: p.ink2),
                     ),

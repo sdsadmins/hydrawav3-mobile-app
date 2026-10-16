@@ -147,7 +147,7 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     req('state', f.state);
     req('zip', f.zip);
     req('country', f.country);
-    req('dateOfBirth', f.dateOfBirth);
+    // dateOfBirth is optional in the onboarding API (create + account update).
 
     if (f.password.isEmpty) {
       errors['password'] = 'Required';

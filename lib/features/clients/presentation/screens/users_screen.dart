@@ -59,7 +59,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              // `.topbar` — 20px top, 18px sides
+              padding: const EdgeInsets.fromLTRB(18, 20, 18, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -68,14 +69,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                       Expanded(
                         child: Text(
                           university ? 'Users' : 'Clients',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          // `.h-page` — 24/800
                           style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.5,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.48,
                             color: p.ink,
                           ),
                         ),
                       ),
+                      const SizedBox(width: 12),
                       // Notification bell with an unread dot — the spec puts
                       // it in this topbar (app.js:4268).
                       Stack(
@@ -85,30 +90,27 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                             icon: Icons.notifications_none_rounded,
                             color: p.ink2,
                             palette: p,
-                            onTap: () =>
-                                context.push(RoutePaths.notifications),
+                            onTap: () => context.push(RoutePaths.notifications),
                           ),
                           if (ref.watch(unreadNotificationCountProvider) > 0)
                             Positioned(
-                              top: 6,
-                              right: 6,
+                              top: 9,
+                              right: 9,
                               child: Container(
                                 width: 9,
                                 height: 9,
                                 decoration: BoxDecoration(
                                   color: p.low,
                                   shape: BoxShape.circle,
-                                  border:
-                                      Border.all(color: p.card, width: 2),
+                                  border: Border.all(color: p.card, width: 2),
                                 ),
                               ),
                             ),
                         ],
                       ),
-                      const SizedBox(width: 8),
-                      _IconBtn(
-                        icon: Icons.add_rounded,
-                        color: p.copperInk,
+                      const SizedBox(width: 12),
+                      // the bare + as a labelled pill (`.v5i-addbtn`)
+                      _AddPill(
                         palette: p,
                         onTap: () async {
                           university
@@ -119,7 +121,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 16),
                   _OrgChip(
                     palette: p,
                     label: [
@@ -127,7 +129,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                       if (orgName.isNotEmpty) orgName,
                     ].join(' · '),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 16),
                   _Segments(
                     palette: p,
                     tab: _tab,
@@ -136,7 +138,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Expanded(child: _body(p, university, clients)),
           ],
         ),
@@ -223,11 +225,16 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         preppedToday.add(id);
       }
 
-      for (final d in s.discomfortAreas) {
-        if (d.discomfortBefore == null || d.discomfortAfter == null) continue;
-        scored[id] = (scored[id] ?? 0) + 1;
-        if (d.discomfortAfter! < d.discomfortBefore!) {
-          improved[id] = (improved[id] ?? 0) + 1;
+      // Same rank-based signal as the Hub's Outcome Pulse: each answered
+      // post-session preset question is a "check", rank >= 4 of 5 counts as
+      // improved. Free-text answers (rank 0) carry no quality signal.
+      for (final p in s.protocols) {
+        for (final qa in p.questionAnswers) {
+          if (qa.rank <= 0) continue;
+          scored[id] = (scored[id] ?? 0) + 1;
+          if (qa.rank >= 4) {
+            improved[id] = (improved[id] ?? 0) + 1;
+          }
         }
       }
     }
@@ -283,7 +290,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       },
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
         children: [
           _SearchField(
             palette: p,
@@ -310,9 +317,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           for (final key in sortedKeys) ...[
             _GroupHeader(
               palette: p,
-              label: key.isEmpty
-                  ? (university ? 'Users' : 'Clients')
-                  : key.toUpperCase(),
+              label: key.isEmpty ? (university ? 'Users' : 'Clients') : key,
               count: groups[key]!.length,
             ),
             const SizedBox(height: 8),
@@ -340,6 +345,13 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   }
 }
 
+/// `--shadow` on this screen's white controls.
+const _softShadow = [
+  BoxShadow(color: Color(0x0A1F2B33), blurRadius: 2, offset: Offset(0, 1)),
+  BoxShadow(color: Color(0x0F1F2B33), blurRadius: 14, offset: Offset(0, 4)),
+];
+
+/// `.iconbtn` — 44px white square, faint border, soft shadow.
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -355,26 +367,80 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: palette.card,
-      shape: RoundedRectangleBorder(
+    final p = palette;
+    return Container(
+      decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: palette.cardline),
+        boxShadow: _softShadow,
       ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: SizedBox(
-          width: 40,
-          height: 40,
-          child: Icon(icon, size: 21, color: color),
+      child: Material(
+        color: p.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: p.line),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(icon, size: 20, color: color),
+          ),
         ),
       ),
     );
   }
 }
 
-/// The copper "N users · Org" pill under the page title.
+/// `.v5i-addbtn` — "＋ Add client / athlete", a white pill beside the bell.
+class _AddPill extends StatelessWidget {
+  final RefPalette palette;
+  final VoidCallback onTap;
+
+  const _AddPill({required this.palette, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Container(
+      decoration: const BoxDecoration(
+        borderRadius: BorderRadius.all(Radius.circular(999)),
+        boxShadow: _softShadow,
+      ),
+      child: Material(
+        color: p.card,
+        shape: StadiumBorder(side: BorderSide(color: p.line)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Container(
+            height: 44,
+            padding: const EdgeInsets.fromLTRB(10, 0, 14, 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add_rounded, size: 18, color: p.copperInk),
+                const SizedBox(width: 6),
+                Text(
+                  'Add client / athlete',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: p.copperInk,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.org-chip` — white pill, copper dot, "N users · Org".
 class _OrgChip extends StatelessWidget {
   final RefPalette palette;
   final String label;
@@ -385,10 +451,12 @@ class _OrgChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = palette;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: p.tanSoft,
+        color: p.card,
         borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: p.line),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -398,13 +466,17 @@ class _OrgChip extends StatelessWidget {
             height: 7,
             decoration: BoxDecoration(shape: BoxShape.circle, color: p.copper),
           ),
-          const SizedBox(width: 7),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: p.ink2,
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: p.ink2,
+              ),
             ),
           ),
         ],
@@ -413,6 +485,7 @@ class _OrgChip extends StatelessWidget {
   }
 }
 
+/// `.seg` — a pill track; the selected segment in the copper gradient.
 class _Segments extends StatelessWidget {
   final RefPalette palette;
   final _UsersTab tab;
@@ -427,19 +500,20 @@ class _Segments extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = palette;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      padding: const EdgeInsets.all(5),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: p.cardline),
+        color: dark ? p.bg2 : const Color(0xFFF7F3F0),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: p.line),
       ),
       child: Row(
         children: [
           _seg('Users', _UsersTab.users, p),
-          const SizedBox(width: 4),
+          const SizedBox(width: 3),
           _seg('AI Reports', _UsersTab.reports, p),
-          const SizedBox(width: 4),
+          const SizedBox(width: 3),
           _seg('History', _UsersTab.history, p),
         ],
       ),
@@ -450,24 +524,35 @@ class _Segments extends StatelessWidget {
     final selected = tab == value;
     return Expanded(
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        customBorder: const StadiumBorder(),
         onTap: () => onChanged(value),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          height: 44,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFF1F2B33) : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
+            gradient: selected ? p.sunGrad : null,
+            borderRadius: BorderRadius.circular(999),
+            boxShadow: selected
+                ? const [
+                    BoxShadow(
+                      color: Color.fromRGBO(169, 130, 95, .8),
+                      blurRadius: 8,
+                      spreadRadius: -4,
+                      offset: Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           child: Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: selected ? Colors.white : p.ink2,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.24,
+              color: selected ? const Color(0xFF2B1D12) : p.ink3,
             ),
           ),
         ),
@@ -505,26 +590,30 @@ class _GroupHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = palette;
-    return Row(
-      children: [
-        Icon(_icon, size: 15, color: p.copper),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.8,
-              color: p.ink2,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
+      child: Row(
+        children: [
+          Icon(_icon, size: 15, color: p.ink2),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: p.ink2,
+              ),
             ),
           ),
-        ),
-        Text(
-          '$count ${count == 1 ? 'user' : 'users'}',
-          style: TextStyle(fontSize: 12, color: p.ink3),
-        ),
-      ],
+          Text(
+            '$count ${count == 1 ? 'user' : 'users'}',
+            style: TextStyle(fontSize: 12, color: p.ink3),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -536,8 +625,10 @@ class _UserGroupCard extends StatelessWidget {
   final bool university;
   final Map<String, int> sessionCounts;
   final Map<String, String> positionNames;
+
   /// Client ids already prepped today — empty unless game day is active.
   final Set<String> prepped;
+
   /// Share of this client's scored areas that improved, or null if none were.
   final int? Function(String) pulseFor;
   final void Function(Client) onTap;
@@ -580,27 +671,24 @@ class _UserGroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = palette;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       decoration: BoxDecoration(
         color: p.card,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: p.cardline),
-        boxShadow: p.shadow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: dark ? p.line : const Color.fromRGBO(26, 26, 26, .06)),
+        boxShadow: _softShadow,
       ),
       child: Column(
         children: [
           for (var i = 0; i < clients.length; i++) ...[
-            if (i > 0)
-              Divider(
-                  height: 1,
-                  thickness: 1,
-                  indent: 16,
-                  endIndent: 16,
-                  color: p.line),
+            if (i > 0) Divider(height: 1, thickness: 1, color: p.line2),
             _UserRow(
               palette: p,
               client: clients[i],
-              initials: _initials(clients[i].clientName),
+              initials: _initials(clients[i].displayName),
               subline: _subline(clients[i]),
               sessions: sessionCounts[clients[i].id],
               prepped: prepped.contains(clients[i].id),
@@ -615,7 +703,7 @@ class _UserGroupCard extends StatelessWidget {
   }
 }
 
-/// `.searchbar` — styles.css:349. A filled pill, no border.
+/// `.pro-search` — a white box with a faint border.
 class _SearchField extends StatelessWidget {
   final RefPalette palette;
   final TextEditingController controller;
@@ -633,28 +721,29 @@ class _SearchField extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = palette;
     return Container(
+      height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: p.bg2,
-        borderRadius: BorderRadius.circular(13),
+        color: p.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: p.line),
       ),
       child: Row(
         children: [
-          Icon(Icons.search_rounded, size: 18, color: p.ink3),
-          const SizedBox(width: 9),
+          Icon(Icons.search_rounded, size: 19, color: p.ink),
+          const SizedBox(width: 10),
           Expanded(
             child: TextField(
               controller: controller,
               onChanged: onChanged,
               textInputAction: TextInputAction.search,
-              style: TextStyle(fontSize: HwType.base, color: p.ink),
+              style: TextStyle(fontSize: 15, color: p.ink),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 hintText: hint,
-                hintStyle:
-                    TextStyle(fontSize: HwType.base, color: p.ink3),
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                hintStyle: TextStyle(fontSize: 15, color: p.ink3),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),
             ),
           ),
@@ -702,7 +791,7 @@ class _UserRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 14),
         child: Row(
           children: [
             Container(
@@ -710,32 +799,39 @@ class _UserRow extends StatelessWidget {
               height: 46,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: const Color(0xFF1F2B33),
-                borderRadius: BorderRadius.circular(15),
+                color: const Color(0xFF1E2A33),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Text(
                 initials,
                 style: const TextStyle(
                   fontSize: 14,
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w700,
                   color: Colors.white,
                 ),
               ),
             ),
-            const SizedBox(width: 13),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
+                    // Top-aligned so a name that wraps to 2+ lines doesn't
+                    // vertically center the jersey badge against the middle
+                    // of the whole wrapped block.
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Flexible(
                         child: Text(
-                          client.clientName,
-                          maxLines: 1,
+                          // "Name - Nickname", same as the Select Client
+                          // sheet (Client.displayName). Wraps to a 2nd line
+                          // for a long name instead of being cut to one.
+                          client.displayName,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 15,
+                            fontSize: 16,
                             fontWeight: FontWeight.w700,
                             color: p.ink,
                           ),
@@ -760,7 +856,7 @@ class _UserRow extends StatelessWidget {
                     subline,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12.5, color: p.ink2),
+                    style: TextStyle(fontSize: 13, color: p.ink2),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -769,7 +865,7 @@ class _UserRow extends StatelessWidget {
                       // Unknown stays absent rather than showing a fake 0%.
                       if (pulse != null) '$pulse% improved',
                     ].join(' · '),
-                    style: TextStyle(fontSize: 12, color: p.ink3),
+                    style: TextStyle(fontSize: 12.5, color: p.ink3),
                   ),
                 ],
               ),
@@ -792,7 +888,7 @@ class _UserRow extends StatelessWidget {
                 ),
               )
             else
-              Icon(Icons.chevron_right_rounded, size: 22, color: p.ink3),
+              Icon(Icons.chevron_right_rounded, size: 20, color: p.ink3),
           ],
         ),
       ),

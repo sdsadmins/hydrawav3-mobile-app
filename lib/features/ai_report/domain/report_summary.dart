@@ -351,7 +351,7 @@ List<String> practitionerQuestions(Map<String, dynamic> report) =>
 
 /// The spec's exact disclaimer, used when the backend sent none.
 const String kDefaultDisclaimer =
-    'Wellness guidance only — supports recovery and mobility; not medical advice.';
+    'Wellness guidance only: supports recovery and mobility; not medical advice.';
 
 String disclaimerText(Map<String, dynamic> report) {
   final fromReport = _str(report['disclaimer']);

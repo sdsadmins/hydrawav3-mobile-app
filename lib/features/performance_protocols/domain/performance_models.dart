@@ -204,6 +204,12 @@ class Pad {
   final List<String> targetMuscles;
   final String? proxyFor;
 
+  /// The engine's own flag that the user asked for this pad on BOTH sides
+  /// ("Both" at intake) — web parity: `recoveryPadMarkers.js`'s `padSides()`
+  /// ORs this into the side list regardless of any manual bilateral toggle,
+  /// "so a bilateral REQUEST draws bilaterally on its own."
+  final bool renderBothSides;
+
   const Pad({
     this.padLabel = '',
     this.side = '',
@@ -213,6 +219,7 @@ class Pad {
     this.stackPosition = '',
     this.targetMuscles = const [],
     this.proxyFor,
+    this.renderBothSides = false,
   });
 
   factory Pad.fromJson(Map<String, dynamic> json) => Pad(
@@ -230,15 +237,27 @@ class Pad {
         targetMuscles:
             _strings(json['target_muscles'] ?? json['targetMuscles']),
         proxyFor: _blankToNull(json['proxy_for'] ?? json['proxyFor']),
+        renderBothSides:
+            json['render_both_sides'] == true || json['renderBothSides'] == true,
       );
 
-  /// "left" / "right" normalised for the 3D viewer, or null when unsided.
+  /// "left" / "right" normalised for the 3D viewer, or null when unsided OR
+  /// [isBilateralSide] (that case is split by role — see [PadPlacementViewData.markers] —
+  /// not collapsed to a single side here).
   String? get sideKey {
+    if (isBilateralSide) return null;
     final s = side.toLowerCase();
     if (s.contains('left')) return 'left';
     if (s.contains('right')) return 'right';
     return null;
   }
+
+  /// True when the engine marked this pad's `side` itself as "bilateral" —
+  /// e.g. a braced hinge hold or a lat pull, where the pad sits on the
+  /// midline/both sides by anatomy rather than one side by choice. This is a
+  /// STRING value on `side`, distinct from [renderBothSides] (a boolean the
+  /// user's own "Both" intake pick sets) — both can independently be true.
+  bool get isBilateralSide => side.toLowerCase().contains('bilateral');
 
   /// The written cue: everything the practitioner needs if 3D can't place it.
   String get cue {
@@ -249,7 +268,7 @@ class Pad {
     final detail = [plane, positionAlongMuscle]
         .where((s) => s.trim().isNotEmpty)
         .join(' · ');
-    final head = parts.join(' — ');
+    final head = parts.join(', ');
     return detail.isEmpty ? head : '$head ($detail)';
   }
 }
@@ -269,11 +288,25 @@ class PadSet {
   final String padGeometry;
 
   /// A set the engine authored but did NOT apply this session, with the reason
-  /// it was held back (`chain.conditional.withheld_sets[]`). It has no pads —
-  /// that is the point — and is shown so the practitioner can see the set exists
-  /// and what would bring it in.
+  /// it was held back (`chain.conditional.withheld_sets[]` /
+  /// `chain.referral.withheld_sets[]`). It has NO pads — the role doesn't apply
+  /// to this presentation at all (e.g. a rom-followup set on a discomfort
+  /// pathway) — and is shown so the practitioner can see the set exists and what
+  /// would bring it in.
   final bool withheld;
   final String withheldReason;
+
+  /// A set the engine authored WITH real pad geometry, but scheduled for a
+  /// LATER session rather than this one (`chain.sequence_later[]`) — distinct
+  /// from [withheld]: this set's role applies to the case, it's just next in
+  /// the chain's sequence rather than applied now. Carries [sun]/[moon] like an
+  /// applied set, so it can be listed with its full placement, just not drawn
+  /// on the model this session.
+  final bool deferred;
+
+  /// `chain.sequence_later[].session_priority` / `chain.apply_now[].session_priority`
+  /// — the order this set's role is applied in across the chain (1 = first).
+  final int sessionPriority;
 
   const PadSet({
     this.setIndex = 1,
@@ -285,6 +318,8 @@ class PadSet {
     this.padGeometry = '',
     this.withheld = false,
     this.withheldReason = '',
+    this.deferred = false,
+    this.sessionPriority = 0,
   });
 
   factory PadSet.fromJson(Map<String, dynamic> json) => PadSet(
@@ -304,8 +339,17 @@ class PadSet {
             : null,
         padGeometry:
             (json['pad_geometry'] ?? json['padGeometry'] ?? '').toString(),
+        withheld: _bool(json['withheld'], false),
+        withheldReason: (json['withheld_reason'] ?? json['withheldReason'] ?? '')
+            .toString(),
+        deferred: _bool(json['deferred'], false),
+        sessionPriority:
+            _int(json['session_priority'] ?? json['sessionPriority'], 0),
       );
 
+  /// Raw-index title. Prefer [PadSetPayload.titleOf], which prints the set
+  /// number the way the surface it came from counts — performance authors
+  /// `set_index` 0-based, so this getter alone labels its first set "Set 0".
   String get title => placementLabel.trim().isEmpty
       ? 'Set $setIndex'
       : 'Set $setIndex · $placementLabel';
@@ -397,15 +441,53 @@ class PadSetPayload {
     this.sequencingNote = '',
   });
 
-  /// Sets that will actually be applied — the ones with pads. [sets] also
-  /// carries withheld sets so they can be listed and explained.
-  List<PadSet> get appliedSets => sets.where((s) => !s.withheld).toList();
+  /// Sets that will actually be applied THIS SESSION — the ones with pads
+  /// drawn now. [sets] also carries deferred and withheld sets so they can be
+  /// listed and explained.
+  List<PadSet> get appliedSets =>
+      sets.where((s) => !s.withheld && !s.deferred).toList();
+
+  /// Authored WITH pads, but sequenced into a later session — not applied now,
+  /// not excluded either. Distinct from [withheldSets], whose role doesn't
+  /// apply to this case at all.
+  List<PadSet> get deferredSets => sets.where((s) => s.deferred).toList();
 
   List<PadSet> get withheldSets => sets.where((s) => s.withheld).toList();
 
-  /// A withheld set has no pads, so it can never make a refusal into a
-  /// placement — the test is whether anything is actually applied.
+  /// A withheld or deferred set has no pads drawn this session, so neither can
+  /// make a refusal into a placement — the test is whether anything is
+  /// actually applied.
   bool get isRefusal => chain == null || appliedSets.isEmpty;
+
+  /// One payload shape serves BOTH surfaces; the assistant tells them apart by
+  /// this same field before it even opens the screen.
+  bool get isRecovery => discipline.trim().toLowerCase() == 'recovery';
+
+  /// The set number to PRINT for [set].
+  ///
+  /// The two corpora disagree on the origin: recovery authors `set_index`
+  /// 1-based (1..5, per Rulebook A.1), performance authors it 0-based — its
+  /// normalizer literally stores `parseInt(line) - 1` and the schema defaults to
+  /// 0. Rendering the raw value therefore labelled the first performance set
+  /// "Set 0". Shifting it in the model would be worse: the same number indexes
+  /// the palette, the marker `setIndex` and the viewer's focus, so it has to
+  /// stay 0-based everywhere except the label.
+  int displayIndexOf(PadSet set) =>
+      isRecovery ? set.setIndex : set.setIndex + 1;
+
+  /// The 0-based index [set]'s MARKERS use — the same number that keys the
+  /// palette (`setColorFor`), the 3D stage's per-set focus/arcs, and the pad
+  /// lookup (`PadPlacementViewData.padOf`). Same normalization as
+  /// [displayIndexOf], minus the +1 for the label. Callers that need to name
+  /// or focus a set by its own identity (not its position in a filtered
+  /// list — some sets can be withheld/deferred) should use this instead of a
+  /// loop index, or the set's number and its markers/colour disagree.
+  int markerIndexOf(PadSet set) => isRecovery ? set.setIndex - 1 : set.setIndex;
+
+  /// [PadSet.title] with the printable set number.
+  String titleOf(PadSet set) => set.placementLabel.trim().isEmpty
+      ? 'Set ${displayIndexOf(set)}'
+      : 'Set ${displayIndexOf(set)} · ${set.placementLabel}';
 
   String get disciplineLabel =>
       displayName.trim().isEmpty ? discipline : displayName;
@@ -591,6 +673,15 @@ List<String> _strings(dynamic raw) {
 String? _blankToNull(dynamic v) {
   final s = v?.toString().trim();
   return (s == null || s.isEmpty || s == 'null') ? null : s;
+}
+
+bool _bool(dynamic v, bool fallback) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v?.toString().trim().toLowerCase();
+  if (s == 'true') return true;
+  if (s == 'false') return false;
+  return fallback;
 }
 
 int _int(dynamic v, int fallback) =>

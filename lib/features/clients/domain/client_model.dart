@@ -55,11 +55,16 @@ class Client {
   /// True for members created as players (`memberType: "Player"`).
   bool get isPlayer => (memberType ?? '').toLowerCase() == 'player';
 
-  /// Display label: "Name - Nickname" (matches the web client picker).
+  /// What the app SHOWS for this person: the nickname when there is one
+  /// (clinic names are auto-generated, e.g. "bssb-597c4"), else the name.
+  /// Display only — requests still send `clientName` / `nickname` unchanged.
   String get displayName =>
       nickname != null && nickname!.trim().isNotEmpty
-          ? '$clientName - $nickname'
+          ? nickname!.trim()
           : clientName;
+
+  /// The stored name, shown under the nickname on the profile only.
+  String get fullName => clientName;
 
   static double? _toDouble(dynamic v) {
     if (v == null) return null;

@@ -5,10 +5,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/theme_constants.dart';
 import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/premium.dart';
 import '../../domain/auth_models.dart';
 import '../providers/auth_provider.dart';
 import '../providers/client_auth_provider.dart';
+import '../widgets/auth_ui.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -92,211 +94,158 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final p = RefPalette.of(context);
     // Errors are surfaced manually in [_login] so a failed practitioner attempt
     // doesn't flash an error before the client-login fallback runs.
 
-    return Scaffold(
-      backgroundColor: ThemeConstants.background,
-      body: Container(
-        decoration: BoxDecoration(color: ThemeConstants.background),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 20),
-
-                    /// Logo
-                    AnimatedEntrance(
-                      child: Column(
-                        children: [
-                          SizedBox(
-                            width: 340,
-                            height: 120,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                isDark
-                                    ? Image.asset(
-                                        'assets/images/White_Hydrawav3_Logo.png',
-                                        height: 62,
-                                        fit: BoxFit.contain,
-                                      )
-                                    : SvgPicture.asset(
-                                        'assets/images/Hydrawav3_Black_Logo.svg',
-                                        height: 120,
-                                        fit: BoxFit.contain,
-                                      ),
-                                Positioned(
-                                  top: 6,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: ThemeConstants.accent,
-                                      borderRadius: BorderRadius.circular(12),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: ThemeConstants.accent
-                                              .withValues(alpha: 0.3),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Text(
-                                      'BETA',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 1.2,
-                                      ),
-                                    ),
-                                  ),
+    return AuthPage(
+      child: AutofillGroup(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              /// Logo — same size and BETA badge as before.
+              AnimatedEntrance(
+                child: Center(
+                  child: SizedBox(
+                    width: 340,
+                    height: 120,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        isDark
+                            ? Image.asset(
+                                'assets/images/White_Hydrawav3_Logo.png',
+                                height: 62,
+                                fit: BoxFit.contain,
+                              )
+                            : SvgPicture.asset(
+                                'assets/images/Hydrawav3_Black_Logo.svg',
+                                height: 120,
+                                fit: BoxFit.contain,
+                              ),
+                        Positioned(
+                          top: 6,
+                          right: 0,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: ThemeConstants.accent,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: ThemeConstants.accent
+                                      .withValues(alpha: 0.3),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 36),
-
-                    /// Form
-                    AnimatedEntrance(
-                      index: 1,
-                      child: GradientCard(
-                        padding: const EdgeInsets.all(24),
-                        borderRadius: 20,
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            children: [
-                              /// Username
-                              TextFormField(
-                                controller: _userCtrl,
-                                decoration:
-                                    InputDecoration(hintText: 'Username'),
-                                validator: (v) => (v == null || v.isEmpty)
-                                    ? 'Required'
-                                    : null,
+                            child: const Text(
+                              'BETA',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.2,
                               ),
-
-                              const SizedBox(height: 12),
-
-                              /// Password
-                              TextFormField(
-                                controller: _passCtrl,
-                                obscureText: _obscure,
-                                decoration: InputDecoration(
-                                  hintText: 'Password',
-                                  suffixIcon: IconButton(
-                                    icon: Icon(_obscure
-                                        ? Icons.visibility_off
-                                        : Icons.visibility),
-                                    onPressed: () =>
-                                        setState(() => _obscure = !_obscure),
-                                  ),
-                                ),
-                                validator: (v) => (v == null || v.isEmpty)
-                                    ? 'Required'
-                                    : null,
-                              ),
-
-                              const SizedBox(height: 20),
-
-                              /// ✅ FIXED BUTTON (NO ERROR)
-                              SizedBox(
-                                width: double.infinity,
-                                child: _GradientCTA(
-                                  label: 'Login',
-                                  isLoading: _submitting,
-                                  onTap: _login,
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              GestureDetector(
-                                onTap: _openOnboarding,
-                                child: Text.rich(
-                                  TextSpan(
-                                    text: "Don't have an account? ",
-                                    style: TextStyle(
-                                      color: ThemeConstants.textSecondary,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    children: [
-                                      TextSpan(
-                                        text: 'Create New Account',
-                                        style: TextStyle(
-                                          color: ThemeConstants.accent,
-                                          decoration: TextDecoration.underline,
-                                          decorationColor:
-                                              ThemeConstants.accent,
-                                          decorationThickness: 2,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Text(
+                'Practitioner sign in',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: p.ink3),
+              ),
+              const SizedBox(height: 22),
+
+              /// `.authwrap .card` — labelled fields.
+              AnimatedEntrance(
+                index: 1,
+                child: AuthCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      AuthField(
+                        controller: _userCtrl,
+                        label: 'Username',
+                        hint: 'Your username',
+                        action: TextInputAction.next,
+                        autofill: const [AutofillHints.username],
+                        validator: (v) =>
+                            (v == null || v.isEmpty) ? 'Required' : null,
                       ),
+                      AuthField(
+                        controller: _passCtrl,
+                        label: 'Password',
+                        hint: 'Your password',
+                        obscure: _obscure,
+                        action: TextInputAction.done,
+                        autofill: const [AutofillHints.password],
+                        onSubmitted: (_) => _login(),
+                        suffix: IconButton(
+                          tooltip: _obscure ? 'Show password' : 'Hide password',
+                          icon: Icon(
+                            _obscure
+                                ? Icons.visibility_off_rounded
+                                : Icons.visibility_rounded,
+                            color: p.ink3,
+                            size: 20,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscure = !_obscure),
+                        ),
+                        validator: (v) =>
+                            (v == null || v.isEmpty) ? 'Required' : null,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              AnimatedEntrance(
+                index: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AuthPrimaryButton(
+                      label: 'Sign in',
+                      busy: _submitting,
+                      onTap: _login,
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AuthOutlineButton(
+                            label: 'Create account',
+                            onTap: _openOnboarding,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AuthOutlineButton(
+                            label: 'Forgot password',
+                            onTap: () =>
+                                context.push(RoutePaths.forgotPassword),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-            ),
+            ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _GradientCTA extends StatelessWidget {
-  final String label;
-
-  final bool isLoading;
-  final VoidCallback onTap;
-
-  const _GradientCTA({
-    required this.label,
-    this.isLoading = false,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: isLoading ? null : onTap,
-      child: Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: ThemeConstants.accent,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Center(
-          child: isLoading
-              ? const CircularProgressIndicator(color: Colors.white)
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(label, style: TextStyle(color: Colors.white)),
-                    const SizedBox(width: 8),
-                  ],
-                ),
         ),
       ),
     );

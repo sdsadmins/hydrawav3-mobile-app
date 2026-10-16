@@ -43,6 +43,10 @@ class HwIcons {
   static const String bag = '$_d/bag.svg';
   static const String drag = '$_d/drag.svg';
   static const String x = '$_d/x.svg';
+  static const String drop = '$_d/drop.svg';
+
+  /// House with a wave line — the v6 "Lease a Device" mark (`IC.home2`).
+  static const String home2 = '$_d/home2.svg';
 
   // More
   static const String pencil = '$_d/pencil.svg';

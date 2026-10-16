@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/constants/ble_constants.dart';
 import '../../../../core/constants/theme_constants.dart';
-import '../../../../core/theme/widgets/premium.dart';
+import '../../../../core/router/route_names.dart';
+import '../../../../core/theme/hw_tokens.dart';
+import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../ble/data/ble_command_service.dart';
 import '../../../ble/data/ble_repository.dart';
@@ -19,6 +22,7 @@ import '../../../ble/services/ble_scanner.dart';
 import '../../data/device_repository.dart';
 import '../../domain/device_model.dart';
 import '../providers/wifi_devices_provider.dart';
+import '../widgets/device_center_widgets.dart';
 
 class DeviceRegisterScreen extends ConsumerStatefulWidget {
   const DeviceRegisterScreen({super.key});
@@ -1214,7 +1218,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                               try {
                                 await ref
                                     .read(deviceRepositoryProvider)
-                                    .locateDevice(device.macAddress,
+                                    .locateDeviceViaMqtt(device.macAddress,
                                         beeping: beep);
                                 if (dialogContext.mounted) {
                                   Navigator.of(dialogContext).pop();
@@ -2726,6 +2730,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                               const SizedBox(height: 8),
                               TextFormField(
                                 controller: _serialCtrl,
+                                inputFormatters: [_MacInputFormatter()],
                                 style: TextStyle(
                                     color: ThemeConstants.textPrimary),
                                 decoration: InputDecoration(
@@ -2815,161 +2820,6 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     });
   }
 
-  Widget _buildDeviceCard(DeviceInfo device) {
-    return GradientCard(
-      borderRadius: 20,
-      showShadow: false,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: ThemeConstants.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(Icons.memory,
-                      size: 21, color: ThemeConstants.accent),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        device.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: ThemeConstants.textPrimary),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        device.macAddress,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: ThemeConstants.textSecondary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: ThemeConstants.surfaceVariant.withValues(alpha: 0.48),
-                border: Border.all(color: ThemeConstants.border),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('REGISTERED DEVICE',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.6,
-                          color: ThemeConstants.textTertiary)),
-                  const SizedBox(height: 6),
-                  Text(device.macAddress,
-                      style: TextStyle(
-                          fontSize: 13,
-                          color: ThemeConstants.textPrimary,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            Divider(height: 1, color: ThemeConstants.border),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                _cardActionTile(
-                  icon: Icons.my_location_rounded,
-                  label: 'Locate',
-                  onTap: () => _openLocateModal(device),
-                ),
-                _cardActionTile(
-                  icon: Icons.fact_check_rounded,
-                  label: 'Report',
-                  onTap: () => _openDiagnosticModal(device),
-                ),
-                _cardActionTile(
-                  icon: Icons.wifi_rounded,
-                  label: 'Edit WiFi',
-                  onTap: () => _openWifiModal(device),
-                ),
-                _cardActionTile(
-                  icon: Icons.drive_file_rename_outline_rounded,
-                  label: 'Edit Name',
-                  onTap: () => _openEditNameModal(device),
-                ),
-                _cardActionTile(
-                  icon: Icons.delete_outline_rounded,
-                  label: 'Remove',
-                  color: ThemeConstants.error,
-                  onTap: () => _removeRegisteredDevice(device),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _cardActionTile({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    Color? color,
-  }) {
-    final c = color ?? ThemeConstants.textSecondary;
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 22, color: c),
-              const SizedBox(height: 6),
-              Text(
-                label.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.4,
-                  color: c,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   /// A vertically-scrollable centered message so RefreshIndicator's pull
   /// gesture still works when the list is empty / errored / has no devices.
   Widget _pullableMessage(String message) {
@@ -2993,122 +2843,188 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
     );
   }
 
+  /// v6 Device Center → tap a unit: its detail page. Every button there calls
+  /// the same flow the card's action row used to (rename, WiFi, locate,
+  /// report, remove); hand-off opens Users, where a lease is set up per
+  /// client.
+  void _openDetail(DeviceInfo device) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => DeviceDetailPage(
+        device: device,
+        candidates: _bleConnectCandidates(device.macAddress),
+        onRename: () => _openEditNameModal(device),
+        onWifi: () => _openWifiModal(device),
+        onLocate: () => _openLocateModal(device),
+        onReport: () => _openDiagnosticModal(device),
+        onHandOff: () => context.go(RoutePaths.users),
+        onUnregister: () => _removeRegisteredDevice(device),
+      ),
+    ));
+  }
+
+  /// Bluetooth-connected registered units, for the "N of M connected" line.
+  int _connectedCount(List<DeviceInfo> devices) => devices
+      .where((d) => watchUnitLink(ref, d, _bleConnectCandidates(d.macAddress))
+          .connected)
+      .length;
+
   @override
   Widget build(BuildContext context) {
     final devicesAsync = ref.watch(wifiDevicesByOrgProvider);
+    final p = RefPalette.of(context);
+    final all = devicesAsync.valueOrNull ?? const <DeviceInfo>[];
+    final orgName = ref.watch(authStateProvider).selectedOrgName;
+    final summary = [
+      if (all.isNotEmpty) '${_connectedCount(all)} of ${all.length} connected',
+      if (orgName != null && orgName.isNotEmpty) orgName,
+    ].join(' · ');
+    // Tablet: the list sits in the centred 680px column (v6 `97-tablet`).
+    final side = HwTablet.sidePadding(context, column: HwTablet.read, phone: 16);
 
     return Scaffold(
-      backgroundColor: ThemeConstants.background,
+      backgroundColor: p.bg,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.fromLTRB(side, 10, side, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ── header ────────────────────────────────────────────────────
               Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: ThemeConstants.border),
-                      ),
-                      child: Icon(
-                        Icons.arrow_back_rounded,
-                        color: ThemeConstants.textPrimary,
-                        size: 20,
+                  Semantics(
+                    button: true,
+                    label: 'Back',
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => context.pop(),
+                      child: Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: p.card,
+                          border: Border.all(color: p.cardline),
+                        ),
+                        child: Icon(Icons.chevron_left_rounded,
+                            color: p.ink2, size: 26),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Device Fleet',
+                          'Device Center',
                           style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
                             letterSpacing: -0.3,
-                            color: ThemeConstants.textPrimary,
+                            color: p.ink,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Manage your registered Hydra devices',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.3,
-                            color: ThemeConstants.textSecondary,
+                        if (summary.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            summary,
+                            style: TextStyle(fontSize: 13, color: p.ink3),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  GestureDetector(
-                    onTap: _showCreateSheet,
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: ThemeConstants.accent,
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: ThemeConstants.accent.withValues(alpha: 0.25),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.add_rounded,
-                        color: _onAccent(context),
-                        size: 22,
+                  const SizedBox(width: 10),
+                  Semantics(
+                    button: true,
+                    label: 'Register a unit',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: _showCreateSheet,
+                      child: Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: p.card,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: p.cardline),
+                        ),
+                        child: Icon(Icons.add_rounded,
+                            color: p.copperInk, size: 24),
                       ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              Container(
-                decoration: BoxDecoration(
-                  color: ThemeConstants.surface,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: ThemeConstants.border),
-                ),
-                child: TextField(
-                  controller: _searchCtrl,
-                  onChanged: (value) =>
-                      setState(() => _searchText = value.trim()),
-                  style: TextStyle(color: ThemeConstants.textPrimary),
-                  decoration: InputDecoration(
-                    hintText:
-                        'Filter by hardware name, MAC ID or protocol type...',
-                    hintStyle: TextStyle(color: ThemeConstants.textTertiary),
-                    prefixIcon:
-                        Icon(Icons.search, color: ThemeConstants.textTertiary),
-                    filled: false,
-                    border: InputBorder.none,
+              const SizedBox(height: 14),
+
+              // ── Auto scan (BLE) — the same register / scan flow as + ─────
+              Material(
+                color: p.tanSoft,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: _showCreateSheet,
+                  child: SizedBox(
+                    height: 52,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.bluetooth_searching_rounded,
+                            size: 19, color: p.copperInk),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Auto scan (BLE)',
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w800,
+                            color: p.copperInk,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+
+              // ── search (kept) ─────────────────────────────────────────────
+              Container(
+                height: 46,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: p.card,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: p.cardline),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.search_rounded, size: 19, color: p.ink3),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        onChanged: (value) =>
+                            setState(() => _searchText = value.trim()),
+                        style: TextStyle(color: p.ink, fontSize: 14),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          border: InputBorder.none,
+                          hintText: 'Search by name or MAC ID',
+                          hintStyle: TextStyle(color: p.ink3),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
               Expanded(
                 child: RefreshIndicator(
-                  color: ThemeConstants.accent,
+                  color: p.copper,
                   onRefresh: () =>
                       ref.refresh(wifiDevicesByOrgProvider.future),
                   child: Builder(
@@ -3123,7 +3039,7 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
                       if (firstLoading) {
                         return Center(
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: ThemeConstants.accent),
+                              strokeWidth: 2, color: p.copper),
                         );
                       }
 
@@ -3155,12 +3071,28 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
 
                       return ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        padding: EdgeInsets.zero,
-                        itemCount: filteredDevices.length,
+                        padding: const EdgeInsets.only(bottom: 24),
+                        itemCount: filteredDevices.length + 1,
                         separatorBuilder: (_, __) =>
                             const SizedBox(height: 12),
-                        itemBuilder: (context, index) =>
-                            _buildDeviceCard(filteredDevices[index]),
+                        itemBuilder: (context, index) {
+                          if (index == filteredDevices.length) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                'Tap a unit for rename, WiFi setup, and status.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 13, color: p.ink3),
+                              ),
+                            );
+                          }
+                          final d = filteredDevices[index];
+                          return DeviceUnitCard(
+                            device: d,
+                            candidates: _bleConnectCandidates(d.macAddress),
+                            onTap: () => _openDetail(d),
+                          );
+                        },
                       );
                     },
                   ),
@@ -3170,6 +3102,33 @@ class _State extends ConsumerState<DeviceRegisterScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Auto-inserts a `:` after every 2 hex digits while typing a MAC address,
+/// so the manual-entry field reads `AA:BB:...` without the user typing the
+/// separators themselves. Strips anything non-hex, uppercases, and caps at
+/// 12 hex digits (the 6 octets XX:XX:XX:XX:XX:XX).
+class _MacInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final stripped = newValue.text.toUpperCase().replaceAll(RegExp(r'[^0-9A-F]'), '');
+    final hex = stripped.substring(0, stripped.length.clamp(0, 12));
+
+    final buffer = StringBuffer();
+    for (var i = 0; i < hex.length; i++) {
+      if (i > 0 && i % 2 == 0) buffer.write(':');
+      buffer.write(hex[i]);
+    }
+    final formatted = buffer.toString();
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }

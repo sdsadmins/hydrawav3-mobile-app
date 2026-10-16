@@ -7,13 +7,16 @@ import 'package:hydrawav3/core/storage/preferences.dart';
 import 'package:hydrawav3/core/theme/widgets/hw_primitives.dart';
 import 'package:hydrawav3/features/auth/data/auth_remote_source.dart';
 import 'package:hydrawav3/features/auth/domain/auth_models.dart';
+import 'package:hydrawav3/features/auth/presentation/providers/auth_provider.dart';
 import 'package:hydrawav3/features/auth/presentation/screens/select_organization_page.dart'
     show organizationProvider;
 import 'package:hydrawav3/features/ble/domain/ble_device_model.dart';
 import 'package:hydrawav3/features/ble/presentation/providers/ble_connection_provider.dart';
 import 'package:hydrawav3/features/devices/presentation/providers/wifi_devices_provider.dart';
 import 'package:hydrawav3/features/notifications/presentation/providers/notification_provider.dart';
+import 'package:hydrawav3/features/payments/domain/plan_model.dart';
 import 'package:hydrawav3/features/payments/presentation/providers/token_balance_provider.dart';
+import 'package:hydrawav3/features/presets/presentation/providers/preset_provider.dart';
 import 'package:hydrawav3/features/protocols/presentation/providers/protocol_provider.dart';
 import 'package:hydrawav3/features/settings/presentation/screens/settings_screen.dart';
 
@@ -28,6 +31,34 @@ class _FakeAuthSource implements AuthRemoteSource {
   dynamic noSuchMethod(Invocation invocation) => null;
 }
 
+/// Signed in to org 1 as the primary-account admin.
+class _FakeAuth extends StateNotifier<AuthState> implements AuthNotifier {
+  _FakeAuth()
+      : super(const AuthState(
+          isAuthenticated: true,
+          isInitialized: true,
+          selectedOrgId: '1',
+          user: UserProfile(
+            id: '1',
+            firstName: 'Marcus',
+            lastName: 'Ellison',
+            roles: ['PRIMARY ACCOUNT - ADMIN'],
+          ),
+        ));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+/// A fixed credit balance, with no polling.
+class _FakeTokens extends StateNotifier<double?>
+    implements TokenBalanceNotifier {
+  _FakeTokens(super.v);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
 /// More mirrors the UI handoff's `renderMore` (app.js:1883). This pins the
 /// section list and the rows inside each one, since the screen had drifted:
 /// extra Library rows, legal spilled across five rows, a stray device-
@@ -35,10 +66,11 @@ class _FakeAuthSource implements AuthRemoteSource {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  Future<void> pumpMore(WidgetTester tester) async {
+  Future<void> pumpMore(WidgetTester tester,
+      {List<Override> extra = const [], double width = 390}) async {
     final prefs = await SharedPreferences.getInstance();
     // Tall surface so the whole screen lays out and every row is findable.
-    tester.view.physicalSize = const Size(390 * 3, 3000 * 3);
+    tester.view.physicalSize = Size(width * 3, 3600 * 3);
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
 
@@ -59,6 +91,7 @@ void main() {
           notificationsProvider.overrideWith((ref) async => []),
           protocolListProvider.overrideWith((ref) async => []),
           authRemoteSourceProvider.overrideWithValue(_FakeAuthSource()),
+          ...extra,
         ],
         child: const MaterialApp(home: SettingsScreen()),
       ),
@@ -154,5 +187,122 @@ void main() {
     expect(find.text('Default session music'), findsOneWidget);
     expect(find.text('Labs · Readiness Score'), findsOneWidget);
     expect(find.text('Session music'), findsNothing);
+  });
+
+  testWidgets('v6 adds Resources & business and Labs & insights',
+      (tester) async {
+    await pumpMore(tester);
+    expect(find.text('RESOURCES & BUSINESS'), findsOneWidget);
+    expect(find.text('LABS & INSIGHTS'), findsOneWidget);
+    for (final row in [
+      'Call Customer Support',
+      'Business & Educational Resources',
+      'START HERE',
+      'Buy More Products',
+      'Rent & Earn',
+      'AI Mobility Report',
+      'This Week',
+      'Last Session',
+    ]) {
+      expect(find.text(row), findsOneWidget, reason: row);
+    }
+    expect(find.text('Rental Economics'), findsOneWidget);
+    expect(find.text('Labs · Measure Breath'), findsOneWidget);
+    // Coming online is the one v6 item.
+    expect(find.text('Breath Sync + Endurance Breathing'), findsOneWidget);
+    expect(find.text('Mirror Placements'), findsNothing);
+    expect(find.text('Calming Recipes'), findsNothing);
+  });
+
+  testWidgets('plan shows its price and presets their real count',
+      (tester) async {
+    await pumpMore(tester, extra: [
+      currentPlanProvider.overrideWith((ref) async => const SubscriptionPlan(
+            name: 'Sports plan',
+            amount: 99,
+            currency: 'usd',
+            billingCycle: 'monthly',
+          )),
+      presetListProvider.overrideWith((ref) => Stream.value(const [])),
+    ]);
+    expect(find.text(r'Sports plan · $99/month'), findsOneWidget);
+    expect(find.text('0 saved one-tap setups'), findsOneWidget);
+    expect(find.text('3 saved one-tap setups'), findsNothing);
+  });
+
+  testWidgets('role card, and the active organization shows its credits',
+      (tester) async {
+    await pumpMore(tester, extra: [
+      authStateProvider.overrideWith((ref) => _FakeAuth()),
+      tokenBalanceProvider.overrideWith((ref) => _FakeTokens(27.5)),
+    ]);
+    expect(find.text('Main admin'), findsOneWidget);
+    expect(find.text('Full control across every organization'), findsOneWidget);
+    expect(find.text('Active'), findsOneWidget);
+    expect(find.text('organization credits'), findsOneWidget);
+    expect(find.text('27.5 left'), findsOneWidget);
+    // Signed in, the screen's history/stat reads start retry timers; let
+    // them run out before the test ends.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(minutes: 1));
+  });
+
+  testWidgets('lays out on a tablet', (tester) async {
+    await pumpMore(tester, width: 834);
+    expect(tester.takeException(), isNull);
+    expect(find.text('LABS & INSIGHTS'), findsOneWidget);
+  });
+
+  for (final width in [390.0, 834.0])
+  testWidgets(
+      'Labs & insights rows open their sheets '
+      '(${width > 600 ? 'tablet' : 'phone'})', (tester) async {
+    await pumpMore(tester, width: width);
+
+    Future<void> open(String row) async {
+      await tester.ensureVisible(find.text(row));
+      await tester.pump();
+      await tester.tap(find.text(row));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    Future<void> close() async {
+      await tester.tap(find.bySemanticsLabel('Close').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    await open('Labs · Measure Breath');
+    expect(find.text('Ever measured your readiness from your own breath?'),
+        findsOneWidget);
+    await tester.tap(find.text('How it works'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Readiness from breath — how it works'), findsOneWidget);
+    expect(find.text('Your breath becomes numbers'), findsOneWidget);
+    await close();
+
+    await open('AI Mobility Report');
+    expect(find.text('Uncover your full mobility picture'), findsOneWidget);
+    expect(find.text('▶  Generate my AI report'), findsOneWidget);
+    await close();
+
+    await open('This Week');
+    expect(find.text('measured, not estimated'), findsOneWidget);
+    expect(find.text('Outcome Pulse'), findsOneWidget);
+    expect(find.text('Active days · 7d'), findsOneWidget);
+    await close();
+
+    if (find.text('Game Day').evaluate().isNotEmpty) {
+      await open('Game Day');
+      expect(find.text('Activate'), findsOneWidget);
+      await close();
+    }
+
+    // No history in the test, so Last Session says so instead of opening.
+    await open('Last Session');
+    expect(find.text('Last session'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

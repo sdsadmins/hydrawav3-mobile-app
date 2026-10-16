@@ -97,7 +97,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                 data: (items) => items.isEmpty
                     ? HwCard(
                         child: Text(
-                          'Nothing yet — session, lease and report events '
+                          'Nothing yet. Session, lease and report events '
                           'will land here.',
                           style: TextStyle(
                               fontSize: HwType.sm,
@@ -115,7 +115,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               ),
               const SizedBox(height: HwSpace.s1),
               Text(
-                'Quiet by design — only session, lease, report, and fleet '
+                'Quiet by design: only session, lease, report, and fleet '
                 'events.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
