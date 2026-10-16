@@ -153,6 +153,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   bool _bootstrapStarted = false;
   int _activeDevicePage = 0;
 
+  /// The device pager — its position sizes the pager to the card on screen.
+  final PageController _devicePager = PageController();
+
   /// Devices with a "Restart this stage" request in flight — drives the
   /// button's own inline spinner and keeps it from being tapped twice.
   final Set<String> _restartingStageDeviceIds = {};
@@ -583,7 +586,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
               'Unknown Protocol';
           await _ensureActiveSessionCreated(
             protocolName: protocolName,
-            totalDurationSeconds: updatedEngineState.timer.totalDuration.inSeconds,
+            totalDurationSeconds:
+                updatedEngineState.timer.totalDuration.inSeconds,
           );
           await _syncCurrentSessionToActiveSessions();
         } else {
@@ -754,8 +758,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // to the server it just came from: the server would re-broadcast, this
     // listener would fire again, and pause/resume would flicker in an infinite
     // loop. Only locally-initiated pause/resume should sync to the server.
-    final engine =
-        ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+    final engine = ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
     final remoteAt = engine.lastRemoteLifecycleAt;
     final fromRemote = remoteAt != null &&
         DateTime.now().difference(remoteAt) < const Duration(seconds: 2);
@@ -1261,6 +1264,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   @override
   void dispose() {
+    _devicePager.dispose();
     WidgetsBinding.instance.removeObserver(this);
     // Music is a session-screen feature Ã¢â‚¬â€ never let it outlive the screen.
     unawaited(_setWakelock(false, fromDispose: true));
@@ -1706,7 +1710,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     if (ref.read(bleProvisioningIdsProvider).contains(deviceId)) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${_deviceLabel(deviceId)} lost connection, reconnecting…'),
+        content:
+            Text('${_deviceLabel(deviceId)} lost connection, reconnecting…'),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -2011,16 +2016,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       _activeDevicePage = 0;
     }
 
-    // Telemetry adds optional blocks (fault card / warning banner / sensor row)
-    // to the device card. Give the fixed-height PageView extra room when any
-    // device is showing them, so the controls (incl. Stop) stay on-screen
-    // instead of being scrolled out of view.
-    final hasTelemetryExtras = orderedDeviceIds.any((id) {
-      final t = engine.telemetryByDevice[id];
-      return t != null &&
-          (t.isFault || t.isWarning || t.sensorReadouts.isNotEmpty);
-    });
-
     final verticalLayout = ref.watch(sessionDevicesVerticalProvider);
 
     // Builds one device card, shared by the vertical list and the horizontal
@@ -2189,8 +2184,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
           // horizontal pager (swipe + dots). Only useful with >1 device.
           if (orderedDeviceIds.length > 1 && !tablet)
             LiveHeaderButton(
-              tooltip:
-                  verticalLayout ? 'Switch to swipe view' : 'Switch to list view',
+              tooltip: verticalLayout
+                  ? 'Switch to swipe view'
+                  : 'Switch to list view',
               onTap: () =>
                   ref.read(sessionDevicesVerticalProvider.notifier).toggle(),
               icon: Icon(verticalLayout
@@ -2235,8 +2231,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       body: SafeArea(
         child: ListView(
           // 18px on a phone; the centred 786px "wide" column on a tablet.
-          padding: EdgeInsets.symmetric(
-              horizontal: HwTablet.sidePadding(context)),
+          padding:
+              EdgeInsets.symmetric(horizontal: HwTablet.sidePadding(context)),
           children: [
             header,
             if (status == SessionStatus.idle) ...[
@@ -2271,23 +2267,57 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 ],
                 const SizedBox(height: 8),
               ] else ...[
-                SizedBox(
-                  // Plus devices render an extra progress card inside the device
-                  // card, so give the page more height when any device is Plus.
-                  height: (engine.protocolPlusSequenceByDevice.isNotEmpty
-                          ? 860
-                          : 680) +
-                      (hasTelemetryExtras ? 130 : 0),
-                  child: PageView.builder(
-                    itemCount: orderedDeviceIds.length,
-                    onPageChanged: (idx) =>
-                        setState(() => _activeDevicePage = idx),
-                    itemBuilder: (context, index) => buildDeviceCard(
-                      orderedDeviceIds[index],
-                      scrollable: true,
+                // Each card is as tall as its own content needs: a Protocol
+                // Plus unit's card (stage strip + legend) is taller than a
+                // normal protocol's, and telemetry blocks add more — so a
+                // normal card next to a Plus one isn't stretched with empty
+                // space. While swiping, the height moves between the two
+                // cards' heights.
+                () {
+                  // Telemetry adds optional blocks (fault card / warning
+                  // banner / sensor row); give that card extra room so its
+                  // controls (incl. Stop) stay on-screen.
+                  bool extras(String id) {
+                    final t = engine.telemetryByDevice[id];
+                    return t != null &&
+                        (t.isFault ||
+                            t.isWarning ||
+                            t.sensorReadouts.isNotEmpty);
+                  }
+
+                  final heights = [
+                    for (final id in orderedDeviceIds)
+                      ((engine.protocolPlusSequenceByDevice[id]?.length ?? 0) >
+                                  1
+                              ? 860.0
+                              : 680.0) +
+                          (extras(id) ? 130 : 0),
+                  ];
+                  return AnimatedBuilder(
+                    animation: _devicePager,
+                    builder: (context, pager) {
+                      final page = _devicePager.hasClients &&
+                              _devicePager.position.haveDimensions
+                          ? (_devicePager.page ?? _activeDevicePage.toDouble())
+                          : _activeDevicePage.toDouble();
+                      final at = page.clamp(0.0, heights.length - 1.0);
+                      final lo = at.floor(), hi = at.ceil();
+                      final h =
+                          heights[lo] + (heights[hi] - heights[lo]) * (at - lo);
+                      return SizedBox(height: h, child: pager);
+                    },
+                    child: PageView.builder(
+                      controller: _devicePager,
+                      itemCount: orderedDeviceIds.length,
+                      onPageChanged: (idx) =>
+                          setState(() => _activeDevicePage = idx),
+                      itemBuilder: (context, index) => buildDeviceCard(
+                        orderedDeviceIds[index],
+                        scrollable: true,
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                }(),
                 if (orderedDeviceIds.length > 1) ...[
                   const SizedBox(height: 12),
                   Row(
@@ -3483,48 +3513,48 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
         duration: const Duration(milliseconds: 280),
         opacity: i < activeIdx ? .5 : 1,
         child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        padding: HwTablet.of(context)
-            ? const EdgeInsets.symmetric(horizontal: 9, vertical: 5)
-            : const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: border),
-          boxShadow: active && !seg.isBreak
-              ? const [
-                  BoxShadow(
-                    color: Color.fromRGBO(198, 158, 131, .35),
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: fg,
+          duration: const Duration(milliseconds: 280),
+          padding: HwTablet.of(context)
+              ? const EdgeInsets.symmetric(horizontal: 9, vertical: 5)
+              : const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: border),
+            boxShadow: active && !seg.isBreak
+                ? const [
+                    BoxShadow(
+                      color: Color.fromRGBO(198, 158, 131, .35),
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.2,
+                  fontWeight: FontWeight.w700,
+                  color: fg,
+                ),
               ),
-            ),
-            const SizedBox(height: 1),
-            Text(
-              seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: fg.withValues(alpha: .8),
-                fontFeatures: const [FontFeature.tabularFigures()],
+              const SizedBox(height: 1),
+              Text(
+                seg.isBreak ? '${dur.inSeconds}s' : _mmss(dur),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: fg.withValues(alpha: .8),
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       );
     }
 
@@ -4778,7 +4808,11 @@ class _TimerRing extends CustomPainter {
         // Solid, not see-through: the same shade .55 of the colour gives over
         // the track, but opaque, so where two rounded ends overlap the colour
         // doesn't double up into a dark spot.
-        canvas.drawArc(rect, starts[i], sweeps[i], false,
+        canvas.drawArc(
+            rect,
+            starts[i],
+            sweeps[i],
+            false,
             stroke(Color.alphaBlend(fill.withValues(alpha: 0.55), trackColor),
                 cap: fillCap));
       } else if (i == activeIndex) {

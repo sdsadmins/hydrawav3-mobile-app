@@ -92,6 +92,12 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   // Latest gating condition, so mute/select can re-evaluate immediately.
   bool _sessionRunning = false;
 
+  /// Picked on Session Setup before a session runs: plays straight away so
+  /// the practitioner hears it there, and carries on into the session. Ends
+  /// once the session is running (the session gate takes over, so Pause
+  /// pauses it), on [stopPreview], or when the session ends.
+  bool _preview = false;
+
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<bool>? _playingSub;
 
@@ -176,9 +182,11 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   }
 
   /// Choose (or switch to) a track. Loads its URL and starts playing if the
-  /// session conditions allow it.
-  Future<void> selectTrack(Music track) async {
+  /// session conditions allow it. With [preview] (Session Setup, no session
+  /// running yet) it plays right away instead of waiting for Start.
+  Future<void> selectTrack(Music track, {bool preview = false}) async {
     if (_disposed || !track.isPlayable) return;
+    if (preview && !_sessionRunning) _preview = true;
     await _ensureReady();
     if (_disposed || !mounted) return;
     state = state.copyWith(
@@ -202,6 +210,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   /// keep-alive loop rather than leaving audio focus dropped.
   Future<void> clear() async {
     if (_disposed) return;
+    _preview = false;
     if (mounted) state = state.copyWith(clearTrack: true, isPlaying: false);
     _loadedUrl = null;
     await _safeStop();
@@ -227,7 +236,19 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     required bool sessionRunning,
   }) async {
     _sessionRunning = sessionRunning;
+    // The session is running: it owns playback from here on (a later Pause
+    // pauses the music). Before that — the session screen's idle start — a
+    // Setup preview keeps playing so there's no gap.
+    if (sessionRunning) _preview = false;
     await _ensureReady();
+    await _evaluate();
+  }
+
+  /// Leaving Session Setup without starting: stop the preview. The track
+  /// stays selected, so it plays when a session does start.
+  Future<void> stopPreview() async {
+    if (_disposed || !_preview || _sessionRunning) return;
+    _preview = false;
     await _evaluate();
   }
 
@@ -236,6 +257,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   Future<void> stopAndReset() async {
     if (_disposed) return;
     _sessionRunning = false;
+    _preview = false;
     if (mounted) state = state.copyWith(clearTrack: true, isPlaying: false);
     _loadedUrl = null;
     await _safeStop();
@@ -244,7 +266,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   bool get _shouldPlay =>
       state.activeTrackId != null &&
       _loadedUrl != null &&
-      _sessionRunning;
+      (_sessionRunning || _preview);
 
   /// iOS-only keep-alive: a session is running but the user hasn't picked an
   /// Atmosphere track, so there's nothing else holding audio focus.

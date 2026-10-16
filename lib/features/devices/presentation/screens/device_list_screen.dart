@@ -128,9 +128,14 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   bool _didInitializeAutoScan = false;
   bool _isSeedingDefaultProtocol = false;
 
+  /// Held so [dispose] can stop a music preview (ref isn't usable there).
+  late final SessionMusicController _music =
+      ref.read(sessionMusicControllerProvider.notifier);
+
   @override
   void initState() {
     super.initState();
+    _music; // resolve while ref is usable
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeAutoScan();
       // Ensure the token balance feed is running for the header chip.
@@ -143,6 +148,15 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         ref.read(liveSessionsProvider.notifier).start(orgId);
       }
     });
+  }
+
+  @override
+  void dispose() {
+    // Left Setup (another tab, or back) without starting: stop the music
+    // preview. Starting a session opens it on top of Setup, so the music
+    // carries on into the session.
+    unawaited(_music.stopPreview());
+    super.dispose();
   }
 
   void _initializeAutoScan() {

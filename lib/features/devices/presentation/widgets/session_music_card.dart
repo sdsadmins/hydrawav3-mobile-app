@@ -146,7 +146,9 @@ class SessionMusicRow extends ConsumerWidget {
                                     selected: music.activeTrackId == t.id,
                                     enabled: t.isPlayable,
                                     onTap: () {
-                                      controller.selectTrack(t);
+                                      // Setup: play it now, not only once
+                                      // the session runs.
+                                      controller.selectTrack(t, preview: true);
                                       Navigator.of(ctx).pop();
                                     },
                                   ),
