@@ -31,7 +31,7 @@ import '../../../performance_protocols/presentation/screens/go_to_session.dart';
 import '../../../performance_protocols/presentation/screens/pad_map_screen.dart';
 import '../../../performance_protocols/presentation/widgets/placement_card.dart';
 import '../widgets/assistant_welcome_panel.dart';
-import '../widgets/chat_history_sheet.dart';
+import 'assistant_history_screen.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 
 /// The "Assistant" page — a port of the cowork-os handoff `scr-chat` chat.
@@ -153,11 +153,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       t = _ragThread;
     }
     t.who = who;
+    // A placement card keeps its full pad-set payload, so History can
+    // reopen it on the 3D body.
+    final placement = m.placement?.raw.isNotEmpty == true
+        ? Map<String, dynamic>.from(m.placement!.raw)
+        : null;
     if (!t.started && !m.isMe) {
-      t.pending.add((false, text));
+      t.pending.add((false, text, placement));
       return;
     }
-    final batch = [...t.pending, (m.isMe, text)];
+    final batch = [...t.pending, (m.isMe, text, placement)];
     t.pending.clear();
     t.started = true;
     final repo = ref.read(ragChatHistoryRepositoryProvider);
@@ -165,7 +170,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     // Sequential, so the server keeps the order and every message after the
     // first carries the conversation id the first one got back.
     _ragQueue = _ragQueue.then((_) async {
-      for (final (isUser, msg) in batch) {
+      for (final (isUser, msg, placement) in batch) {
         try {
           final id = await repo.addMessage(
             isGuest: clientId == null,
@@ -173,6 +178,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
             conversationId: t.id,
             isUser: isUser,
             message: msg,
+            placement: placement,
           );
           t.id ??= id;
         } catch (_) {
@@ -181,6 +187,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       }
     });
   }
+
   List<_ChipAction> _chips = const [];
   bool _chipsVisible = true;
   bool _typing = false;
@@ -456,11 +463,13 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
       'Let’s find the right pad placement. Are we prepping for '
       'performance, or working on recovery?',
       rich: const [
-        TextSpan(text: 'Let’s find the right pad placement. Are we prepping for '),
+        TextSpan(
+            text: 'Let’s find the right pad placement. Are we prepping for '),
         TextSpan(
             text: 'performance', style: TextStyle(fontWeight: FontWeight.w700)),
         TextSpan(text: ', or working on '),
-        TextSpan(text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
+        TextSpan(
+            text: 'recovery', style: TextStyle(fontWeight: FontWeight.w700)),
         TextSpan(text: '?'),
       ],
       then: _padChips,
@@ -1644,7 +1653,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
   /// `chip.nextSlots(_assistantSlots)`, typed text passes nothing and the
   /// current [_assistantSlots] ride along unchanged (web parity:
   /// `carried = nextSlots ?? slots`).
-  Future<void> _assistantChat(String text, {Map<String, dynamic>? slots}) async {
+  Future<void> _assistantChat(String text,
+      {Map<String, dynamic>? slots}) async {
     final sent = slots ?? _assistantSlots;
     setState(() {
       _typing = true;
@@ -1748,8 +1758,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
         // chat-only card below rather than losing the turn.
       }
 
-      final json =
-          _chatPlacementJson(Map<String, dynamic>.from(rawPlacement));
+      final json = _chatPlacementJson(Map<String, dynamic>.from(rawPlacement));
       if (json != null) {
         final payload = PadSetPayload.fromJson(json);
         if (!payload.isRefusal) {
@@ -1833,7 +1842,8 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (region == null || goal == null) return null;
 
     final generation = RecoveryGeneration.readFrom({
-          'generation': str(params['generation']) ?? str(placement['generation']),
+          'generation':
+              str(params['generation']) ?? str(placement['generation']),
         }) ??
         RecoveryGeneration.v3;
 
@@ -1906,9 +1916,7 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
 
     Map<String, dynamic>? padOf(List pads, String label) {
       for (final p in pads.whereType<Map>()) {
-        if ((p['padLabel'] ?? p['pad_label'] ?? '')
-                .toString()
-                .toLowerCase() ==
+        if ((p['padLabel'] ?? p['pad_label'] ?? '').toString().toLowerCase() ==
             label) {
           return Map<String, dynamic>.from(p);
         }
@@ -1982,9 +1990,9 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
     if (sets.every((s) => s['sun'] == null && s['moon'] == null)) return null;
 
     return {
-      'discipline':
-          point['discipline'] ?? (isRecovery ? 'recovery' : placement['source']) ??
-              '',
+      'discipline': point['discipline'] ??
+          (isRecovery ? 'recovery' : placement['source']) ??
+          '',
       'display_name': point['displayName'] ?? point['display_name'] ?? '',
       'role': point['role'] ?? '',
       'subtype': point['subtype'],
@@ -2484,12 +2492,16 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                             Icon(Icons.auto_awesome_rounded,
                                 size: 20, color: p.copperInk),
                             const SizedBox(width: 8),
-                            Text(
-                              'Assistant',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: p.ink,
+                            Flexible(
+                              child: Text(
+                                'Assistant',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: p.ink,
+                                ),
                               ),
                             ),
                           ],
@@ -2510,16 +2522,14 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
                     final c = _historyClient;
                     return Padding(
                       padding: const EdgeInsets.only(right: 8),
-                      child: Tooltip(
-                        message: 'Past conversations',
-                        child: _IconBtn(
-                          palette: p,
-                          icon: Icons.history_rounded,
-                          onTap: () => showChatHistorySheet(
-                            context,
-                            clientId: c?.id,
-                            clientName: c?.displayName ?? 'Guest chats',
-                          ),
+                      // labelled, so it reads as History at a glance
+                      child: _HistoryBtn(
+                        palette: p,
+                        // History: Protocols / Usage / Outcomes / Chat
+                        onTap: () => AssistantHistoryScreen.open(
+                          context,
+                          clientId: c?.id,
+                          name: c?.displayName ?? 'Guest',
                         ),
                       ),
                     );
@@ -2600,33 +2610,34 @@ class _AssistantScreenState extends ConsumerState<AssistantScreen> {
               child: Center(
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: HwTablet.of(context) ? HwTablet.read : double.infinity,
+                    maxWidth:
+                        HwTablet.of(context) ? HwTablet.read : double.infinity,
                   ),
                   child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _input,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      style: TextStyle(color: p.ink, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'Ask or say what you need…',
-                        hintStyle: TextStyle(color: p.ink3),
-                        filled: true,
-                        fillColor: p.card,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 13),
-                        border: _barBorder(p.line),
-                        enabledBorder: _barBorder(p.line),
-                        focusedBorder: _barBorder(p.copper),
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _input,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _send(),
+                          style: TextStyle(color: p.ink, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: 'Ask or say what you need…',
+                            hintStyle: TextStyle(color: p.ink3),
+                            filled: true,
+                            fillColor: p.card,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 13),
+                            border: _barBorder(p.line),
+                            enabledBorder: _barBorder(p.line),
+                            focusedBorder: _barBorder(p.copper),
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 9),
+                      _MicSendButton(palette: p, onTap: _send),
+                    ],
                   ),
-                  const SizedBox(width: 9),
-                  _MicSendButton(palette: p, onTap: _send),
-                ],
-              ),
                 ),
               ),
             ),
@@ -2853,6 +2864,51 @@ class _IconBtn extends StatelessWidget {
   }
 }
 
+/// History: a small copper-tinted pill with a clock and the word.
+class _HistoryBtn extends StatelessWidget {
+  final RefPalette palette;
+  final VoidCallback onTap;
+  const _HistoryBtn({required this.palette, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    return Semantics(
+      button: true,
+      label: 'History',
+      excludeSemantics: true,
+      child: Material(
+        color: p.tanSoft,
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: p.cardline),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.history_rounded, size: 15, color: p.copperInk),
+                const SizedBox(width: 4),
+                Text('History',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: p.copperInk)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// `.micbtn` — send.
 class _MicSendButton extends StatelessWidget {
   final RefPalette palette;
@@ -3011,7 +3067,7 @@ class _RagThread {
   String? id;
   String? who;
   bool started = false;
-  final List<(bool, String)> pending = [];
+  final List<(bool, String, Map<String, dynamic>?)> pending = [];
 }
 
 /// The transcript list: behaves like a plain `List<_Msg>`, and reports each

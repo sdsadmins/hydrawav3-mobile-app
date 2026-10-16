@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,13 +38,28 @@ class RagMessage {
   final String message;
   final DateTime? createdAt;
 
-  const RagMessage(
-      {required this.isUser, required this.message, this.createdAt});
+  /// The pad placement this message showed (the full pad-set payload), when
+  /// one was saved with it — reopens on the 3D body.
+  final Map<String, dynamic>? placement;
+
+  const RagMessage({
+    required this.isUser,
+    required this.message,
+    this.createdAt,
+    this.placement,
+  });
 
   factory RagMessage.fromJson(Map<String, dynamic> j) => RagMessage(
         isUser: (j['role'] ?? '') == 'user',
         message: (j['message'] ?? '').toString(),
         createdAt: DateTime.tryParse((j['createdAt'] ?? '').toString()),
+        // The server's field is `placements`; `placement` is read too, for
+        // anything saved under the earlier name.
+        placement: j['placements'] is Map
+            ? Map<String, dynamic>.from(j['placements'] as Map)
+            : (j['placement'] is Map
+                ? Map<String, dynamic>.from(j['placement'] as Map)
+                : null),
       );
 }
 
@@ -61,15 +78,33 @@ class RagChatHistoryRepository {
     required bool isUser,
     required String message,
     List<String> sourceChunkIds = const [],
+    Map<String, dynamic>? placement,
   }) async {
-    final res = await _dio.post(ApiEndpoints.ragChatHistory, data: {
-      'userType': isGuest ? 'guest' : 'client',
-      if (!isGuest && clientId != null) 'clientId': clientId,
-      if (conversationId != null) 'conversationId': conversationId,
-      'role': isUser ? 'user' : 'assistant',
-      'message': message,
-      if (sourceChunkIds.isNotEmpty) 'sourceChunkIds': sourceChunkIds,
-    });
+    // The server takes ~100 KB per request; a placement bigger than that is
+    // left off (the message itself is still saved).
+    final keepPlacement =
+        placement != null && utf8.encode(jsonEncode(placement)).length < 90000;
+    Map<String, dynamic> body({required bool withPlacement}) => {
+          'userType': isGuest ? 'guest' : 'client',
+          if (!isGuest && clientId != null) 'clientId': clientId,
+          if (conversationId != null) 'conversationId': conversationId,
+          'role': isUser ? 'user' : 'assistant',
+          'message': message,
+          if (sourceChunkIds.isNotEmpty) 'sourceChunkIds': sourceChunkIds,
+          if (withPlacement) 'placements': placement,
+        };
+    Response<dynamic> res;
+    try {
+      res = await _dio.post(ApiEndpoints.ragChatHistory,
+          data: body(withPlacement: keepPlacement));
+    } on DioException catch (e) {
+      // A server that doesn't accept `placements` yet rejects the whole
+      // message (400, unknown property) — save the text without it rather
+      // than lose the message.
+      if (!keepPlacement || e.response?.statusCode != 400) rethrow;
+      res = await _dio.post(ApiEndpoints.ragChatHistory,
+          data: body(withPlacement: false));
+    }
     final data = res.data;
     return data is Map ? data['conversationId']?.toString() : null;
   }

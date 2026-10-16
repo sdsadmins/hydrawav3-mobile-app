@@ -182,7 +182,8 @@ Map<String, dynamic> buildCreatePractitionerJson(PractitionerForm form) {
     'phone': form.phone,
     'state': form.state,
     'zip': form.zip,
-    'dateOfBirth': form.dateOfBirth,
+    // Optional; left out when not given (an empty string isn't a date).
+    if (form.dateOfBirth.trim().isNotEmpty) 'dateOfBirth': form.dateOfBirth,
     // Required by the Node DTO as an integer. The web reference omits it here
     // (it only sends it on the account-update call), which makes its create
     // request fail validation — so this deliberately diverges from the web.
@@ -221,7 +222,8 @@ Map<String, dynamic> buildAccountUpdateJson(
     'userName': form.username,
     'mail': form.email,
     'phone': form.phone,
-    'dateOfBirth': form.dateOfBirth,
+    // Optional; the DTO's @IsDateString would reject an empty string.
+    if (form.dateOfBirth.trim().isNotEmpty) 'dateOfBirth': form.dateOfBirth,
     'gender': 'unknown',
     'nationality': 'unknown',
     'maritalStatus': 'unknown',

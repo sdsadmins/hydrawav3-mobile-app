@@ -2254,6 +2254,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 // Tablet: all the units at once, side by side — as many
                 // columns as fit at 340px each.
                 HwAutoGrid(
+                  // tighter than the default 16 between live cards
+                  gap: 10,
                   children: [
                     for (final id in orderedDeviceIds)
                       buildDeviceCard(id, scrollable: false),
@@ -2265,7 +2267,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                 // ListView scrolls), so all devices are visible without swiping.
                 for (final id in orderedDeviceIds) ...[
                   buildDeviceCard(id, scrollable: false),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                 ],
                 const SizedBox(height: 8),
               ] else ...[

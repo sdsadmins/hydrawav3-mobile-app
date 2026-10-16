@@ -373,14 +373,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: _field(_country, 'Country',
                   req: true, hint: 'USA', err: s.step1Errors['country'])),
         ]),
-        _dateField('Date of Birth', _dob, (v) => setState(() => _dob = v),
-            req: true),
-        if (s.step1Errors['dateOfBirth'] != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(s.step1Errors['dateOfBirth']!,
-                style: TextStyle(fontSize: 12, color: ThemeConstants.error)),
-          ),
+        // Date of Birth hidden, as on the website (optional in the API; the
+        // request leaves it out when empty).
+        // _dateField('Date of Birth', _dob, (v) => setState(() => _dob = v),
+        //     req: false),
         _euaBlock(s),
       ],
     );
