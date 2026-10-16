@@ -11,15 +11,22 @@ class SessionCoachRepository {
   final Dio _dio;
   SessionCoachRepository(this._dio);
 
-  /// Active body parts with their ids (`GET /body-part`).
+  /// Active body parts with their ids (`GET /body-part`). The endpoint pages
+  /// (10 per page by default), so every page is read.
   Future<List<CoachBodyPart>> bodyParts() async {
-    final res = await _dio.get(ApiEndpoints.bodyParts);
-    final data = res.data;
-    final list = data is List
-        ? data
-        : (data is Map && data['data'] is List)
-            ? data['data'] as List
-            : const [];
+    final list = <dynamic>[];
+    for (var page = 1; page <= 20; page++) {
+      final res = await _dio.get(ApiEndpoints.bodyParts,
+          queryParameters: {'page': page, 'perPage': 100});
+      final data = res.data;
+      list.addAll(data is List
+          ? data
+          : (data is Map && data['data'] is List)
+              ? data['data'] as List
+              : const []);
+      final paging = data is Map ? data['pagination'] : null;
+      if (paging is! Map || paging['hasNextPage'] != true) break;
+    }
     return list
         .whereType<Map>()
         .where((m) => m['isActive'] != false)
