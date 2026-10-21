@@ -30,8 +30,6 @@
   <string>1.0</string>
 
   <!-- 🔥 ADD THIS -->
-  <key>MinimumOSVersion</key>
-  <string>13.0</string>
 
 </dict>
 </plist>
