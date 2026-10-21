@@ -164,10 +164,26 @@ void main() {
         advanced: const AdvancedSettings(),
       ),
     );
-    for (final t in ['Vibration', 'Lights', 'Flip Sun and Moon pad']) {
+    // the same Off / Sweep / Single strip as a normal protocol; Single is
+    // shown but can't be picked
+    for (final t in ['OFF', 'SWEEP', 'SINGLE']) {
       expect(find.text(t), findsOneWidget);
     }
-    expect(find.text('More settings'), findsNothing);
+    double fade(String t) => tester
+        .widget<Opacity>(
+            find.ancestor(of: find.text(t), matching: find.byType(Opacity)).first)
+        .opacity;
+    expect(fade('SINGLE'), lessThan(1)); // faded = disabled
+    expect(fade('SWEEP'), 1);
+    // Lights + flip sit under More settings, as on a normal protocol
+    expect(find.text('More settings'), findsOneWidget);
+    expect(find.text('Lights'), findsNothing);
+    await tester.tap(find.text('More settings'));
+    for (var k = 0; k < 4; k++) {
+      await tester.pump(const Duration(milliseconds: 150));
+    }
+    expect(find.text('Lights'), findsOneWidget);
+    expect(find.text('Flip Sun and Moon pad'), findsOneWidget);
     expect(find.text('START DELAY'), findsNothing);
   });
 

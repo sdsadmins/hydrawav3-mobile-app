@@ -148,9 +148,10 @@ class _CoachBodyViewState extends State<CoachBodyView> {
   Future<void> _loadMarkers() =>
       _eval('window.loadMarkers(${jsonEncode(widget.markers)})');
 
+  /// A side view, re-centred on the body (so a pan doesn't carry over).
   void _setView(String v) {
     setState(() => _view = v);
-    if (_ready) _eval("window.setView('$v')");
+    if (_ready) _eval("window.resetView();window.setView('$v')");
   }
 
   /// `.v6pg-3d` / `.v6mx-stage` background, as CSS for the viewer page.
@@ -190,15 +191,19 @@ class _CoachBodyViewState extends State<CoachBodyView> {
                   initialSettings: InAppWebViewSettings(
                     javaScriptEnabled: true,
                     hardwareAcceleration: true,
-                    useHybridComposition: true,
+                    // Android: hybrid composition syncs every Flutter frame
+                    // with the platform view, so a WebView inside the
+                    // scrolling Session Plan made the whole page lag. The
+                    // texture mode keeps the page smooth; the 3D still draws.
+                    useHybridComposition: false,
                     transparentBackground: true,
                     supportZoom: false,
                     overScrollMode: OverScrollMode.NEVER,
                     verticalScrollBarEnabled: false,
                     horizontalScrollBarEnabled: false,
                   ),
-                  // The body orbits on drag; without this the page scroll
-                  // steals vertical drags.
+                  // One finger rotates, two fingers pan, pinch zooms toward
+                  // the fingers; without this the page scroll steals drags.
                   gestureRecognizers: {
                     const Factory<EagerGestureRecognizer>(
                       EagerGestureRecognizer.new,

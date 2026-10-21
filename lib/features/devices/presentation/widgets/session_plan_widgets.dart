@@ -619,6 +619,9 @@ class PlanUnitButton extends StatelessWidget {
   final bool on;
   final int flex;
 
+  /// Quarter turns for the icon (1 stands a sideways icon upright).
+  final int iconTurns;
+
   const PlanUnitButton({
     super.key,
     required this.icon,
@@ -626,6 +629,7 @@ class PlanUnitButton extends StatelessWidget {
     required this.onTap,
     this.on = false,
     this.flex = 1,
+    this.iconTurns = 0,
   });
 
   @override
@@ -656,8 +660,11 @@ class PlanUnitButton extends StatelessWidget {
                     ),
                   ),
                   child: Center(
-                    child:
-                        Icon(icon, size: 18, color: PlanTones.fillInk(context)),
+                    child: RotatedBox(
+                      quarterTurns: iconTurns,
+                      child: Icon(icon,
+                          size: 18, color: PlanTones.fillInk(context)),
+                    ),
                   ),
                 ),
               ),
@@ -685,13 +692,78 @@ class PlanStartFab extends StatefulWidget {
   State<PlanStartFab> createState() => _PlanStartFabState();
 }
 
-class _PlanStartFabState extends State<PlanStartFab> {
+class _PlanStartFabState extends State<PlanStartFab>
+    with TickerProviderStateMixin {
   bool _down = false;
+
+  /// `.ry-shimmer`: a light band sweeps across while ready. Slowed from the
+  /// prototype's 3.8s loop: a 4s sweep, then a 2.5s rest (6.5s loop).
+  late final AnimationController _shimmer = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 6500));
+
+  /// `.v5s-fab.fire`: the press pop when a start goes ahead.
+  late final AnimationController _fire = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 500));
+
+  /// `.v5s-fab.nudge`: a little shake when tapped before anything's ready
+  /// (slowed to 0.8s from the prototype's 0.42s).
+  late final AnimationController _nudge = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 800));
+
+  bool get _ready => widget.ready && !widget.starting;
+
+  void _syncShimmer() {
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_ready && !still) {
+      if (!_shimmer.isAnimating) _shimmer.repeat();
+    } else if (_shimmer.isAnimating) {
+      _shimmer.stop();
+      _shimmer.value = 0;
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncShimmer();
+  }
+
+  @override
+  void didUpdateWidget(PlanStartFab old) {
+    super.didUpdateWidget(old);
+    _syncShimmer();
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    _fire.dispose();
+    _nudge.dispose();
+    super.dispose();
+  }
+
+  // v5sFire: 0% .88 → 45% 1.1 → 100% 1
+  double get _fireScale {
+    if (!_fire.isAnimating) return 1;
+    final t = const Cubic(.22, .61, .36, 1).transform(_fire.value);
+    return t < .45
+        ? .88 + (1.1 - .88) * (t / .45)
+        : 1.1 + (1 - 1.1) * ((t - .45) / .55);
+  }
+
+  // v5sNudge: 25% −5px, 50% +4px, 75% −2px
+  double get _nudgeDx {
+    if (!_nudge.isAnimating) return 0;
+    final t = Curves.ease.transform(_nudge.value);
+    const keys = [0.0, -5.0, 4.0, -2.0, 0.0];
+    final pos = t * 4, i = pos.floor().clamp(0, 3);
+    return keys[i] + (keys[i + 1] - keys[i]) * (pos - i);
+  }
 
   @override
   Widget build(BuildContext context) {
     final dark = PlanTones.dark(context);
-    final ready = widget.ready && !widget.starting;
+    final ready = _ready;
     final decoration = ready
         ? const BoxDecoration(
             shape: BoxShape.circle,
@@ -737,40 +809,93 @@ class _PlanStartFabState extends State<PlanStartFab> {
         onTapCancel: () => setState(() => _down = false),
         onTap: () {
           setState(() => _down = false);
+          if (ready) {
+            _fire.forward(from: 0);
+          } else if (!widget.starting) {
+            _nudge.forward(from: 0);
+          }
           widget.onTap();
         },
-        child: AnimatedScale(
-          scale: _down && ready ? .9 : 1,
-          duration: const Duration(milliseconds: 160),
-          curve: const Cubic(.34, 1.56, .64, 1),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 280),
-            width: 72,
-            height: 72,
-            decoration: decoration,
-            child: Center(
-              child: widget.starting
-                  ? const SizedBox(
-                      width: 26,
-                      height: 26,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        valueColor:
-                            AlwaysStoppedAnimation(PlanTones.copperText),
-                      ),
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: Icon(
-                        Icons.play_arrow_rounded,
-                        size: 40,
-                        color: ready
-                            ? PlanTones.copperText
-                            : (dark
-                                ? const Color(0xFF6B7280)
-                                : const Color(0xFFFBF7F2)),
+        child: AnimatedBuilder(
+          animation: Listenable.merge([_fire, _nudge]),
+          builder: (context, child) => Transform.translate(
+            offset: Offset(_nudgeDx, 0),
+            child: Transform.scale(scale: _fireScale, child: child),
+          ),
+          child: AnimatedScale(
+            scale: _down && ready ? .9 : 1,
+            duration: const Duration(milliseconds: 160),
+            curve: const Cubic(.34, 1.56, .64, 1),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 280),
+              width: 72,
+              height: 72,
+              decoration: decoration,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // the light band, clipped to the circle
+                  if (ready)
+                    Positioned.fill(
+                      child: ClipOval(
+                        child: AnimatedBuilder(
+                          animation: _shimmer,
+                          builder: (context, _) {
+                            // first 4s: −120% → 220%, then rest
+                            final t =
+                                (_shimmer.value * 6500 / 4000).clamp(0.0, 1.0);
+                            final x =
+                                -1.2 + 3.4 * Curves.easeInOut.transform(t);
+                            return FractionalTranslation(
+                              translation: Offset(x, 0),
+                              child: const FractionallySizedBox(
+                                widthFactor: .4,
+                                alignment: Alignment.centerLeft,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment(-1, -.18),
+                                      end: Alignment(1, .18),
+                                      colors: [
+                                        Color(0x00FFFFFF),
+                                        Color(0x73FFFFFF),
+                                        Color(0x00FFFFFF),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
+                  Center(
+                    child: widget.starting
+                        ? const SizedBox(
+                            width: 26,
+                            height: 26,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor:
+                                  AlwaysStoppedAnimation(PlanTones.copperText),
+                            ),
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(
+                              Icons.play_arrow_rounded,
+                              size: 40,
+                              color: ready
+                                  ? PlanTones.copperText
+                                  : (dark
+                                      ? const Color(0xFF6B7280)
+                                      : const Color(0xFFFBF7F2)),
+                            ),
+                          ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1267,11 +1392,15 @@ class PlanModeSeg extends StatelessWidget {
   final List<String> options;
   final String selected;
   final ValueChanged<String> onSelect;
+
+  /// Options shown but not selectable (faded, taps ignored).
+  final Set<String> disabled;
   const PlanModeSeg({
     super.key,
     required this.options,
     required this.selected,
     required this.onSelect,
+    this.disabled = const {},
   });
 
   @override
@@ -1284,31 +1413,37 @@ class PlanModeSeg extends StatelessWidget {
           Expanded(
             child: Semantics(
               button: true,
+              enabled: !disabled.contains(options[i]),
               selected: options[i] == selected,
-              child: PlanPress(
-                onTap: () => onSelect(options[i]),
-                scale: .96,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  height: 40,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: options[i] == selected
-                        ? PlanTones.copper
-                        : PlanTones.fill(context),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    options[i].toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: .55,
+              child: Opacity(
+                opacity: disabled.contains(options[i]) ? .4 : 1,
+                child: PlanPress(
+                  onTap: disabled.contains(options[i])
+                      ? null
+                      : () => onSelect(options[i]),
+                  scale: .96,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
                       color: options[i] == selected
-                          ? Colors.white
-                          : (dark
-                              ? const Color(0xFFB7A999)
-                              : PlanTones.warmInk),
+                          ? PlanTones.copper
+                          : PlanTones.fill(context),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      options[i].toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: .55,
+                        color: options[i] == selected
+                            ? Colors.white
+                            : (dark
+                                ? const Color(0xFFB7A999)
+                                : PlanTones.warmInk),
+                      ),
                     ),
                   ),
                 ),
