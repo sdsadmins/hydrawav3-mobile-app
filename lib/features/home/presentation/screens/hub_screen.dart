@@ -392,12 +392,16 @@ class _HeaderIconButton extends StatelessWidget {
   final VoidCallback onTap;
   final Widget? badge;
 
+  /// Wraps the glyph (the bell's wiggle).
+  final Widget Function(Widget icon)? wrapIcon;
+
   const _HeaderIconButton({
     required this.icon,
     required this.label,
     required this.onTap,
     this.active = false,
     this.badge,
+    this.wrapIcon,
   });
 
   @override
@@ -425,8 +429,11 @@ class _HeaderIconButton extends StatelessWidget {
                   boxShadow: p.shadow,
                 ),
                 child: Center(
-                  child: HwIcon(icon,
-                      size: 19, color: active ? p.copperInk : p.ink2),
+                  child: () {
+                    final glyph = HwIcon(icon,
+                        size: 19, color: active ? p.copperInk : p.ink2);
+                    return wrapIcon?.call(glyph) ?? glyph;
+                  }(),
                 ),
               ),
               if (badge != null) Positioned(top: 7, right: 7, child: badge!),
@@ -451,34 +458,106 @@ class _Bell extends ConsumerWidget {
       icon: HwIcons.bell,
       label:
           n > 0 ? 'Notifications, $n unread' : 'Notifications, all caught up',
-      onTap: () => context.go(RoutePaths.notifications),
+      // push (not go): Back returns to the Hub, not Settings
+      onTap: () => context.push(RoutePaths.notifications),
+      // `.v6bell.has svg`: the bell tips a few times while there's unread
+      wrapIcon: n > 0 ? (icon) => _BellWiggle(child: icon) : null,
+      // `.v6bell-dot`: the unread count in a small copper badge
       badge: n == 0
           ? null
           : Container(
               constraints: const BoxConstraints(minWidth: 13, minHeight: 13),
               padding: EdgeInsets.symmetric(horizontal: n > 9 ? 3 : 0),
+              alignment: Alignment.center,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                   colors: [Color(0xFFDEB393), Color(0xFFB27D5C)],
                 ),
                 borderRadius: BorderRadius.circular(HwRadius.pill),
                 border: Border.all(color: p.card, width: 2),
               ),
-              child: n > 9
-                  ? const Text(
-                      '9+',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 8,
-                        height: 1.1,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF2B1D12),
-                      ),
-                    )
-                  : null,
+              child: Text(
+                n > 9 ? '9+' : '$n',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 8.5,
+                  height: 1,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF2B1D12),
+                ),
+              ),
             ),
     );
   }
+}
+
+/// `v6bellTip`: over a 4s beat the bell rests, then tips 9° / −7° / 4° near
+/// the end; three beats after a 1.2s pause, then still.
+class _BellWiggle extends StatefulWidget {
+  final Widget child;
+  const _BellWiggle({required this.child});
+
+  @override
+  State<_BellWiggle> createState() => _BellWiggleState();
+}
+
+class _BellWiggleState extends State<_BellWiggle>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 4000));
+  int _beats = 0;
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return;
+    _c.addStatusListener((s) {
+      if (s == AnimationStatus.completed && ++_beats < 3 && mounted) {
+        _c.forward(from: 0);
+      }
+    });
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted) _c.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  // 0–88% still, 91% 9°, 94% −7°, 97% 4°, 100% 0
+  double _deg(double t) {
+    const keys = [(.88, 0.0), (.91, 9.0), (.94, -7.0), (.97, 4.0), (1.0, 0.0)];
+    if (t <= keys.first.$1) return 0;
+    for (var i = 1; i < keys.length; i++) {
+      if (t <= keys[i].$1) {
+        final (t0, a0) = keys[i - 1];
+        final (t1, a1) = keys[i];
+        final f = Curves.easeInOut.transform((t - t0) / (t1 - t0));
+        return a0 + (a1 - a0) * f;
+      }
+    }
+    return 0;
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _c,
+        builder: (context, child) => Transform.rotate(
+          angle: _deg(_c.value) * 3.14159265 / 180,
+          // swings from the top, like a bell
+          alignment: Alignment.topCenter,
+          child: child,
+        ),
+        child: widget.child,
+      );
 }
 
 /// The context row under the greeting: organization + plan credits.

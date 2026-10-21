@@ -3073,6 +3073,8 @@ class _RefDeviceCard {
                   const SizedBox(width: 8),
                   PlanUnitButton(
                     icon: Icons.tune_rounded,
+                    // sliders standing upright
+                    iconTurns: 1,
                     tooltip: 'Advanced settings',
                     on: w.showAdvanced,
                     onTap: w.advancedEnabled ? w.onToggleAdvanced : null,
@@ -4172,11 +4174,16 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 8),
-        PlanToggleRow(
-          label: 'Vibration',
-          value: settings.vibrationMode != 'Off',
-          onChanged: (on) => onChangeSettings(
-            settings.copyWith(vibrationMode: on ? 'Sweep' : 'Off'),
+        // Same Off / Sweep / Single strip as a normal protocol, for a
+        // matching look. Behaviour is unchanged: Sweep = vibration on (each
+        // step's own range), Off = off. Single can't apply across a
+        // sequence of protocols, so it shows but is disabled.
+        PlanModeSeg(
+          options: const ['Off', 'Sweep', 'Single'],
+          disabled: const {'Single'},
+          selected: settings.vibrationMode == 'Off' ? 'Off' : 'Sweep',
+          onSelect: (mode) => onChangeSettings(
+            settings.copyWith(vibrationMode: mode == 'Off' ? 'Off' : 'Sweep'),
           ),
         ),
         const SizedBox(height: 12),
@@ -4193,19 +4200,24 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           tint: _kColdTint,
           onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
-        const SizedBox(height: 12),
-        PlanToggleRow(
-          label: 'Lights',
-          value: settings.lights,
-          onChanged: (value) =>
-              onChangeSettings(settings.copyWith(lights: value)),
-        ),
-        const SizedBox(height: 6),
-        PlanToggleRow(
-          label: 'Flip Sun and Moon pad',
-          value: settings.flipSettings,
-          onChanged: (value) =>
-              onChangeSettings(settings.copyWith(flipSettings: value)),
+        const SizedBox(height: 10),
+        // Lights + flip under "More settings", as on a normal protocol.
+        PlanMoreSettings(
+          children: [
+            PlanToggleRow(
+              label: 'Lights',
+              value: settings.lights,
+              onChanged: (value) =>
+                  onChangeSettings(settings.copyWith(lights: value)),
+            ),
+            const SizedBox(height: 6),
+            PlanToggleRow(
+              label: 'Flip Sun and Moon pad',
+              value: settings.flipSettings,
+              onChanged: (value) =>
+                  onChangeSettings(settings.copyWith(flipSettings: value)),
+            ),
+          ],
         ),
       ],
     );

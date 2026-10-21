@@ -641,6 +641,31 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     }
   }
 
+  /// Dismiss the global "bring your device back in range" reminder.
+  ///
+  /// This MUST be called explicitly on every transition out of `running`.
+  /// The only other publish lives inside the tick
+  /// ([_syncDisplayedTimerFromStopwatch]), which returns early unless the
+  /// status is `running` — and [stop] cancels that tick in the same call that
+  /// sets the status to stopped. So a terminal transition can never clear the
+  /// registry implicitly. [PlusReconnectWatchdog] is mounted at the app root
+  /// and has no session-status awareness: its only off-switch is this registry
+  /// going empty, so without this the reminder repeats every 30s for the rest
+  /// of the app's life — surviving Stop All, Done, and even the device coming
+  /// back into range.
+  void _clearAwaitingReconnect() {
+    _publishAwaitingReconnectIds(const {});
+    if (!_isActive) return;
+    if (state.protocolPlusAwaitingReconnectByDevice.isEmpty) return;
+    try {
+      state = state.copyWith(
+        protocolPlusAwaitingReconnectByDevice: const {},
+      );
+    } catch (e) {
+      appLogger.d('Session: awaiting-reconnect state clear ignored');
+    }
+  }
+
   /// Total break time to discount for [id] — completed breaks plus the one in
   /// progress. Add to remaining / subtract from elapsed to get a clock that
   /// tracks the hardware.
@@ -806,6 +831,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// sessions; Wi-Fi telemetry arrives via the backend channel.
   StreamSubscription<BleNotification>? _telemetrySub;
 
+  /// When [_advanceSchedule] last ran off a telemetry frame, so a device that
+  /// notifies rapidly doesn't drive the schedule on every frame.
+  DateTime? _lastScheduleAdvance;
+
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
   static const int _bleStopByte = 0x03;
@@ -962,6 +991,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Map<String, int> get protocolPlusDelayByDevice =>
       state.protocolPlusDelayByDevice;
   Map<String, TimerState> get deviceTimers => state.deviceTimers;
+
+  /// Which sub-protocol each device is currently on, and the ordered names of
+  /// the sequence. Used by [ProtocolPlusController.resyncMissedSwitches] to
+  /// compare what we last applied against what the server says should be
+  /// running, after a `START_PROTOCOL` we never received.
+  Map<String, int> get protocolPlusIndexByDevice =>
+      state.protocolPlusIndexByDevice;
+  Map<String, List<String>> get protocolPlusSequenceByDevice =>
+      state.protocolPlusSequenceByDevice;
+  SessionStatus get status => state.status;
 
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
@@ -1144,6 +1183,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       if (!_isActive) return;
       if (state.transport != SessionTransport.ble) return;
       _ingestBleTelemetryFrame(n.deviceId, n.value);
+      // Every frame is a wakeup, whether or not it parsed as telemetry, and
+      // while iOS has us suspended during a call it is our ONLY clock — the
+      // 250ms ticker does not fire there. Advance the schedule off it, after
+      // the frame's own `rs` reconciliation so a device-initiated stop still
+      // lands first. Throttled so a chatty device doesn't run the schedule on
+      // every single frame.
+      final now = DateTime.now();
+      final last = _lastScheduleAdvance;
+      if (last == null ||
+          now.difference(last) >= const Duration(milliseconds: 200)) {
+        _lastScheduleAdvance = now;
+        _advanceSchedule();
+      }
     });
   }
 
@@ -1964,6 +2016,23 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _plusBreakStartedAt.clear();
     _plusBreakHoldByDevice.clear();
     _plusDisconnectedIds.clear();
+    // Starting a run is unambiguously "I want these devices live", so lift the
+    // auto-reconnect suppression the PREVIOUS run's teardown set on them (see
+    // [_suppressDeviceReconnect], called from stop/complete/stopDevice).
+    // Suppression is app-scoped and otherwise permanent: it is only cleared by
+    // a fresh `connect()` — which never happens for a device that stayed
+    // physically connected — or by the SCAN pill, which is itself hidden while
+    // suppression is set. Left stale, it silently disables the out-of-range
+    // warning on the device card (`SessionScreen._isLinkLost`) for every
+    // session after the first.
+    try {
+      final connector = _ref.read(bleConnectorProvider);
+      for (final id in selectedDeviceIds) {
+        connector.clearReconnectSuppression(id);
+      }
+    } catch (e) {
+      appLogger.d('Session: clearing reconnect suppression skipped: $e');
+    }
     _startInProgress = false;
     _deviceStopwatches
       ..clear()
@@ -3272,6 +3341,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     for (final id in state.deviceIds) {
       _deviceStopwatches[id]?.stop();
     }
+    // The run isn't advancing while paused, so the "bring it back in range"
+    // reminder has nothing to protect — and the tick that would otherwise
+    // clear it stops firing as soon as the status leaves `running`.
+    // [resume] restarts the tick, which republishes if the device is still away.
+    _clearAwaitingReconnect();
     final statuses = Map<String, SessionStatus>.from(state.deviceStatuses);
     for (final id in state.deviceIds) {
       if (statuses[id] == SessionStatus.running)
@@ -3361,6 +3435,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       }
     }
 
+    // Before the tick dies below — once it's cancelled nothing can clear the
+    // out-of-range reminder, and the root-mounted watchdog would nag forever.
+    _clearAwaitingReconnect();
+    _plusDisconnectedIds.clear();
     _stopwatch.stop();
     _timer?.cancel();
     for (final id in state.deviceIds) {
@@ -3654,6 +3732,9 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   }
 
   void reset() {
+    // Clearing local state alone leaves the GLOBAL registry stale, so the
+    // out-of-range reminder would survive the "Done" button.
+    _clearAwaitingReconnect();
     _timer?.cancel();
     _stopwatch.reset();
     _sessionClockOffset = Duration.zero;
@@ -3695,6 +3776,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       return;
     }
+    _advanceSchedule();
+  }
+
+  /// Advance the protocol schedule one step.
+  ///
+  /// Safe to call at irregular intervals: [_reconcileClockFromWall] derives
+  /// elapsed time from the wall clock rather than accumulating per call, so a
+  /// gap between calls self-corrects instead of drifting.
+  ///
+  /// Driven by two clocks. In the foreground it's the 250ms ticker. While iOS
+  /// has the app suspended — during a phone call, where the audio keep-alive
+  /// is gone and Dart timers do not fire — it's inbound BLE telemetry frames
+  /// (see [_ensureBleTelemetrySubscription]), which wake the app under the
+  /// `bluetooth-central` background mode.
+  ///
+  /// Note this keeps the *engine's* clock and its Plus bookkeeping
+  /// (`rs:stop` evaluation, restart-timing overrides, the pending-switch
+  /// reconciler) advancing through a call. It is NOT what dispatches a Plus
+  /// sub-protocol switch: those arrive as `START_PROTOCOL` socket events and
+  /// land in ProtocolPlusController, so switching through a call depends on
+  /// the socket, not on this method.
+  void _advanceSchedule() {
+    if (!_isActive || state.status != SessionStatus.running) return;
     // Weigh any outstanding Plus `rs:stop` streak FIRST, so a confirmed
     // device-initiated stop lands before this tick paints the timers — the
     // countdown must not advance one more frame after the unit has stopped.
@@ -4013,6 +4117,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
         '🩺 OUTCOME-DEBUG: _onTick reached terminal overallStatus='
         '$overallStatus, calling enqueuePendingOutcome()',
       );
+      // The run just went terminal inside the tick, so this is the last pass
+      // through here — clear the reminder before the tick stops firing.
+      _clearAwaitingReconnect();
+      _plusDisconnectedIds.clear();
       _timer?.cancel();
       _timer = null;
       _stopwatch.stop();
@@ -4113,6 +4221,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
 
   Future<void> _completeSession() async {
     appLogger.i('✅ SESSION COMPLETED: Time limit reached, stopping device');
+
+    // Before the tick is cancelled — otherwise a device that was out of range
+    // when the run completed leaves the reminder nagging forever.
+    _clearAwaitingReconnect();
+    _plusDisconnectedIds.clear();
 
     // CRITICAL: Stop the stopwatch and cancel timer FIRST
     _stopwatch.stop();

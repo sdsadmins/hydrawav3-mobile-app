@@ -242,13 +242,20 @@ class BleConnector {
     // [_ensureAdapterWatch] — deferred so iOS doesn't prompt at app launch).
     _ensureAdapterWatch();
     final deviceId = device.remoteId.str;
+    // An explicit connect() means auto-reconnect is wanted again, so lift any
+    // suppression FIRST — before the early returns below. Previously this sat
+    // after them, so a device that was still physically connected (or had a
+    // connect already in flight) stayed flagged as a deliberate disconnect for
+    // the rest of the app run. That flag gates the out-of-range warning in
+    // `SessionScreen._isLinkLost`, so the warning silently stopped appearing
+    // after the first session ended.
+    _manualDisconnects.remove(deviceId);
     final current = _deviceStates[deviceId];
     if (current == BleConnectionStatus.connected) return true;
     if (_connectInFlight.containsKey(deviceId)) {
       return _connectInFlight[deviceId]!;
     }
 
-    _manualDisconnects.remove(deviceId);
     appLogger.i('BLE: Connecting to ${device.platformName} ($deviceId)');
 
     _updateState(deviceId, BleConnectionStatus.connecting);

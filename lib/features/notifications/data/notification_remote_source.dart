@@ -32,8 +32,8 @@ class NotificationRemoteSource {
         .map((e) => AppNotification.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     // Ensure newest-first regardless of server order.
-    items.sort((a, b) => (b.createdAt ?? DateTime(0))
-        .compareTo(a.createdAt ?? DateTime(0)));
+    items.sort((a, b) =>
+        (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
     return items;
   }
 

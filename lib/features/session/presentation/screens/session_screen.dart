@@ -160,6 +160,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
   /// button's own inline spinner and keeps it from being tapped twice.
   final Set<String> _restartingStageDeviceIds = {};
   ProviderSubscription<SessionEngineState>? _engineSub;
+
+  /// Watches for an audio interruption ENDING (a call hanging up), which is
+  /// when a missed Protocol Plus switch has to be reconciled.
+  ProviderSubscription<SessionMusicState>? _musicInterruptSub;
   ProviderSubscription<AsyncValue<Map<String, BleConnectionStatus>>>?
       _bleConnectionSub;
   bool _startingSession = false;
@@ -346,6 +350,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     // when the app returns to the foreground (screen was off / app backgrounded).
     WidgetsBinding.instance.addObserver(this);
     _musicController = ref.read(sessionMusicControllerProvider.notifier);
+    // A call ending is our earliest reliable signal that iOS may have
+    // suspended us — it fires even if the user never brings the app back to
+    // the foreground. Any START_PROTOCOL broadcast during the call is gone
+    // (the server does not replay it), so reconcile against the server.
+    _musicInterruptSub = ref.listenManual<SessionMusicState>(
+      sessionMusicControllerProvider,
+      (previous, next) {
+        if (previous?.isInterrupted == true && !next.isInterrupted) {
+          final engine =
+              ref.read(sessionEngineFamilyProvider(_engineKey).notifier);
+          engine.onAppResumed();
+          unawaited(
+            ref
+                .read(protocolPlusControllerProvider)
+                .resyncMissedSwitches(reason: 'interruption-ended'),
+          );
+        }
+      },
+    );
     _activeSessionId = _findMatchingActiveSessionId();
     _engineKey = _activeSessionId ?? _buildFallbackEngineKey();
     appLogger.i(
@@ -1027,6 +1050,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     _applyWakelockForStatus(
       ref.read(sessionEngineFamilyProvider(_engineKey)).status,
     );
+    // While we were away iOS may have suspended us, and START_PROTOCOL is a
+    // live broadcast the server never replays — so a switch can have come and
+    // gone with nobody listening. Ask the server where we should be.
+    unawaited(
+      ref
+          .read(protocolPlusControllerProvider)
+          .resyncMissedSwitches(reason: 'app-resumed'),
+    );
   }
 
   /// Drive the session music gate from the current session status.
@@ -1270,6 +1301,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     unawaited(_setWakelock(false, fromDispose: true));
     _stopBackendPadPolling(fromDispose: true);
     _engineSub?.close();
+    _musicInterruptSub?.close();
     _bleConnectionSub?.close();
     for (final t in _outOfRangeTimers.values) {
       t.cancel();
@@ -2941,11 +2973,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// Whether this device's link is currently considered lost.
   ///
-  /// Uses the screen's EXISTING out-of-range tracking rather than a new source:
-  /// `_armOutOfRangeWarning` starts a grace timer on a BLE drop, so a device
-  /// with a live timer is one we've lost and not yet given up on. Deriving link
-  /// state independently would risk the pill disagreeing with the dialog the
-  /// screen already shows.
+  /// Drives BOTH the red `SCAN` pill ([_lcLinkPill]) and the "Bluetooth link
+  /// lost" strip ([_lcBleWarn]) — so anything that makes this return false
+  /// hides both at once.
+  ///
+  /// Derived from the LIVE connection-state provider, not from
+  /// `_armOutOfRangeWarning`'s grace timer or the dialog's device id: both of
+  /// those clear themselves ~12s into an outage that is still ongoing, which
+  /// used to make the warning vanish while the countdown kept running. Reading
+  /// the provider also keeps this in agreement with the per-device buttons.
+  ///
+  /// Note the `isReconnectSuppressed` gate below only works because
+  /// `SessionEngine.loadSession` now lifts that flag for the run's devices.
+  /// Suppression is app-scoped and set for every device at every session end,
+  /// so without that it stayed true forever and silently disabled this warning
+  /// for every session after the first.
   bool _isLinkLost(String deviceId, SessionStatus status) {
     final live =
         status == SessionStatus.running || status == SessionStatus.paused;

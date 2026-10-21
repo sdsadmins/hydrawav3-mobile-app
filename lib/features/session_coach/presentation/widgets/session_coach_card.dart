@@ -255,12 +255,13 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
           error: (e, _) => _message(p, 'Couldn’t load body parts.',
               retry: () => ref.invalidate(coachBodyPartsProvider)),
           // The prototype's chips: rounded pills sized to their names. The
-          // box keeps the height it had with the first 10 parts; the rest
+          // box has a fixed most-height; the rest
           // scroll inside it.
           data: (list) => list.isEmpty
               ? _message(p, 'No body parts yet.')
               : _BodyChipBox(
-                  maxHeight: HwTablet.of(context) ? 104 : 380,
+                  // phone: about 4½ rows, so the next row peeks and says "scroll"
+                  maxHeight: HwTablet.of(context) ? 104 : 225,
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 10,
@@ -1685,11 +1686,20 @@ class _BodyChipBoxState extends State<_BodyChipBox> {
 
   @override
   Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: widget.maxHeight),
-      child: Scrollbar(
+      // copper thumb on a soft tan track, in the app's palette
+      child: RawScrollbar(
         controller: _scroll,
         thumbVisibility: true,
+        trackVisibility: true,
+        thickness: 4,
+        radius: const Radius.circular(99),
+        trackRadius: const Radius.circular(99),
+        thumbColor: p.copper,
+        trackColor: p.tanSoft,
+        trackBorderColor: Colors.transparent,
         child: SingleChildScrollView(
           controller: _scroll,
           // room for the scrollbar beside the chips

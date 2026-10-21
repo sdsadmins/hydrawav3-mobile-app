@@ -110,6 +110,9 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
   /// blip so a genuinely-live run doesn't flicker on the 1s poll.
   int _consecutiveFetchFailures = 0;
 
+  /// TEMPORARY DEBUG — remove with the Plus payload logging in [_fetchActive].
+  DateTime? _lastPlusPayloadLog;
+
   /// Backend session ids this phone started (it owns the live engine). Used to
   /// flag sessions `isOwn` so the UI can gate control (own / foreign-WiFi /
   /// foreign-BLE). Survives refetches.
@@ -272,6 +275,44 @@ class LiveSessionsNotifier extends StateNotifier<List<ActiveSession>> {
       final mapped = <ActiveSession>[];
       for (final raw in (sessions ?? const <dynamic>[])) {
         if (raw is! Map) continue;
+        // TEMPORARY DEBUG — remove once the Plus resync lands.
+        // We need to know whether this payload carries a current protocol
+        // INDEX (clean resync) or only the protocol NAME (name->index
+        // inference, ambiguous when a sequence repeats a protocol). Logged
+        // only for Plus runs, and throttled to once every 10s so the 1s poll
+        // doesn't flood the console.
+        if (raw['protocolPlusIsActive'] == true) {
+          final now = DateTime.now();
+          if (_lastPlusPayloadLog == null ||
+              now.difference(_lastPlusPayloadLog!) >
+                  const Duration(seconds: 10)) {
+            _lastPlusPayloadLog = now;
+            appLogger.i('🧪 PLUS-PAYLOAD top-level keys: ${raw.keys.toList()}');
+            // Log KEYS, not the whole object — `description` is long enough to
+            // truncate the line and hide anything after it.
+            final pp = raw['protocolPlus'];
+            if (pp is Map) {
+              appLogger.i('🧪 PLUS-PAYLOAD protocolPlus keys: ${pp.keys.toList()}');
+              for (final k in pp.keys) {
+                if (k.toString().toLowerCase() == 'description') continue;
+                final v = pp[k].toString();
+                appLogger.i(
+                  '🧪 PLUS-PP[$k] = ${v.length > 200 ? '${v.substring(0, 200)}…' : v}',
+                );
+              }
+            }
+            final devs = raw['devices'];
+            if (devs is List && devs.isNotEmpty && devs.first is Map) {
+              final d = (devs.first as Map).cast<String, dynamic>();
+              appLogger.i('🧪 PLUS-PAYLOAD device keys: ${d.keys.toList()}');
+              appLogger.i(
+                '🧪 PLUS-PAYLOAD device protocol="${d['protocol']}" '
+                'remaining=${d['remainingSeconds']} '
+                'elapsed=${d['elapsedSeconds']} status=${d['status']}',
+              );
+            }
+          }
+        }
         final s = _mapSession(raw.cast<String, dynamic>());
         if (s != null) mapped.add(s);
       }
