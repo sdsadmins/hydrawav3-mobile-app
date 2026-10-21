@@ -562,6 +562,377 @@ class ProtocolPlusController {
     }
   }
 
+  /// Guards against overlapping resyncs — the triggers (foreground, audio
+  /// interruption end, socket reconnect) can fire within milliseconds of each
+  /// other after a call ends.
+  bool _resyncInFlight = false;
+
+  /// Devices with a locally-dispatched switch in flight, so the engine
+  /// listener (which fires on every state change) can't start a second one.
+  final Set<String> _localSwitchInFlight = <String>{};
+
+  /// How long to let the SERVER's `START_PROTOCOL` win before dispatching the
+  /// switch ourselves.
+  ///
+  /// Both mechanisms are correct, but without a delay they race: the two
+  /// clocks were measured landing within ~55ms of each other, so which one
+  /// drives any given switch is effectively arbitrary. That is poor ground to
+  /// support a therapy device from — and it opens a window where the device is
+  /// a protocol ahead of the server's record (see the restart guard in the
+  /// START_PROTOCOL handler). A short wait makes the server authoritative
+  /// whenever it can reach us, and leaves local dispatch for the case it
+  /// genuinely cannot: an app suspended by a phone call. It costs a second
+  /// against a 90s break, and the BLE write itself takes ~5s regardless.
+  static const Duration _localSwitchGrace = Duration(seconds: 1);
+
+  /// When each device's break was first observed fully elapsed, so the grace
+  /// period above can be measured from it.
+  final Map<String, DateTime> _breakElapsedAt = <String, DateTime>{};
+
+  /// The highest sequence index we've already sent to each device, local or
+  /// server-driven. Makes switching idempotent: whichever path gets there
+  /// first wins and the other becomes a no-op, instead of restarting the
+  /// protocol the client is already receiving.
+  final Map<String, int> _highestAppliedIndex = <String, int>{};
+
+  /// Fire a Protocol Plus switch ourselves, the moment the break runs out,
+  /// without waiting for the server's `START_PROTOCOL` broadcast.
+  ///
+  /// This is what makes a switch land ON TIME during a phone call. The server
+  /// owns the schedule and broadcasts each switch over the socket, but that
+  /// broadcast is live-only: while iOS has us suspended (a call takes the
+  /// audio route and with it the keep-alive) the event fires with nobody
+  /// listening and is gone forever.
+  ///
+  /// We don't need it. The engine already knows every sub-protocol's duration
+  /// and the inter-protocol delay, and computes the break countdown locally —
+  /// `onBreak && breakRemaining <= 0` is exactly the instant the next protocol
+  /// is due. That computation runs inside `SessionEngine._advanceSchedule()`,
+  /// which is driven by inbound BLE telemetry frames as well as the foreground
+  /// ticker, and CoreBluetooth keeps delivering those frames under the
+  /// `bluetooth-central` background mode throughout a call. So we get woken,
+  /// we do the arithmetic, and we write to the device — on schedule.
+  ///
+  /// The server's event still arrives later; [_highestAppliedIndex] makes that
+  /// a no-op rather than a second, duplicate switch.
+  void _maybeDispatchLocalSwitch(SessionEngineState state) {
+    if (_engine == null || state.status != SessionStatus.running) return;
+    for (final binding in _bindings) {
+      final mac = binding.localMac;
+      if (_localSwitchInFlight.contains(mac)) continue;
+      // A held switch is already the reconciler's job.
+      if (_pendingSwitches.containsKey(mac)) continue;
+      // Only once the break has fully counted down.
+      if (state.protocolPlusOnBreakByDevice[mac] != true) {
+        _breakElapsedAt.remove(mac);
+        continue;
+      }
+      if ((state.protocolPlusBreakRemainingByDevice[mac] ?? 0) > 0) {
+        _breakElapsedAt.remove(mac);
+        continue;
+      }
+      // Give the server's broadcast [_localSwitchGrace] to arrive first.
+      final elapsedAt = _breakElapsedAt[mac];
+      if (elapsedAt == null) {
+        _breakElapsedAt[mac] = DateTime.now();
+        continue;
+      }
+      if (DateTime.now().difference(elapsedAt) < _localSwitchGrace) continue;
+
+      final sequence =
+          state.protocolPlusSequenceByDevice[mac] ?? const <String>[];
+      final applied = state.protocolPlusIndexByDevice[mac] ?? 0;
+      final next = applied + 1;
+      if (next >= sequence.length) continue; // last protocol — run is ending
+      if ((_highestAppliedIndex[mac] ?? -1) >= next) continue;
+
+      unawaited(_dispatchLocalSwitch(binding, next));
+    }
+  }
+
+  Future<void> _dispatchLocalSwitch(
+    ProtocolPlusBinding binding,
+    int index,
+  ) async {
+    final engine = _engine;
+    if (engine == null) return;
+    final mac = binding.localMac;
+    if (!_localSwitchInFlight.add(mac)) return;
+    try {
+      // Claim the index up front so the server's event for the same switch
+      // (and the next engine state change) can't race us into a duplicate.
+      _highestAppliedIndex[mac] = index;
+
+      appLogger.i(
+        'ProtocolPlus: LOCAL SWITCH — break elapsed on $mac, sending '
+        'index=$index without waiting for the server broadcast',
+      );
+
+      final protocol = await _protocolAtIndex(binding.plusId, index);
+      if (protocol == null || protocol.cycles.isEmpty) {
+        appLogger.e(
+          'ProtocolPlus: local switch could not resolve protocol index=$index '
+          'for $mac — falling back to the server broadcast',
+        );
+        // Un-claim so the server's event (or a resync) can still do it.
+        if (_highestAppliedIndex[mac] == index) {
+          _highestAppliedIndex.remove(mac);
+        }
+        return;
+      }
+
+      final isBle = engine.transport == SessionTransport.ble;
+      if (isBle && !_ref.read(bleConnectorProvider).isConnected(mac)) {
+        _pendingSwitches[mac] =
+            (protocol: protocol, index: index, advanced: null);
+        engine.setPlusSwitchPending(mac, true);
+        appLogger.w(
+          'ProtocolPlus: local switch held — $mac offline, index=$index '
+          'queued for reconnect',
+        );
+        return;
+      }
+
+      final ok = await _applyDeviceSwitch(engine, mac, protocol, index);
+      if (ok) {
+        appLogger.i(
+          'ProtocolPlus: LOCAL SWITCH applied on $mac → index=$index '
+          '(${protocol.templateName})',
+        );
+      } else {
+        _pendingSwitches[mac] =
+            (protocol: protocol, index: index, advanced: null);
+        engine.setPlusSwitchPending(mac, true);
+        appLogger.w(
+          'ProtocolPlus: local switch write failed on $mac — index=$index '
+          'queued for retry',
+        );
+      }
+    } catch (e) {
+      appLogger.e('ProtocolPlus: local switch failed on $mac: $e');
+      if (_highestAppliedIndex[mac] == index) {
+        _highestAppliedIndex.remove(mac);
+      }
+    } finally {
+      _localSwitchInFlight.remove(mac);
+    }
+  }
+
+  /// Recover a Protocol Plus switch the app never received.
+  ///
+  /// `START_PROTOCOL` is a live socket broadcast with no replay. When iOS
+  /// suspends us — a phone call takes the audio route, and with it the
+  /// keep-alive that was holding the process awake — the event fires
+  /// server-side with nobody listening and is simply gone. The run then sits
+  /// at the end of a break forever: the countdown keeps ticking (the engine
+  /// reconciles it from the wall clock) but the device never starts the next
+  /// protocol.
+  ///
+  /// So at every moment we know we might have missed one, ask the server what
+  /// each device should be running and apply it if it isn't what we last sent.
+  ///
+  /// Identifying the target index prefers the server's `protocolId`, matched
+  /// against the template's ordered ids. If the deployed backend doesn't
+  /// expose it (today's does not — `getActiveSessions` returns only the
+  /// display name), fall back to matching the name against the sequence, and
+  /// refuse to guess when that name is ambiguous.
+  Future<void> resyncMissedSwitches({String reason = 'unspecified'}) async {
+    final engine = _engine;
+    if (engine == null || _bindings.isEmpty) return;
+    if (engine.status != SessionStatus.running) return;
+    if (_resyncInFlight) return;
+    _resyncInFlight = true;
+    try {
+      final orgId = _organizationId;
+      if (orgId == null || orgId.isEmpty) return;
+
+      final dio = _ref.read(nodeDioProvider);
+      final resp = await dio
+          .get<Map<String, dynamic>>(ApiEndpoints.sessionsActive(orgId));
+      final sessions = resp.data?['sessions'] as List<dynamic>? ?? const [];
+
+      for (final binding in _bindings) {
+        // A switch already held for this device will be applied by
+        // [_applyPendingSwitchesOn] / the reconciler — don't race it.
+        if (_pendingSwitches.containsKey(binding.localMac)) continue;
+
+        final device = _serverDeviceFor(sessions, binding);
+        if (device == null) continue;
+
+        final target = await _targetIndexFor(engine, binding, device);
+        if (target == null) continue;
+
+        final applied = engine.protocolPlusIndexByDevice[binding.localMac] ?? 0;
+        if (target == applied) continue;
+        // Already sent by the local dispatcher or the socket event.
+        if ((_highestAppliedIndex[binding.localMac] ?? -1) >= target) continue;
+
+        // Only ever move FORWARD. A stale/racing read that looks like it went
+        // backwards must never rewind a client's treatment.
+        if (target < applied) {
+          appLogger.w(
+            'ProtocolPlus: resync($reason) server index $target is BEHIND '
+            'applied $applied for ${binding.localMac} — ignoring',
+          );
+          continue;
+        }
+
+        appLogger.w(
+          'ProtocolPlus: resync($reason) MISSED SWITCH on ${binding.localMac} '
+          '— applied=$applied server=$target; recovering',
+        );
+        _highestAppliedIndex[binding.localMac] = target;
+
+        final protocol = await _protocolAtIndex(binding.plusId, target);
+        if (protocol == null || protocol.cycles.isEmpty) {
+          appLogger.e(
+            'ProtocolPlus: resync($reason) could not resolve protocol '
+            'index=$target for ${binding.localMac} — switch NOT recovered',
+          );
+          continue;
+        }
+
+        final connected =
+            _ref.read(bleConnectorProvider).isConnected(binding.localMac);
+        if (engine.transport == SessionTransport.ble && !connected) {
+          // Same path a normally-received switch takes when the link is down.
+          _pendingSwitches[binding.localMac] =
+              (protocol: protocol, index: target, advanced: null);
+          engine.setPlusSwitchPending(binding.localMac, true);
+          appLogger.w(
+            'ProtocolPlus: resync($reason) ${binding.localMac} offline — '
+            'holding recovered switch index=$target until reconnect',
+          );
+          continue;
+        }
+
+        final ok = await _applyDeviceSwitch(
+          engine,
+          binding.localMac,
+          protocol,
+          target,
+        );
+        if (!ok) {
+          _pendingSwitches[binding.localMac] =
+              (protocol: protocol, index: target, advanced: null);
+          engine.setPlusSwitchPending(binding.localMac, true);
+          appLogger.w(
+            'ProtocolPlus: resync($reason) write failed for '
+            '${binding.localMac} — queued index=$target for retry',
+          );
+        } else {
+          appLogger.i(
+            'ProtocolPlus: resync($reason) RECOVERED ${binding.localMac} '
+            'to index=$target (${protocol.templateName})',
+          );
+        }
+      }
+    } catch (e) {
+      // Never let a resync failure disturb a live run.
+      appLogger.w('ProtocolPlus: resync($reason) failed (ignored): $e');
+    } finally {
+      _resyncInFlight = false;
+    }
+  }
+
+  /// Our device's entry in the active-sessions payload, or null if the run
+  /// isn't in the feed (already finished, or not ours).
+  Map<String, dynamic>? _serverDeviceFor(
+    List<dynamic> sessions,
+    ProtocolPlusBinding binding,
+  ) {
+    for (final raw in sessions) {
+      if (raw is! Map) continue;
+      if (raw['sessionId']?.toString() != binding.serverSessionId) continue;
+      final devices = raw['devices'];
+      if (devices is! List) continue;
+      for (final d in devices) {
+        if (d is! Map) continue;
+        final dev = d.cast<String, dynamic>();
+        bool matches(String? v) =>
+            v != null &&
+            v.isNotEmpty &&
+            (v == binding.localMac || v == binding.serverDeviceId);
+        if (matches(dev['bluetoothId']?.toString()) ||
+            matches(dev['macAddress']?.toString())) {
+          return dev;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Which sequence index the server says this device should be on.
+  ///
+  /// Returns null when it cannot be determined confidently — the caller then
+  /// does nothing, which is the right outcome: a wrong index would start the
+  /// wrong treatment.
+  Future<int?> _targetIndexFor(
+    SessionEngine engine,
+    ProtocolPlusBinding binding,
+    Map<String, dynamic> device,
+  ) async {
+    // Preferred: the server's protocol id against the template's ordered ids.
+    final serverProtocolId = device['protocolId']?.toString();
+    if (serverProtocolId != null && serverProtocolId.isNotEmpty) {
+      final ids = await _orderedProtocolIds(binding.plusId);
+      final idx = ids.indexOf(serverProtocolId);
+      if (idx >= 0) return idx;
+    }
+    // Some deployments send an explicit index.
+    final explicit = (device['protocolIndex'] as num?)?.toInt();
+    if (explicit != null) return explicit;
+
+    // Fallback: match the display name against the ordered sequence. Ambiguous
+    // if the same protocol appears twice, so refuse rather than guess.
+    final name = device['protocol']?.toString().trim();
+    if (name == null || name.isEmpty) return null;
+    final sequence = engine.protocolPlusSequenceByDevice[binding.localMac] ??
+        const <String>[];
+    final hits = <int>[
+      for (var i = 0; i < sequence.length; i++)
+        if (sequence[i].trim() == name) i,
+    ];
+    if (hits.length == 1) return hits.first;
+    if (hits.length > 1) {
+      appLogger.w(
+        'ProtocolPlus: resync cannot place "$name" — it appears ${hits.length} '
+        'times in the sequence and the server sent no protocolId. Add '
+        '`protocolId: d.protocolId` to getActiveSessions to make this exact.',
+      );
+    }
+    return null;
+  }
+
+  /// Ordered protocol ids of a Plus template, fetched once per run.
+  final Map<String, List<String>> _orderedIdsCache = {};
+
+  Future<List<String>> _orderedProtocolIds(String plusId) async {
+    if (plusId.isEmpty) return const [];
+    final cached = _orderedIdsCache[plusId];
+    if (cached != null) return cached;
+    try {
+      final detail = await getProtocolPlusDetail(plusId);
+      final ids = detail.protocolIds;
+      if (ids.isNotEmpty) _orderedIdsCache[plusId] = ids;
+      return ids;
+    } catch (e) {
+      appLogger.w('ProtocolPlus: could not load template $plusId: $e');
+      return const [];
+    }
+  }
+
+  Future<Protocol?> _protocolAtIndex(String plusId, int index) async {
+    final ids = await _orderedProtocolIds(plusId);
+    if (index < 0 || index >= ids.length) return null;
+    try {
+      return await _ref.read(protocolDetailProvider(ids[index]).future);
+    } catch (e) {
+      appLogger.e('ProtocolPlus: failed to fetch protocol ${ids[index]}: $e');
+      return null;
+    }
+  }
+
   /// POST /sessions/:sessionId/stop/:organizationId with `stopAll` for every
   /// bound device — ends the Protocol Plus session(s) and cancels the server's
   /// remaining switch jobs.
@@ -873,6 +1244,10 @@ class ProtocolPlusController {
     _pendingSwitches.clear();
     _serverStoppedDevices.clear();
     _slotIdByDevice.clear();
+    _highestAppliedIndex.clear();
+    _localSwitchInFlight.clear();
+    _breakElapsedAt.clear();
+    _orderedIdsCache.clear();
 
     // Apply any protocol switch that was held while a device was disconnected,
     // the moment that device reconnects (BLE). Survives screen changes.
@@ -920,7 +1295,13 @@ class ProtocolPlusController {
         if (state.status == SessionStatus.completed ||
             state.status == SessionStatus.stopped) {
           unawaited(_finishRun(stopServer: true));
+          return;
         }
+        // Fire a due switch ourselves rather than waiting for the server's
+        // socket broadcast — this listener runs on engine state changes, and
+        // those keep happening off BLE telemetry while iOS has us suspended
+        // during a call. See [_maybeDispatchLocalSwitch].
+        _maybeDispatchLocalSwitch(state);
       },
       fireImmediately: true,
     );
@@ -953,6 +1334,9 @@ class ProtocolPlusController {
           'ProtocolPlus: no organizationId — cannot subscribe to stop events',
         );
       }
+      // Anything broadcast while we were disconnected is gone — the server
+      // does not replay START_PROTOCOL. Ask it where we should be.
+      unawaited(resyncMissedSwitches(reason: 'socket-reconnect'));
     });
     socket.onDisconnect(
         (r) => appLogger.w('ProtocolPlus: socket disconnected ($r)'));
@@ -1000,6 +1384,35 @@ class ProtocolPlusController {
         // that's re-starting, and authoritative timing for the instant jump.
         // A normal switch carries neither.
         final restarted = data['restarted'] == true;
+
+        // We may have already sent this switch ourselves when the break ran
+        // out (see [_maybeDispatchLocalSwitch]) — the server's broadcast then
+        // arrives as a duplicate and must NOT restart the protocol the client
+        // is already receiving. A restart deliberately re-sends the same
+        // index, so it is exempt.
+        final highestApplied = _highestAppliedIndex[binding.localMac] ?? -1;
+        if (!restarted && highestApplied >= index) {
+          appLogger.i(
+            'ProtocolPlus: START_PROTOCOL index=$index already applied on '
+            '${binding.localMac} — ignoring duplicate',
+          );
+          return;
+        }
+        // A restart legitimately re-sends the SAME index, so it is exempt from
+        // the duplicate check above. But one that is BEHIND what we have
+        // already applied means the SERVER's record is stale — most likely we
+        // dispatched a switch locally in the moments before its own scheduled
+        // job ran. Applying it would move the device BACK a protocol
+        // mid-treatment, so refuse.
+        if (restarted && index < highestApplied) {
+          appLogger.w(
+            'ProtocolPlus: restart for index=$index REJECTED on '
+            '${binding.localMac} — already on index=$highestApplied, the '
+            "server's record is behind",
+          );
+          return;
+        }
+        _highestAppliedIndex[binding.localMac] = index;
         final advancedJson = data['advancedSettings'];
         final advancedOverride = (restarted && advancedJson is Map)
             ? AdvancedSettings.fromJson(Map<String, dynamic>.from(advancedJson))
@@ -1533,6 +1946,10 @@ class ProtocolPlusController {
     _pendingSwitches.clear();
     _serverStoppedDevices.clear();
     _finishedDevices.clear();
+    _highestAppliedIndex.clear();
+    _localSwitchInFlight.clear();
+    _breakElapsedAt.clear();
+    _orderedIdsCache.clear();
     _lastConnStates = {};
     // Detach before dropping the reference, or a late confirmation from an
     // engine that outlives this run would call back into a torn-down controller.

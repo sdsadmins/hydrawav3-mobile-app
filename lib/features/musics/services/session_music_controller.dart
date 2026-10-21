@@ -6,9 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../../../core/utils/logger.dart';
-import '../../session/domain/active_session_model.dart' as active_session;
-import '../../session/presentation/providers/active_sessions_provider.dart';
-import '../../session/services/session_engine.dart';
 import '../domain/music_model.dart';
 
 /// Sentinel [_loadedUrl] value marking "the bundled iOS keep-alive ambient
@@ -24,11 +21,21 @@ class SessionMusicState {
   /// True when the player is actually producing (audible) playback.
   final bool isPlaying;
 
+  /// True while the OS owns the audio route (phone call, Siri, alarm). The
+  /// therapy session keeps running throughout — only the audio is paused.
+  final bool isInterrupted;
+
+  /// True when an interruption ended but we could not get the audio route
+  /// back, so the user has to resume audio by hand.
+  final bool needsManualResume;
+
   const SessionMusicState({
     this.activeTrackId,
     this.activeTrackName,
     this.isMuted = false,
     this.isPlaying = false,
+    this.isInterrupted = false,
+    this.needsManualResume = false,
   });
 
   bool get hasTrack => activeTrackId != null;
@@ -39,6 +46,8 @@ class SessionMusicState {
     bool clearTrack = false,
     bool? isMuted,
     bool? isPlaying,
+    bool? isInterrupted,
+    bool? needsManualResume,
   }) {
     return SessionMusicState(
       activeTrackId: clearTrack ? null : (activeTrackId ?? this.activeTrackId),
@@ -46,6 +55,12 @@ class SessionMusicState {
           clearTrack ? null : (activeTrackName ?? this.activeTrackName),
       isMuted: isMuted ?? this.isMuted,
       isPlaying: isPlaying ?? this.isPlaying,
+      // Interruption flags are lifecycle state, not track state, so
+      // `clearTrack` deliberately resets them: dropping the selection means
+      // any pending "resume the audio" affordance is moot.
+      isInterrupted: clearTrack ? false : (isInterrupted ?? this.isInterrupted),
+      needsManualResume:
+          clearTrack ? false : (needsManualResume ?? this.needsManualResume),
     );
   }
 }
@@ -74,15 +89,14 @@ class SessionMusicState {
 /// engine / timer / BLE never depend on this.
 final sessionMusicControllerProvider =
     StateNotifierProvider<SessionMusicController, SessionMusicState>((ref) {
-  final controller = SessionMusicController(ref);
+  final controller = SessionMusicController();
   ref.onDispose(controller.shutdown);
   return controller;
 });
 
 class SessionMusicController extends StateNotifier<SessionMusicState> {
-  SessionMusicController(this._ref) : super(const SessionMusicState());
+  SessionMusicController() : super(const SessionMusicState());
 
-  final Ref _ref;
   final AudioPlayer _player = AudioPlayer();
 
   bool _disposed = false;
@@ -91,6 +105,13 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
 
   // Latest gating condition, so mute/select can re-evaluate immediately.
   bool _sessionRunning = false;
+
+  /// True while the OS owns the audio route. Gates [_evaluate] so nothing
+  /// tries to play against a route we don't hold.
+  bool _interrupted = false;
+
+  /// Android transient-duck: play at reduced volume instead of pausing.
+  bool _ducked = false;
 
   /// Picked on Session Setup before a session runs: plays straight away so
   /// the practitioner hears it there, and carries on into the session. Ends
@@ -131,12 +152,35 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
       _interruptionSub = session.interruptionEventStream.listen((event) {
         if (_disposed) return;
         if (event.begin) {
-          unawaited(_safePause());
-          if (event.type != AudioInterruptionType.duck) {
-            _pauseAllLiveSessions();
+          // Ducking means "keep playing, quieter" — never a full pause.
+          // (Android-only in practice: iOS always reports `unknown` on begin.)
+          if (event.type == AudioInterruptionType.duck) {
+            unawaited(_duck(true));
+            return;
           }
+          // A call/Siri/alarm took the audio route. Pause ONLY the audio.
+          // The therapy session and its BLE link deliberately keep running —
+          // the `bluetooth-central` background grant keeps servicing them,
+          // and the engine advances its schedule off inbound telemetry
+          // frames while iOS has us suspended. Pausing the session here is
+          // what used to stop the device mid-treatment.
+          _interrupted = true;
+          if (mounted) state = state.copyWith(isInterrupted: true);
+          appLogger.i('Music: audio interrupted (session left running)');
+          unawaited(_safePause());
         } else {
-          unawaited(_evaluate()); // resume only if conditions still hold
+          if (event.type == AudioInterruptionType.duck) {
+            unawaited(_duck(false));
+            return;
+          }
+          // audio_session 0.1.x has NO `shouldResume` field — the flag is
+          // encoded in `type` on the END event: `pause` => the OS says we may
+          // resume, `unknown` => it does not. See audio_session 0.1.25
+          // lib/src/core.dart:73-79.
+          final osSaysResume = event.type == AudioInterruptionType.pause;
+          _interrupted = false;
+          if (mounted) state = state.copyWith(isInterrupted: false);
+          unawaited(_resumeAfterInterruption(osSaysResume: osSaysResume));
         }
       });
     } catch (e) {
@@ -144,7 +188,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     }
     try {
       await _player.setLoopMode(LoopMode.one);
-      await _player.setVolume(state.isMuted ? 0 : 1);
+      await _applyVolume();
     } catch (e) {
       appLogger.w('Music: player init failed (continuing): $e');
     }
@@ -156,29 +200,50 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
     });
   }
 
-  /// iOS-only: pause every currently-running session app-wide, device
-  /// included, not just whichever session screen happens to be mounted.
-  /// [activeSessionsProvider] is the app-wide registry of live sessions, so
-  /// this reaches every one of them regardless of which screen (if any) is
-  /// on screen at the moment the call arrives. Android already survives a
-  /// call via its foreground service, so it isn't at risk of the process
-  /// being suspended and doesn't need this.
-  void _pauseAllLiveSessions() {
-    if (!Platform.isIOS) return;
-    try {
-      final sessions = _ref.read(activeSessionsProvider);
-      for (final session in sessions) {
-        if (session.status != active_session.SessionStatus.running) continue;
-        appLogger.i(
-          'Music: pausing session ${session.id} for a call/Siri interruption',
-        );
-        unawaited(
-          _ref.read(sessionEngineFamilyProvider(session.id).notifier).pause(),
-        );
-      }
-    } catch (e) {
-      appLogger.w('Music: failed to pause live sessions on interruption: $e');
+  /// Restore playback after an interruption ends.
+  ///
+  /// The keep-alive ambient is a background-survival lifeline, not media, so
+  /// when a session is still running we attempt resume even if iOS withholds
+  /// `shouldResume` — that flag is a courtesy hint about *user* media.
+  /// `setActive(true)` can still fail while the call tail releases the route,
+  /// so retry with a short backoff before giving up and asking the user.
+  Future<void> _resumeAfterInterruption({required bool osSaysResume}) async {
+    if (_disposed) return;
+    if (!_sessionRunning && !osSaysResume) {
+      await _evaluate();
+      return;
     }
+    const delays = [
+      Duration.zero,
+      Duration(milliseconds: 400),
+      Duration(seconds: 1),
+      Duration(seconds: 3),
+    ];
+    for (final delay in delays) {
+      // A second interruption starting mid-retry wins: bail and let its own
+      // end event drive the next attempt.
+      if (_disposed || _interrupted) return;
+      if (delay != Duration.zero) await Future<void>.delayed(delay);
+      if (_disposed || _interrupted) return;
+      await _evaluate();
+      if (_player.playing) {
+        appLogger.i('Music: resumed after interruption');
+        if (mounted && state.needsManualResume) {
+          state = state.copyWith(needsManualResume: false);
+        }
+        return;
+      }
+    }
+    appLogger.w('Music: could not resume audio after interruption');
+    if (mounted) state = state.copyWith(needsManualResume: true);
+  }
+
+  /// Android transient-duck: keep playing at a reduced volume rather than
+  /// pausing outright.
+  Future<void> _duck(bool ducked) async {
+    if (_disposed) return;
+    _ducked = ducked;
+    await _applyVolume();
   }
 
   /// Choose (or switch to) a track. Loads its URL and starts playing if the
@@ -197,7 +262,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
       if (_loadedUrl != track.url) {
         await _player.setUrl(track.url);
         _loadedUrl = track.url;
-        await _player.setVolume(state.isMuted ? 0 : 1);
+        await _applyVolume();
       }
     } catch (e) {
       appLogger.w('Music: failed to load "${track.name}" (ignored): $e');
@@ -218,13 +283,26 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
   }
 
   /// Mute keeps the track "running" but silent (volume 0), mirroring the web.
+  /// Deliberately does NOT pause — the audio session (and with it the iOS
+  /// background grant) must stay active. See the class doc.
   Future<void> toggleMute() async {
     if (_disposed || !mounted) return;
-    final muted = !state.isMuted;
-    state = state.copyWith(isMuted: muted);
-    final unmutedVolume = _loadedUrl == _kFallbackTrackKey ? 0.35 : 1.0;
+    state = state.copyWith(isMuted: !state.isMuted);
+    await _applyVolume();
+  }
+
+  /// The single source of truth for player volume. The keep-alive ambient
+  /// plays quieter than a user-selected track; ducking scales whichever
+  /// applies.
+  double get _targetVolume {
+    if (state.isMuted) return 0;
+    final base = _loadedUrl == _kFallbackTrackKey ? 0.35 : 1.0;
+    return _ducked ? base * 0.3 : base;
+  }
+
+  Future<void> _applyVolume() async {
     try {
-      await _player.setVolume(muted ? 0 : unmutedVolume);
+      await _player.setVolume(_targetVolume);
     } catch (e) {
       appLogger.w('Music: setVolume failed (ignored): $e');
     }
@@ -275,6 +353,12 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
 
   Future<void> _evaluate() async {
     if (_disposed) return;
+    // The OS owns the route mid-interruption — don't fight it. A selectTrack
+    // or applyConditions arriving during a call lands here.
+    if (_interrupted) {
+      await _safePause();
+      return;
+    }
     if (_shouldPlay) {
       await _safePlay();
     } else if (_shouldPlayFallback) {
@@ -289,7 +373,7 @@ class SessionMusicController extends StateNotifier<SessionMusicState> {
       if (_loadedUrl != _kFallbackTrackKey) {
         await _player.setAsset('assets/audio/session_ambient.wav');
         _loadedUrl = _kFallbackTrackKey;
-        await _player.setVolume(state.isMuted ? 0 : 0.35);
+        await _applyVolume();
       }
     } catch (e) {
       appLogger.w('Music: fallback ambient load failed (ignored): $e');

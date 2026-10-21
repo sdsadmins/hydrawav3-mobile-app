@@ -175,7 +175,25 @@ void main() {
       expect(find.text('50%'), findsOneWidget); // 1 of 2 checked runs helped
       expect(find.text('Performance Activation'), findsOneWidget);
       // just the last run — no per-run list
-      expect(find.text('Last run Oct 13, 2026 · Unit 1'), findsOneWidget);
+      // the sample's latest run is 2 days ago
+      final d = DateTime.now().subtract(const Duration(days: 2));
+      const mo = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec'
+      ];
+      expect(
+          find.text('Last run ${mo[d.month - 1]} ${d.day}, ${d.year} · Unit 1'),
+          findsOneWidget);
       expect(find.textContaining('Last run'), findsNWidgets(2));
       expect(find.byIcon(Icons.cancel_rounded), findsNothing);
       await shot(tester, 'hist_protocols_$tag');

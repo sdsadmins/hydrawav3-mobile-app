@@ -806,6 +806,10 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// sessions; Wi-Fi telemetry arrives via the backend channel.
   StreamSubscription<BleNotification>? _telemetrySub;
 
+  /// When [_advanceSchedule] last ran off a telemetry frame, so a device that
+  /// notifies rapidly doesn't drive the schedule on every frame.
+  DateTime? _lastScheduleAdvance;
+
   static const int _blePauseByte = 0x02;
   static const int _bleResumeByte = 0x04;
   static const int _bleStopByte = 0x03;
@@ -962,6 +966,16 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   Map<String, int> get protocolPlusDelayByDevice =>
       state.protocolPlusDelayByDevice;
   Map<String, TimerState> get deviceTimers => state.deviceTimers;
+
+  /// Which sub-protocol each device is currently on, and the ordered names of
+  /// the sequence. Used by [ProtocolPlusController.resyncMissedSwitches] to
+  /// compare what we last applied against what the server says should be
+  /// running, after a `START_PROTOCOL` we never received.
+  Map<String, int> get protocolPlusIndexByDevice =>
+      state.protocolPlusIndexByDevice;
+  Map<String, List<String>> get protocolPlusSequenceByDevice =>
+      state.protocolPlusSequenceByDevice;
+  SessionStatus get status => state.status;
 
   Future<void> _enqueueStateUpdate(void Function() fn) {
     _stateUpdateQueue = _stateUpdateQueue.then((_) async {
@@ -1144,6 +1158,19 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       if (!_isActive) return;
       if (state.transport != SessionTransport.ble) return;
       _ingestBleTelemetryFrame(n.deviceId, n.value);
+      // Every frame is a wakeup, whether or not it parsed as telemetry, and
+      // while iOS has us suspended during a call it is our ONLY clock — the
+      // 250ms ticker does not fire there. Advance the schedule off it, after
+      // the frame's own `rs` reconciliation so a device-initiated stop still
+      // lands first. Throttled so a chatty device doesn't run the schedule on
+      // every single frame.
+      final now = DateTime.now();
+      final last = _lastScheduleAdvance;
+      if (last == null ||
+          now.difference(last) >= const Duration(milliseconds: 200)) {
+        _lastScheduleAdvance = now;
+        _advanceSchedule();
+      }
     });
   }
 
@@ -3695,6 +3722,29 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       _timer = null;
       return;
     }
+    _advanceSchedule();
+  }
+
+  /// Advance the protocol schedule one step.
+  ///
+  /// Safe to call at irregular intervals: [_reconcileClockFromWall] derives
+  /// elapsed time from the wall clock rather than accumulating per call, so a
+  /// gap between calls self-corrects instead of drifting.
+  ///
+  /// Driven by two clocks. In the foreground it's the 250ms ticker. While iOS
+  /// has the app suspended — during a phone call, where the audio keep-alive
+  /// is gone and Dart timers do not fire — it's inbound BLE telemetry frames
+  /// (see [_ensureBleTelemetrySubscription]), which wake the app under the
+  /// `bluetooth-central` background mode.
+  ///
+  /// Note this keeps the *engine's* clock and its Plus bookkeeping
+  /// (`rs:stop` evaluation, restart-timing overrides, the pending-switch
+  /// reconciler) advancing through a call. It is NOT what dispatches a Plus
+  /// sub-protocol switch: those arrive as `START_PROTOCOL` socket events and
+  /// land in ProtocolPlusController, so switching through a call depends on
+  /// the socket, not on this method.
+  void _advanceSchedule() {
+    if (!_isActive || state.status != SessionStatus.running) return;
     // Weigh any outstanding Plus `rs:stop` streak FIRST, so a confirmed
     // device-initiated stop lands before this tick paints the timers — the
     // countdown must not advance one more frame after the unit has stopped.

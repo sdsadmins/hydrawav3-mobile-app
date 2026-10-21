@@ -288,8 +288,7 @@ class _PadMapScreenState extends ConsumerState<PadMapScreen> {
                   const SizedBox(height: HwSpace.s3),
                   for (final set in _shownSets(sets)) _setNote(p, set),
                   if (widget.payload.deferredSets.isNotEmpty) ...[
-                    HwEyebrow(
-                        'Sequence into later sessions · '
+                    HwEyebrow('Sequence into later sessions · '
                         '${widget.payload.deferredSets.length} set${widget.payload.deferredSets.length == 1 ? '' : 's'}'),
                     const SizedBox(height: HwSpace.s2),
                     for (final set in widget.payload.deferredSets)
