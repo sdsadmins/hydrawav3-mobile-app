@@ -43,3 +43,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Secrets / local env (never commit)
+.env
+.env.*
+!.env.example
+qa/.env.qa
+
+# QA pipeline artefacts
+build/qa/
+qa/inbox/
+qa/api/node_modules/
+
+# QA runner copies its test files into integration_test/ at run time
+/integration_test/qa_*
+/test_driver/qa_*

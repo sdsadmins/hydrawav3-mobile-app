@@ -3,46 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:hydrawav3/core/storage/local_db.dart';
-import 'package:hydrawav3/features/auth/domain/auth_models.dart';
 import 'package:hydrawav3/features/auth/presentation/providers/auth_provider.dart';
 import 'package:hydrawav3/features/ble/domain/ble_device_model.dart';
 import 'package:hydrawav3/features/ble/presentation/providers/ble_connection_provider.dart';
 import 'package:hydrawav3/features/ble/presentation/providers/ble_scan_provider.dart';
-import 'package:hydrawav3/features/ble/services/ble_scanner.dart';
+import 'package:hydrawav3/features/ble/services/ble_scanner.dart' show bleScannerProvider;
 import 'package:hydrawav3/features/devices/domain/device_model.dart';
 import 'package:hydrawav3/features/devices/presentation/providers/wifi_devices_provider.dart';
 import 'package:hydrawav3/features/devices/presentation/screens/device_list_screen.dart'
     show pairedDevicesProvider;
 import 'package:hydrawav3/features/devices/presentation/screens/device_register_screen.dart';
 import 'package:hydrawav3/features/devices/presentation/widgets/device_center_widgets.dart';
-import 'package:hydrawav3/features/session/domain/active_session_model.dart';
 import 'package:hydrawav3/features/session/presentation/providers/live_sessions_provider.dart';
 
-class _FakeAuth extends StateNotifier<AuthState> implements AuthNotifier {
-  _FakeAuth()
-      : super(const AuthState(
-          isAuthenticated: true,
-          isInitialized: true,
-          selectedOrgId: '1',
-          selectedOrgName: 'Gulf Coast Tarpons',
-          user: UserProfile(id: '7', firstName: 'Marcus'),
-        ));
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
-}
-
-/// No Bluetooth on the test machine: the screen's scan-on-open is a no-op.
-class _FakeScanner implements BleScanner {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
-}
-
-class _FakeLive extends StateNotifier<List<ActiveSession>>
-    implements LiveSessionsNotifier {
-  _FakeLive() : super(const []);
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
-}
+import '../helpers/fakes.dart';
 
 const _units = [
   DeviceInfo(
@@ -61,8 +35,9 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        authStateProvider.overrideWith((ref) => _FakeAuth()),
-        liveSessionsProvider.overrideWith((ref) => _FakeLive()),
+        authStateProvider
+            .overrideWith((ref) => FakeAuth(orgName: 'Gulf Coast Tarpons')),
+        liveSessionsProvider.overrideWith((ref) => FakeLiveSessions()),
         wifiDevicesByOrgProvider.overrideWith((ref) async => _units),
         pairedDevicesProvider.overrideWith((ref) => Stream.value([
               PairedDevice(
@@ -76,7 +51,8 @@ void main() {
         bleConnectionStatesProvider.overrideWith((ref) =>
             Stream.value({'ble-1': BleConnectionStatus.connected})),
         unitRssiProvider.overrideWith((ref, id) async => -52),
-        bleScannerProvider.overrideWithValue(_FakeScanner()),
+        // No Bluetooth on the test machine: scan-on-open is a no-op.
+        bleScannerProvider.overrideWithValue(FakeScanner()),
         startScanProvider.overrideWithValue(() async {}),
       ],
       child: const MaterialApp(home: DeviceRegisterScreen()),

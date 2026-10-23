@@ -102,7 +102,12 @@ void main() {
     expect(find.textContaining('device-hours used'), findsNothing);
   });
 
-  testWidgets('pay-as-you-go shows the balance, grant and bar', (tester) async {
+  // Since e91e6f3 every plan uses the Enterprise layout (one _PlanBody): the
+  // balance is a "<n> credits" pill beside the plan name, and the session /
+  // reports cards are always shown. e55bb93 then swapped the em-dash
+  // placeholder for "--" app-wide.
+  testWidgets('pay-as-you-go shows the balance pill and bars against the grant',
+      (tester) async {
     await pumpSheet(
       tester,
       const SubscriptionPlan(name: 'Free', remainingTokens: 46),
@@ -110,16 +115,23 @@ void main() {
     );
 
     expect(tester.takeException(), isNull);
+    // "Free · Free" collapses to just the name.
+    expect(find.text('Free'), findsOneWidget);
     expect(find.text('Session credits'), findsOneWidget);
-    expect(find.text('46'), findsOneWidget);
-    expect(find.text('of 60 this month · 1 credit ≈ one ~9-min session'),
+    expect(find.text('46 credits'), findsOneWidget);
+    // Same quota cards as Enterprise, with unknown quotas as placeholders.
+    expect(find.text('Session time left'), findsOneWidget);
+    expect(find.text('Session time is drawn from your credits'),
         findsOneWidget);
-    expect(find.byType(HwBar), findsOneWidget);
+    expect(find.text('Full Mobility Reports left'), findsOneWidget);
+    expect(find.text('--'), findsNWidgets(2));
+    // 46 of 60 known → both gauges draw.
+    expect(find.byType(HwBar), findsNWidgets(2));
     expect(find.text('Top up credits'), findsOneWidget);
-    expect(find.text('Session time left'), findsNothing);
+    expect(find.text('Full plan & usage'), findsNothing);
   });
 
-  testWidgets('pay-as-you-go drops the total when no grant is known',
+  testWidgets('pay-as-you-go drops the bars when no grant is known',
       (tester) async {
     await pumpSheet(
       tester,
@@ -127,18 +139,21 @@ void main() {
     );
 
     expect(tester.takeException(), isNull);
-    expect(find.text('42'), findsOneWidget);
-    expect(find.text('1 credit ≈ one ~9-min session'), findsOneWidget);
+    expect(find.text('42 credits'), findsOneWidget);
     expect(find.byType(HwBar), findsNothing);
+    expect(find.textContaining('device-hours used'), findsNothing);
   });
 
-  testWidgets('an unknown balance renders an em-dash, not a zero',
+  testWidgets('an unknown balance renders a placeholder, not a zero',
       (tester) async {
     await pumpSheet(tester, const SubscriptionPlan(name: 'Free'));
 
     expect(tester.takeException(), isNull);
-    expect(find.text('—'), findsOneWidget);
+    // Credits pill, session pill and reports pill.
+    expect(find.text('--'), findsNWidgets(3));
     expect(find.text('0'), findsNothing);
+    expect(find.textContaining('0 credits'), findsNothing);
+    expect(find.byType(HwBar), findsNothing);
   });
 
   group('grant maths', () {

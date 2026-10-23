@@ -33,7 +33,7 @@ void main() {
     return repo;
   }
 
-  testWidgets('checks the email before sending', (tester) async {
+  testWidgets('[AUTH-16] checks the email before sending', (tester) async {
     final repo = await pump(tester);
     await tester.tap(find.text('Send reset link'));
     await tester.pump();
@@ -46,7 +46,7 @@ void main() {
     expect(repo.sent, isEmpty);
   });
 
-  testWidgets('sends the reset request and confirms', (tester) async {
+  testWidgets('[AUTH-17] sends the reset request and confirms', (tester) async {
     final repo = await pump(tester);
     await tester.enterText(find.byType(TextFormField), ' jane@clinic.com ');
     await tester.tap(find.text('Send reset link'));

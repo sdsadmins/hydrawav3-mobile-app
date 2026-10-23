@@ -142,7 +142,7 @@ void main() {
   for (final size in [const Size(390, 844), const Size(1024, 1366)]) {
     final tag = size.width > 600 ? 'tablet' : 'phone';
 
-    testWidgets('four tabs from the client\'s sessions and chats ($tag)',
+    testWidgets('[R4-30] four tabs from the client\'s sessions and chats ($tag)',
         (tester) async {
       final fonts = Platform.environment['ROBOTO_DIR'];
       if (fonts != null) {
@@ -266,7 +266,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('protocols show a skeleton while loading ($tag)',
+    testWidgets('[R4-31] protocols show a skeleton while loading ($tag)',
         (tester) async {
       tester.view.physicalSize = size * 2;
       tester.view.devicePixelRatio = 2;

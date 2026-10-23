@@ -104,7 +104,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('protocol picker filters and picks ($label)', (tester) async {
+    testWidgets('[R4-04] protocol picker filters and picks ($label)', (tester) async {
       final (ctx, _) = await host(tester, size);
       final result = debugShowProtocolPicker(ctx, currentId: 'p2', unitName: 'Unit 1');
       await settle(tester);

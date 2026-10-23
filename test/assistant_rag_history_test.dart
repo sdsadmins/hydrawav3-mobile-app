@@ -105,7 +105,7 @@ void main() {
     return rag;
   }
 
-  testWidgets('opening alone saves nothing; the first tap saves the thread',
+  testWidgets('[R4-28] opening alone saves nothing; the first tap saves the thread',
       (tester) async {
     final fonts = Platform.environment['ROBOTO_DIR'];
     if (fonts != null) {
@@ -165,7 +165,7 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
   });
 
-  testWidgets('a selected client saves under them and shows past chats',
+  testWidgets('[R4-29] a selected client saves under them and shows past chats',
       (tester) async {
     const malik = Client(id: 'c1', clientName: 'Malik Carter');
     final rag = await pump(tester, mode: ClientMode.client, selected: malik);

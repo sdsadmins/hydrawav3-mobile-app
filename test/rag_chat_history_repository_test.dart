@@ -1,63 +1,46 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hydrawav3/core/constants/api_endpoints.dart';
 import 'package:hydrawav3/features/assistant/data/rag_chat_history_repository.dart';
 
-/// Answers each POST with [reply] and records the bodies it was sent.
-class _Server implements HttpClientAdapter {
-  final ResponseBody Function(Map<String, dynamic> body) reply;
-  final bodies = <Map<String, dynamic>>[];
-  _Server(this.reply);
-
-  @override
-  Future<ResponseBody> fetch(RequestOptions options,
-      Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
-    final body = Map<String, dynamic>.from(options.data as Map);
-    bodies.add(body);
-    return reply(body);
-  }
-
-  @override
-  void close({bool force = false}) {}
-}
-
-ResponseBody _json(int status, Object data) => ResponseBody.fromString(
-      jsonEncode(data),
-      status,
-      headers: {
-        Headers.contentTypeHeader: [Headers.jsonContentType],
-      },
-    );
+import 'helpers/fake_http.dart';
 
 void main() {
   const placement = {'display_name': 'Hamstring chain', 'sets': []};
 
   test('sends the placement as `placements`', () async {
-    final server = _Server((_) => _json(201, {'conversationId': 'conv-1'}));
-    final repo = RagChatHistoryRepository(Dio()..httpClientAdapter = server);
+    final server = FakeHttp()
+      ..onJson(
+          'POST', ApiEndpoints.ragChatHistory, {'conversationId': 'conv-1'},
+          status: 201);
+    final repo = RagChatHistoryRepository(server.dio());
     final id = await repo.addMessage(
         isGuest: true, isUser: false, message: 'Pads', placement: placement);
     expect(id, 'conv-1');
-    expect(server.bodies.single['placements'], placement);
-    expect(server.bodies.single.containsKey('placement'), isFalse);
+    final body = server.requests.single.json;
+    expect(body['placements'], placement);
+    expect(body.containsKey('placement'), isFalse);
   });
 
   test('a server that rejects `placements` still gets the message', () async {
     // what the current backend does: unknown property → 400
-    final server = _Server((b) => b.containsKey('placements')
-        ? _json(400, {
-            'message': ['property placements should not exist']
-          })
-        : _json(201, {'conversationId': 'conv-2'}));
-    final repo = RagChatHistoryRepository(Dio()..httpClientAdapter = server);
+    final server = FakeHttp()
+      ..on(
+        'POST',
+        ApiEndpoints.ragChatHistory,
+        (req) => req.json.containsKey('placements')
+            ? FakeReply.json(400, {
+                'message': ['property placements should not exist']
+              })
+            : FakeReply.json(201, {'conversationId': 'conv-2'}),
+      );
+    final repo = RagChatHistoryRepository(server.dio());
     final id = await repo.addMessage(
         isGuest: true, isUser: false, message: 'Pads', placement: placement);
     expect(id, 'conv-2');
-    expect(server.bodies.length, 2);
-    expect(server.bodies.last.containsKey('placements'), isFalse);
-    expect(server.bodies.last['message'], 'Pads');
+    expect(server.requests, hasLength(2));
+    expect(server.requests.every((r) => r.method == 'POST'), isTrue);
+    expect(server.requests.last.json.containsKey('placements'), isFalse);
+    expect(server.requests.last.json['message'], 'Pads');
   });
 
   test('reads `placements` back, and the older `placement` too', () {
@@ -71,5 +54,35 @@ void main() {
                 {'role': 'assistant', 'message': 'a', 'placement': placement})
             .placement,
         placement);
+  });
+
+  test('lists a client\'s conversations, dropping rows with no id', () async {
+    final server = FakeHttp()
+      ..onJson('GET', ApiEndpoints.ragChatConversations, {
+        'conversations': [
+          {
+            'conversationId': 'conv-9',
+            'lastMessage': 'knee',
+            'messageCount': 2
+          },
+          {'lastMessage': 'orphan'},
+        ],
+      });
+    final repo = RagChatHistoryRepository(server.dio());
+
+    final list = await repo.conversations('c1');
+
+    expect(list.map((c) => c.conversationId), ['conv-9']);
+    final req = server.requestsTo(ApiEndpoints.ragChatConversations).single;
+    expect(req.method, 'GET');
+    expect(req.query, {'clientId': 'c1', 'page': '1', 'limit': '50'});
+  });
+
+  test('an unrouted request gets the 404 fallback and is still recorded',
+      () async {
+    final server = FakeHttp();
+    final repo = RagChatHistoryRepository(server.dio());
+    await expectLater(repo.conversation('nope'), throwsA(anything));
+    expect(server.requests.single.path, endsWith('nope'));
   });
 }

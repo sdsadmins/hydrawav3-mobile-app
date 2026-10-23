@@ -151,7 +151,7 @@ void main() {
         regionLabel: 'Neck',
       );
 
-  test('resolves the applied set with its pads and geometry', () {
+  test('[FIX-09] resolves the applied set with its pads and geometry', () {
     final placement = parse();
 
     expect(placement.hasPads, isTrue);

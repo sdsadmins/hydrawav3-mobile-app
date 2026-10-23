@@ -116,7 +116,8 @@ void main() {
     expect(card.left, greaterThan(0));
   });
 
-  testWidgets('an unassessed client reads em-dash, not a fabricated 0%',
+  // e55bb93 replaced the em-dash placeholder with "--" app-wide.
+  testWidgets('an unassessed client reads "--", not a fabricated 0%',
       (tester) async {
     await pump(tester, history: [
       SessionHistoryItem(id: 's1', clientId: 'c1', createdAt: DateTime.now()),
@@ -124,7 +125,7 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('1'), findsWidgets); // one session
-    expect(find.text('—'), findsOneWidget); // improvement unknown
+    expect(find.text('--'), findsOneWidget); // improvement unknown
     expect(find.text('0%'), findsNothing);
   });
 

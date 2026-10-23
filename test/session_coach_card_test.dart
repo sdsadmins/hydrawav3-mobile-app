@@ -109,7 +109,7 @@ void main() {
   for (final size in [const Size(360, 800), const Size(1024, 1366)]) {
     final tag = size.width > 600 ? 'tablet' : 'phone';
 
-    testWidgets('body → goal → sets → use this set ($tag)', (tester) async {
+    testWidgets('[R4-34] body → goal → sets → use this set ($tag)', (tester) async {
       await pump(tester, size);
       // closed: the coach capsule
       expect(find.text('Session coach'), findsOneWidget);
@@ -150,7 +150,7 @@ void main() {
     });
   }
 
-  testWidgets('a body part without a coach says so', (tester) async {
+  testWidgets('[R4-35] a body part without a coach says so', (tester) async {
     await pump(tester, const Size(390, 844));
     await tap(tester, find.text('Session coach'));
     await tap(tester, find.text('Wrist'));

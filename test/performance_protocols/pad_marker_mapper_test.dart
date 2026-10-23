@@ -34,12 +34,46 @@ Map<String, dynamic> _payload(List<Map<String, dynamic>> sets) => {
       'sets': sets,
     };
 
+// Fixtures use the PERFORMANCE corpus, which authors `set_index` 0-based
+// (see PadSetPayload.markerIndexOf / displayIndexOf, c017c04). Recovery
+// authors it 1-based; that case is pinned in 'set index origin' below.
 void main() {
+  group('set index origin', () {
+    test('performance set_index is already the 0-based marker index', () {
+      final payload = PadSetPayload.fromJson(_payload([
+        {'set_index': 0, 'placement_label': 'Hip', 'sun': _pad(anchor: 'lat')}
+      ]));
+      final data = PadPlacementViewData.from(payload);
+      expect(data.padOf(0, 'sun'), isNotNull);
+      expect(data.markers().single['setIndex'], 0);
+      // Printed 1-based, never "Set 0".
+      expect(payload.titleOf(payload.sets.single), 'Set 1 · Hip');
+      expect(data.markers().single['setTitle'], 'Set 1 · Hip');
+    });
+
+    test('recovery set_index is 1-based and shifts down for markers', () {
+      final payload = PadSetPayload.fromJson({
+        ..._payload([
+          {
+            'set_index': 1,
+            'placement_label': 'Low back',
+            'sun': _pad(anchor: 'lat'),
+          }
+        ]),
+        'discipline': 'recovery',
+      });
+      final data = PadPlacementViewData.from(payload);
+      expect(data.padOf(0, 'sun'), isNotNull);
+      expect(data.markers().single['setIndex'], 0);
+      expect(data.markers().single['setTitle'], 'Set 1 · Low back');
+    });
+  });
+
   group('tier 1 — zone keys', () {
     test('an exact zone key passes through', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
         {
-          'set_index': 1,
+          'set_index': 0,
           'role': 'generator',
           'placement_label': 'Posterior hip',
           'sun': _pad(anchor: 'hamstring_origin'),
@@ -55,7 +89,7 @@ void main() {
     test('clinical phrasing resolves through the synonym table', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
         {
-          'set_index': 1,
+          'set_index': 0,
           'sun': _pad(anchor: 'Ischial tuberosity, just medial'),
           'moon': _pad(
               anchor: 'Upper trapezius at the shoulder slope', side: 'left'),
@@ -68,7 +102,7 @@ void main() {
 
     test('the longest matching phrase wins over a generic one', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
-        {'set_index': 1, 'sun': _pad(anchor: 'medial hamstring origin')}
+        {'set_index': 0, 'sun': _pad(anchor: 'medial hamstring origin')}
       ])));
 
       expect(data.padOf(0, 'sun')!.zone, 'medial_hamstring_origin');
@@ -79,7 +113,7 @@ void main() {
     test('an unknown anchor with target muscles emits the geometry inputs', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
         {
-          'set_index': 1,
+          'set_index': 0,
           'sun': _pad(
             anchor: 'two finger-widths lateral to the crest',
             plane: 'anterior',
@@ -114,7 +148,7 @@ void main() {
     test('no zone and no muscles means no marker is emitted', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
         {
-          'set_index': 1,
+          'set_index': 0,
           'sun': _pad(anchor: 'wherever it feels tight'),
           'moon': _pad(anchor: 'lumbar paraspinal', side: 'left'),
         }
@@ -135,7 +169,7 @@ void main() {
     test('side comes from the pad, falling back to the plane text', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
         {
-          'set_index': 1,
+          'set_index': 0,
           'sun': _pad(anchor: 'lat', side: 'left'),
           'moon': _pad(anchor: 'lat', side: '', plane: 'right lateral'),
         }
@@ -147,9 +181,9 @@ void main() {
 
     test('sets sort by set_index regardless of payload order', () {
       final payload = PadSetPayload.fromJson(_payload([
-        {'set_index': 3, 'placement_label': 'C', 'sun': _pad(anchor: 'lat')},
-        {'set_index': 1, 'placement_label': 'A', 'sun': _pad(anchor: 'lat')},
-        {'set_index': 2, 'placement_label': 'B', 'sun': _pad(anchor: 'lat')},
+        {'set_index': 2, 'placement_label': 'C', 'sun': _pad(anchor: 'lat')},
+        {'set_index': 0, 'placement_label': 'A', 'sun': _pad(anchor: 'lat')},
+        {'set_index': 1, 'placement_label': 'B', 'sun': _pad(anchor: 'lat')},
       ]));
 
       expect(payload.sets.map((s) => s.placementLabel), ['A', 'B', 'C']);
@@ -162,7 +196,7 @@ void main() {
 
     test('a side-only set opens front — the stage only flips front/back', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
-        {'set_index': 1, 'sun': _pad(anchor: 'lat')} // `lat` is a side zone
+        {'set_index': 0, 'sun': _pad(anchor: 'lat')} // `lat` is a side zone
       ])));
 
       expect(data.padOf(0, 'sun')!.view, 'side');
@@ -171,8 +205,8 @@ void main() {
 
     test('focusing a set filters the markers and picks its view', () {
       final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
-        {'set_index': 1, 'sun': _pad(anchor: 'anterior_deltoid')},
-        {'set_index': 2, 'sun': _pad(anchor: 'hamstring_origin')},
+        {'set_index': 0, 'sun': _pad(anchor: 'anterior_deltoid')},
+        {'set_index': 1, 'sun': _pad(anchor: 'hamstring_origin')},
       ])));
 
       expect(data.markers(focusSetIndex: 1), hasLength(1));
@@ -188,12 +222,12 @@ void main() {
         'chain': {'chain_id': 'c1', 'name': 'Serve chain'},
         'sets': [
           {
-            'set_index': 1,
+            'set_index': 0,
             'role': 'generator',
             'sun': _pad(anchor: 'anterior_deltoid'),
           },
           {
-            'set_index': 2,
+            'set_index': 1,
             'role': 'transfer',
             'sun': _pad(anchor: 'hamstring_origin'),
             'deferred': true,
@@ -216,9 +250,9 @@ void main() {
         'role': 'Singles Player',
         'chain': {'chain_id': 'c1', 'name': 'Serve chain'},
         'sets': [
-          {'set_index': 1, 'role': 'generator', 'sun': _pad(anchor: 'lat')},
+          {'set_index': 0, 'role': 'generator', 'sun': _pad(anchor: 'lat')},
           {
-            'set_index': 2,
+            'set_index': 1,
             'role': 'transfer',
             'sun': _pad(anchor: 'hamstring_origin'),
             'deferred': true,
@@ -298,7 +332,7 @@ void main() {
 
     test('a real pad set is not a refusal', () {
       final payload = PadSetPayload.fromJson(_payload([
-        {'set_index': 1, 'sun': _pad(anchor: 'lat')}
+        {'set_index': 0, 'sun': _pad(anchor: 'lat')}
       ]));
       expect(payload.isRefusal, isFalse);
       expect(payload.contextLine, 'Tennis · Singles Player');
@@ -308,7 +342,7 @@ void main() {
   test('the viewer envelope keeps the shape the pad screens already read', () {
     final data = PadPlacementViewData.from(PadSetPayload.fromJson(_payload([
       {
-        'set_index': 1,
+        'set_index': 0,
         'role': 'generator',
         'placement_label': 'Posterior hip',
         'sun': _pad(anchor: 'hamstring_origin'),

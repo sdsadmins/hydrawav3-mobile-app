@@ -44,7 +44,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
   }
 
-  testWidgets('lists every organization and marks the active one',
+  testWidgets('[AUTH-10] lists every organization and marks the active one',
       (tester) async {
     await pumpSheet(tester, [
       {'id': 1, 'name': 'Miami Dolphins', 'description': 'NFL team'},

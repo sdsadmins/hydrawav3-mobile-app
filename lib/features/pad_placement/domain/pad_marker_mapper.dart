@@ -315,7 +315,9 @@ class PadPlacementViewData {
           pad: pad,
           role: entry.$1,
           setIndex: markerSetIndex,
-          setTitle: set.title,
+          // titleOf, not PadSet.title: the raw getter prints performance's
+          // 0-based set_index, labelling the first set "Set 0".
+          setTitle: payload.titleOf(set),
           zone: resolveZone(pad),
           side: pad.sideKey ?? _sideFromPlane(pad.plane),
         ));
@@ -462,7 +464,7 @@ class PadPlacementViewData {
           'sets': [
             for (final set in sets)
               {
-                'title': set.title,
+                'title': payload.titleOf(set),
                 'setting': set.role,
                 if (set.sun != null) 'sun': {'label': set.sun!.cue},
                 if (set.moon != null) 'moon': {'label': set.moon!.cue},

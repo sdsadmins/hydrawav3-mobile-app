@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:hydrawav3/core/storage/preferences.dart';
 import 'package:hydrawav3/features/ai_hub/presentation/screens/ai_hub_screen.dart';
 import 'package:hydrawav3/features/clients/presentation/providers/client_providers.dart';
 import 'package:hydrawav3/features/history/data/history_repository.dart';
@@ -21,59 +19,47 @@ import 'package:hydrawav3/features/protocols/presentation/providers/protocol_pro
 import 'package:hydrawav3/features/protocols/presentation/screens/protocol_list_screen.dart';
 import 'package:hydrawav3/features/settings/presentation/screens/legal_screen.dart';
 
+import 'helpers/fakes.dart';
+import 'helpers/pump_app.dart';
+
 /// Every screen More opens must lay out with no backend reachable.
 ///
 /// This is the pattern that caught a blank Hub earlier: `flutter analyze` and a
 /// release build both pass with a scroll-view layout assertion in place, so the
 /// only way to catch one is to pump the widget and check for an exception.
-/// Swallows the mark-read POST so tests don't leave a request in flight.
-class _FakeNotificationSource implements NotificationRemoteSource {
-  @override
-  Future<List<AppNotification>> getNotifications(String userId) async => [];
-
-  @override
-  Future<void> markRead(String id) async {}
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
-}
-
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
-
   Future<void> pump(
     WidgetTester tester,
     Widget screen, {
     List<Override> overrides = const [],
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    tester.view.physicalSize = const Size(390 * 3, 2400 * 3);
-    tester.view.devicePixelRatio = 3.0;
-    addTearDown(tester.view.reset);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          sharedPreferencesProvider.overrideWithValue(prefs),
-          currentPlanProvider.overrideWith((ref) async => null),
-          planTokenGrantProvider.overrideWith((ref) async => null),
-          ...overrides,
-        ],
-        child: MaterialApp(home: screen),
-      ),
+    await pumpApp(
+      tester,
+      screen,
+      // Tall, so every section lays out without scrolling.
+      size: const Size(390, 2400),
+      pixelRatio: 3.0,
+      overrides: [
+        currentPlanProvider.overrideWith((ref) async => null),
+        planTokenGrantProvider.overrideWith((ref) async => null),
+        ...overrides,
+      ],
+      settle: const Duration(milliseconds: 600),
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
   }
 
-  testWidgets('AI Hub renders its three cards', (tester) async {
+  // The "Generate a report" (guided assessment) card was deliberately
+  // commented out in 5376752 and AI Reports is behind a "Coming soon" banner,
+  // so the Hub now shows two cards.
+  testWidgets('AI Hub renders its two cards', (tester) async {
     await pump(tester, const AiHubScreen());
 
     expect(tester.takeException(), isNull);
     expect(find.text('AI Hub'), findsOneWidget);
     expect(find.text('AI Assistant'), findsOneWidget);
     expect(find.text('AI Reports'), findsOneWidget);
-    expect(find.text('Generate a report'), findsOneWidget);
+    expect(find.text('Coming soon'), findsOneWidget);
+    expect(find.text('Generate a report'), findsNothing);
   });
 
   testWidgets('Legal shows the wellness statement and required attribution',
@@ -98,7 +84,7 @@ void main() {
         // The screen marks unread entries read on view, which POSTs — stub the
         // source so the test doesn't leave a live request behind.
         notificationRemoteSourceProvider
-            .overrideWithValue(_FakeNotificationSource()),
+            .overrideWithValue(FakeNotificationSource()),
         notificationsProvider.overrideWith((ref) async => [
               const AppNotification(
                   id: '1', title: 'AI report ready', message: 'Kinetic chain'),
@@ -148,7 +134,9 @@ void main() {
               Protocol(
                   id: 'a', templateName: 'Hot Pack', description: 'Warm up.'),
               Protocol(
-                  id: 'b', templateName: 'Deep Session', description: 'Settle.'),
+                  id: 'b',
+                  templateName: 'Deep Session',
+                  description: 'Settle.'),
             ],
           ),
         ),
@@ -210,20 +198,24 @@ void main() {
       const HistoryListScreen(),
       overrides: [
         clientListProvider.overrideWith((ref) async => []),
-        allSessionsProvider.overrideWith((ref) async => [
-              SessionHistoryItem(
-                id: 'a',
-                clientType: 'guest',
-                createdAt: now,
-                protocols: const [HistoryProtocol(protocol: 'Short Session')],
-              ),
-              SessionHistoryItem(
-                id: 'b',
-                clientType: 'guest',
-                createdAt: now.subtract(const Duration(days: 3)),
-                protocols: const [HistoryProtocol(protocol: 'Deep Session')],
-              ),
-            ]),
+        // Since 8957c83 the "All" list is the scroll-paginated
+        // historyPagingProvider, not allSessionsProvider.
+        historyPagingProvider.overrideWith(
+          (ref) => FixedHistory(ref, [
+            SessionHistoryItem(
+              id: 'a',
+              clientType: 'guest',
+              createdAt: now,
+              protocols: const [HistoryProtocol(protocol: 'Short Session')],
+            ),
+            SessionHistoryItem(
+              id: 'b',
+              clientType: 'guest',
+              createdAt: now.subtract(const Duration(days: 3)),
+              protocols: const [HistoryProtocol(protocol: 'Deep Session')],
+            ),
+          ]),
+        ),
       ],
     );
 
@@ -231,8 +223,9 @@ void main() {
     expect(find.text('History'), findsWidgets);
     expect(find.text('TODAY'), findsOneWidget);
     expect(find.text('Guest'), findsNWidgets(2));
-    // No before/after scores captured → an em-dash, never a fabricated result.
-    expect(find.text('—'), findsNWidgets(2));
+    // No outcome check captured → a "--" placeholder (e55bb93 dropped the
+    // em-dash app-wide), never a fabricated result.
+    expect(find.text('--'), findsNWidgets(2));
   });
 
   testWidgets('History keeps working embedded in the Users tab',
@@ -242,7 +235,7 @@ void main() {
       const Scaffold(body: HistoryListScreen(embedded: true)),
       overrides: [
         clientListProvider.overrideWith((ref) async => []),
-        allSessionsProvider.overrideWith((ref) async => []),
+        historyPagingProvider.overrideWith((ref) => FixedHistory(ref, [])),
       ],
     );
 

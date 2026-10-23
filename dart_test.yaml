@@ -1,0 +1,12 @@
+# QA automation test configuration.
+#
+# Tests tagged `qa-known-bug` assert the CORRECT behaviour for a feature that is
+# not built yet or a known bug that is not fixed yet, so they fail honestly
+# against today's code. Developers keep green with:
+#
+#   flutter test --exclude-tags qa-known-bug
+#
+# and see the outstanding work with a plain `flutter test`.
+tags:
+  qa-known-bug:
+    skip: false

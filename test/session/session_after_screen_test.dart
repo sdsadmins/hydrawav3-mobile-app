@@ -127,7 +127,7 @@ void main() {
     await leaveScreen(tester);
   });
 
-  testWidgets('records each answer against its own question, with its rank',
+  testWidgets('[FIX-06] records each answer against its own question, with its rank',
       (tester) async {
     final container = await pumpScreen(tester);
 
@@ -167,7 +167,7 @@ void main() {
     expect(health.rank, 2);
   });
 
-  testWidgets('a stopped-early session records no outcome, but keeps remarks',
+  testWidgets('[FIX-07] a stopped-early session records no outcome, but keeps remarks',
       (tester) async {
     final container = await pumpScreen(tester, stoppedEarly: true);
 

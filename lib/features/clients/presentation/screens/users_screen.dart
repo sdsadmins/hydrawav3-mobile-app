@@ -64,62 +64,87 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          university ? 'Users' : 'Clients',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          // `.h-page` — 24/800
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.48,
-                            color: p.ink,
+                  // The page title keeps its natural width (capped at half
+                  // the row); the bell and the add pill share what's left,
+                  // and the pill's label ellipsizes when it doesn't fit. It
+                  // used to be the other way round: the pill was rigid, so a
+                  // long label or large text overflowed the row (~27px on a
+                  // 390pt phone) or squeezed the title down to "…".
+                  LayoutBuilder(
+                    builder: (context, constraints) => Row(
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth / 2,
+                          ),
+                          child: Text(
+                            university ? 'Users' : 'Clients',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            // `.h-page` — 24/800
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.48,
+                              color: p.ink,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      // Notification bell with an unread dot — the spec puts
-                      // it in this topbar (app.js:4268).
-                      Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          _IconBtn(
-                            icon: Icons.notifications_none_rounded,
-                            color: p.ink2,
-                            palette: p,
-                            onTap: () => context.push(RoutePaths.notifications),
-                          ),
-                          if (ref.watch(unreadNotificationCountProvider) > 0)
-                            Positioned(
-                              top: 9,
-                              right: 9,
-                              child: Container(
-                                width: 9,
-                                height: 9,
-                                decoration: BoxDecoration(
-                                  color: p.low,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: p.card, width: 2),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              // Notification bell with an unread dot — the
+                              // spec puts it in this topbar (app.js:4268).
+                              Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  _IconBtn(
+                                    icon: Icons.notifications_none_rounded,
+                                    color: p.ink2,
+                                    palette: p,
+                                    onTap: () =>
+                                        context.push(RoutePaths.notifications),
+                                  ),
+                                  if (ref.watch(
+                                          unreadNotificationCountProvider) >
+                                      0)
+                                    Positioned(
+                                      top: 9,
+                                      right: 9,
+                                      child: Container(
+                                        width: 9,
+                                        height: 9,
+                                        decoration: BoxDecoration(
+                                          color: p.low,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                              color: p.card, width: 2),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(width: 12),
+                              // the bare + as a labelled pill (`.v5i-addbtn`)
+                              Flexible(
+                                child: _AddPill(
+                                  palette: p,
+                                  onTap: () async {
+                                    university
+                                        ? await showAddPlayerSheet(context, ref)
+                                        : await showNewClientSheet(
+                                            context, ref);
+                                    ref.invalidate(clientListProvider);
+                                  },
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(width: 12),
-                      // the bare + as a labelled pill (`.v5i-addbtn`)
-                      _AddPill(
-                        palette: p,
-                        onTap: () async {
-                          university
-                              ? await showAddPlayerSheet(context, ref)
-                              : await showNewClientSheet(context, ref);
-                          ref.invalidate(clientListProvider);
-                        },
-                      ),
-                    ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 16),
                   _OrgChip(
@@ -422,13 +447,16 @@ class _AddPill extends StatelessWidget {
               children: [
                 Icon(Icons.add_rounded, size: 18, color: p.copperInk),
                 const SizedBox(width: 6),
-                Text(
-                  'Add client / athlete',
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: p.copperInk,
+                Flexible(
+                  child: Text(
+                    'Add client / athlete',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: p.copperInk,
+                    ),
                   ),
                 ),
               ],
