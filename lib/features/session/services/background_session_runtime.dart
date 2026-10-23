@@ -163,7 +163,10 @@ class BackgroundSessionRuntime extends StateNotifier<BackgroundSessionState> {
   Future<void> dispose() async {
     await _eventsSub?.cancel();
     _eventsSub = null;
-    super.dispose();
+    // StateNotifierProvider disposes the notifier itself and the provider also
+    // registers this method via ref.onDispose, so it can run twice; the second
+    // call must not touch an already-disposed notifier.
+    if (mounted) super.dispose();
   }
 
   Future<void> startService(LiveSessionSnapshot snapshot) async {
