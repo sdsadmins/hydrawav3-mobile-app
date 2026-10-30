@@ -27,6 +27,7 @@ import '../../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../widgets/plan_sheet.dart';
+import '../widgets/continue_last_protocol.dart';
 import '../widgets/device_center_widgets.dart'
     show SignalBars, signalOf, unitRssiProvider;
 import '../../../session_coach/presentation/widgets/session_coach_card.dart';
@@ -42,6 +43,7 @@ import '../../../devices/presentation/widgets/ref_palette.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../clients/presentation/providers/lease_guard.dart';
 import '../../../intake/presentation/providers/guided_assessment_provider.dart';
 import '../../../session/domain/session_model.dart';
 import '../../../session/domain/active_session_model.dart' as live;
@@ -54,6 +56,7 @@ import '../../../session/presentation/widgets/live_sessions_banner.dart';
 import '../../../session/services/protocol_plus_controller.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../payments/presentation/providers/token_balance_provider.dart';
+import '../../../payments/presentation/widgets/plan_locked_sheet.dart';
 import '../../../payments/presentation/widgets/token_balance_badge.dart';
 
 final pairedDevicesProvider = StreamProvider((ref) {
@@ -497,6 +500,21 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   }) async {
     if (_isSeedingDefaultProtocol || deviceIds.isEmpty) return;
 
+    // Plan gating: protocols the org's plan doesn't include (locked).
+    final lockedIds = {
+      for (final p in protocols)
+        if (!p.active) p.id,
+    };
+    // A pick the plan no longer includes (made before the plan changed) is
+    // dropped, so the unit is re-seeded below with an unlocked protocol.
+    for (final id in deviceIds) {
+      if (lockedIds.contains(_protocolIdByDeviceId[id])) {
+        _protocolIdByDeviceId.remove(id);
+        _selectedProtocolByDeviceId.remove(id);
+        _settingsByDeviceId.remove(id);
+      }
+    }
+
     final missingDeviceIds = deviceIds
         .where((id) =>
             !_protocolIdByDeviceId.containsKey(id) ||
@@ -511,15 +529,25 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     // user has never set one and has no recent protocol either. Without
     // this, changing the default in Settings had no visible effect here:
     // this screen always fell back to the hardcoded id/name match.
+    // Only protocols the plan includes can be the default — otherwise a
+    // locked "Deep-Tension Recovery" was preselected and ran. When the usual
+    // default is locked, the first unlocked protocol is used.
+    final unlocked = protocols.where((p) => p.active).toList()
+      ..sort((a, b) => naturalCompare(a.templateName, b.templateName));
     final settingsDefaultId = ref.read(defaultProtocolIdProvider);
     final settingsDefault = settingsDefaultId == null
         ? null
-        : protocols.where((p) => p.id == settingsDefaultId).firstOrNull;
-    final defaultProtocol =
-        settingsDefault ?? _findDefaultProtocolOption(protocols);
+        : unlocked.where((p) => p.id == settingsDefaultId).firstOrNull;
+    final defaultProtocol = settingsDefault ??
+        _findDefaultProtocolOption(unlocked) ??
+        unlocked.firstOrNull;
     // Restore each device's previously PICKED protocol (persisted across
-    // navigation) and only fall back to the default when it was never chosen.
-    final persisted = ref.read(selectedProtocolIdByDeviceProvider);
+    // navigation) and only fall back to the default when it was never chosen
+    // or the plan no longer includes it.
+    final persisted = {
+      for (final e in ref.read(selectedProtocolIdByDeviceProvider).entries)
+        if (!lockedIds.contains(e.value)) e.key: e.value,
+    };
 
     _isSeedingDefaultProtocol = true;
     try {
@@ -574,6 +602,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   /// (also used by the Session Coach's "Use this set"). True on success.
   Future<bool> _applyProtocolToDevice(
       String deviceId, String protocolId) async {
+    final locked = _lockedOption(protocolId);
+    if (locked != null) {
+      showPlanLockedSheet(context, protocolName: locked.templateName);
+      return false;
+    }
     try {
       final protocol =
           await ref.read(protocolDetailProvider(protocolId).future);
@@ -596,6 +629,18 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
       );
       return false;
     }
+  }
+
+  /// Sets a unit's Start Delay exactly as its card's Delay stepper does
+  /// (0–60 s); used by the Session Coach's start-delay rail.
+  void _setStartDelay(String deviceId, int seconds) {
+    final current = _settingsByDeviceId[deviceId];
+    if (current == null || !mounted) return;
+    final clamped = seconds.clamp(0, 60);
+    if (clamped == current.startDelay) return;
+    setState(() {
+      _settingsByDeviceId[deviceId] = current.copyWith(startDelay: clamped);
+    });
   }
 
   /// One-tap Locate for a BLE-connected device card: sends `{"beeping": true}`
@@ -824,6 +869,61 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     );
   }
 
+  /// The picker option for [protocolId] when the org's plan doesn't include
+  /// it (locked), else null.
+  ProtocolSelectionOption? _lockedOption(String? protocolId) {
+    if (protocolId == null) return null;
+    final options =
+        ref.read(protocolSelectionOptionsProvider(null)).valueOrNull;
+    final option = options?.where((p) => p.id == protocolId).firstOrNull;
+    return option != null && !option.active ? option : null;
+  }
+
+  /// Device lease at Start. A unit on lease only runs a session that carries
+  /// its lease key: for the lease holder (the selected client) the key is set
+  /// for that unit's start command; for anyone else Start is refused — the
+  /// unit would sit idle while the timer ran and the tokens were charged.
+  /// Returns the refusal message, or null when Start can go ahead.
+  String? _leaseCheckForStart(List<String> runIds, Map<String, String> labels) {
+    final leases = ref.read(activeLeasesByMacProvider);
+    final guest = ref.read(sessionClientModeProvider) == ClientMode.guest;
+    final selected = guest ? null : ref.read(selectedClientProvider);
+    final connector = ref.read(bleConnectorProvider);
+    final keys = <String, String>{};
+    for (final id in runIds) {
+      final holder =
+          leaseHolderOf(leases, [id, connector.getHardwareMac(id)]);
+      if (holder == null) continue;
+      if (selected != null && selected.id == holder.id) {
+        final key = (holder.leaseId ?? '').trim();
+        if (key.isNotEmpty) keys[id] = key;
+        continue;
+      }
+      return '${labels[id] ?? 'This unit'} is on lease to '
+          '${holder.displayName}. End the lease to run it here, or select '
+          '${holder.displayName} to run it for them.';
+    }
+    ref.read(sessionLeaseKeysProvider.notifier).state = keys;
+    return null;
+  }
+
+  void _showOnLease(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.key_rounded),
+        title: const Text('Unit on lease'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Why Start can't run yet, or null when it can — the same reasons the old
   /// Start button printed under itself.
   String? _startBlockedReason(List<String> runIds, bool canStart) {
@@ -844,8 +944,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required List<String> runIds,
     required SessionTransport transport,
     required bool canStart,
+    List<String> connectedIds = const [],
+    Map<String, String> labels = const {},
+    Set<String> inUseIds = const {},
   }) {
     final enabled = !_starting && canStart;
+    // Keeps the org's leases loaded for the Start check below.
+    ref.watch(activeLeasesByMacProvider);
     final client = ref.watch(selectedClientProvider);
     final guest = ref.watch(sessionClientModeProvider) == ClientMode.guest ||
         client == null;
@@ -879,6 +984,23 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                 starting: _starting,
                 onTap: () {
                   if (enabled) {
+                    // A locked pick (e.g. saved before the plan changed)
+                    // never runs.
+                    final locked = runIds
+                        .map((id) => _lockedOption(_protocolIdByDeviceId[id]))
+                        .nonNulls
+                        .firstOrNull;
+                    if (locked != null) {
+                      showPlanLockedSheet(context,
+                          protocolName: locked.templateName);
+                      return;
+                    }
+                    // A unit on lease runs only for its lease holder.
+                    final onLease = _leaseCheckForStart(runIds, labels);
+                    if (onLease != null) {
+                      _showOnLease(onLease);
+                      return;
+                    }
                     _startSession(runIds: runIds, transport: transport);
                     return;
                   }
@@ -901,9 +1023,71 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
             longest: longest,
             protocols: names,
             guest: guest,
+            onTap: () => _showSessionSummary(
+              who: guest ? 'Guest' : client.displayName,
+              guest: guest,
+              runIds: runIds,
+              connectedIds: connectedIds,
+              labels: labels,
+              inUseIds: inUseIds,
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  /// `V6.summarySheet`: the per-unit breakdown behind the summary strip —
+  /// what each switched-on unit will run (and its start delay), what's
+  /// already running, and what's connected but off. Read-only.
+  void _showSessionSummary({
+    required String who,
+    required bool guest,
+    required List<String> runIds,
+    required List<String> connectedIds,
+    required Map<String, String> labels,
+    required Set<String> inUseIds,
+  }) {
+    String name(String id) => labels[id] ?? id;
+    String proto(String id) =>
+        _selectedProtocolByDeviceId[id]?.templateName ?? '';
+    var maxDelay = 0;
+    final run = <PlanSummaryUnit>[];
+    for (final id in runIds) {
+      final p = _selectedProtocolByDeviceId[id];
+      final mins = p == null ? 0 : (p.totalDuration.inSeconds / 60).round();
+      final delay = _settingsByDeviceId[id]?.startDelay ?? 0;
+      if (delay > maxDelay) maxDelay = delay;
+      run.add(PlanSummaryUnit(
+        name: name(id),
+        protocol: proto(id),
+        right: [
+          if (mins > 0) '$mins min',
+          if (delay > 0) '+${delay}s',
+        ].join(' · '),
+      ));
+    }
+    for (final id in connectedIds) {
+      if (inUseIds.contains(id) && !runIds.contains(id)) {
+        run.add(PlanSummaryUnit(
+            name: name(id), protocol: proto(id), right: 'Running'));
+      }
+    }
+    final off = <PlanSummaryUnit>[
+      for (final id in connectedIds)
+        if (!runIds.contains(id) && !inUseIds.contains(id))
+          PlanSummaryUnit(
+              name: name(id), protocol: proto(id), right: 'Off', dim: true),
+    ];
+    final n = runIds.length;
+    showPlanSheet<void>(
+      context,
+      title: 'This session',
+      subtitle: n == 0
+          ? 'No unit is switched on yet.'
+          : '$who · $n unit${n == 1 ? '' : 's'} will run'
+              '${maxDelay > 0 ? ' after a ${maxDelay}s delay' : ''}.',
+      builder: (_) => PlanSessionSummaryBody(run: run, off: off, guest: guest),
     );
   }
 
@@ -1677,6 +1861,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       ],
                                     ),
                                   ),
+                                  // the selected client's last protocol, one tap
+                                  // onto every switched-on unit
+                                  ContinueLastProtocol(
+                                    unitIds: runIds,
+                                    protocolIdByUnit: _protocolIdByDeviceId,
+                                    onApply: _applyProtocolToDevice,
+                                  ),
                                   // v6 Session Coach: body → goal → the admin's
                                   // sets, applied to the units below.
                                   const SizedBox(height: 12),
@@ -1691,6 +1882,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         ),
                                     ],
                                     onApply: _applyProtocolToDevice,
+                                    onSetDelay: _setStartDelay,
                                     onLocate: _sendLocate,
                                   ),
                                 ],
@@ -2730,6 +2922,9 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                   runIds: runIds,
                   transport: target.transport,
                   canStart: canStart,
+                  connectedIds: currentSessionDeviceIds,
+                  labels: currentLabelsById,
+                  inUseIds: inUseDeviceIds,
                 ),
               ),
           ],
@@ -3967,6 +4162,8 @@ class _SessionAdvancedSettingsPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 8),
+        const PlanAdvLabel('Vibration'),
+        const SizedBox(height: 6),
         PlanModeSeg(
           options: const ['Off', 'Sweep', 'Single'],
           selected: settings.vibrationMode,
@@ -4178,6 +4375,8 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
         // matching look. Behaviour is unchanged: Sweep = vibration on (each
         // step's own range), Off = off. Single can't apply across a
         // sequence of protocols, so it shows but is disabled.
+        const PlanAdvLabel('Vibration'),
+        const SizedBox(height: 6),
         PlanModeSeg(
           options: const ['Off', 'Sweep', 'Single'],
           disabled: const {'Single'},
@@ -4639,7 +4838,10 @@ class _ProtocolPickerState extends ConsumerState<_ProtocolPicker> {
                     label: protocol.templateName,
                     selected: protocol.id == widget.currentId,
                     locked: !protocol.active,
-                    onTap: () => _choose(protocol.id),
+                    onTap: protocol.active
+                        ? () => _choose(protocol.id)
+                        : () => showPlanLockedSheet(context,
+                            protocolName: protocol.templateName),
                   ),
               ]),
             ],
@@ -4696,12 +4898,8 @@ class _ProtocolPickerState extends ConsumerState<_ProtocolPicker> {
                   // Plan gating (web parity): locked protocols can't be
                   // selected.
                   if (!rows[i].active) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content:
-                            Text('This protocol isn\'t included in your plan.'),
-                      ),
-                    );
+                    showPlanLockedSheet(context,
+                        protocolName: rows[i].templateName);
                     return;
                   }
                   _choose(rows[i].id);
@@ -4824,7 +5022,7 @@ class _RecentPill extends StatelessWidget {
     return Opacity(
       opacity: locked ? .55 : 1,
       child: PlanPress(
-        onTap: locked ? null : onTap,
+        onTap: onTap,
         scale: .96,
         child: Container(
           constraints: const BoxConstraints(minHeight: 38, maxWidth: 240),

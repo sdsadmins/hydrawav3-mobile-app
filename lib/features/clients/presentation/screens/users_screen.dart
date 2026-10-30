@@ -849,6 +849,11 @@ class _UserRow extends StatelessWidget {
                           ),
                         ),
                       ],
+                      // Has a unit on lease (or one registered, not yet on it).
+                      if (client.isLeaseActive || client.isLeasePending) ...[
+                        const SizedBox(width: 6),
+                        _LeaseBadge(palette: p, active: client.isLeaseActive),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 2),
@@ -937,6 +942,43 @@ class _Empty extends StatelessWidget {
             style: TextStyle(fontSize: 13, color: p.ink3),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A key next to the name: green "Lease active" when the person has a unit on
+/// lease, amber "Lease pending" when one is registered but not yet on the unit.
+class _LeaseBadge extends StatelessWidget {
+  final RefPalette palette;
+  final bool active;
+  const _LeaseBadge({required this.palette, required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    final fg = active ? p.good : p.mid;
+    return Semantics(
+      label: active ? 'Lease active' : 'Lease pending',
+      child: Container(
+        margin: const EdgeInsets.only(top: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: active ? p.goodSoft : p.midSoft,
+          borderRadius: BorderRadius.circular(HwRadius.pill),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.key_rounded, size: 12, color: fg),
+            const SizedBox(width: 3),
+            Text(
+              active ? 'Lease active' : 'Lease pending',
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w700, color: fg),
+            ),
+          ],
+        ),
       ),
     );
   }

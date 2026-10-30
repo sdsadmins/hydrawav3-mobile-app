@@ -38,7 +38,11 @@ void main() async {
   // saved copy, then a quick fetch (≤2.5s). Must run before anything builds
   // a Dio client, so every API call this run uses the same URLs.
   try {
-    AppConfigStore.appVersion = (await PackageInfo.fromPlatform()).version;
+    final info = await PackageInfo.fromPlatform();
+    AppConfigStore.appVersion = info.version;
+    // APK / TestFlight → the test Node server; App Store / Play → live.
+    AppConfigStore.testInstall =
+        AppConfigStore.isTestInstall(info.installerStore);
   } catch (_) {}
   await AppConfigStore.load(sharedPrefs);
 

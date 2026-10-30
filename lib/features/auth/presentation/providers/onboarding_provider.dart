@@ -142,12 +142,12 @@ class OnboardingController extends StateNotifier<OnboardingState> {
     req('phone', f.phone);
     req('title', f.title);
     req('accountType', f.accountType);
-    req('address', f.address);
     req('city', f.city);
     req('state', f.state);
     req('zip', f.zip);
     req('country', f.country);
     // dateOfBirth is optional in the onboarding API (create + account update).
+    // address is no longer asked for (the API rejects it on create).
 
     if (f.password.isEmpty) {
       errors['password'] = 'Required';

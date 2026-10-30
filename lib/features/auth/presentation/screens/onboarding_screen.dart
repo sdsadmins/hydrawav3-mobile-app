@@ -65,7 +65,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _bizName = TextEditingController();
   final _bizEmail = TextEditingController();
   final _bizContact = TextEditingController();
-  final _bizAddress = TextEditingController();
   String? _bizAge;
   final _bizSports = <String>{}; // selected sport NAMES (university only)
 
@@ -94,7 +93,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       _bizName,
       _bizEmail,
       _bizContact,
-      _bizAddress,
     ]) {
       c.dispose();
     }
@@ -350,8 +348,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             hint: 'e.g. Physiotherapist',
             err: s.step1Errors['title']),
         _accountTypeField(s.step1Errors['accountType']),
-        _field(_address, 'Address',
-            req: true, hint: '123 Main St', err: s.step1Errors['address']),
+        // Address hidden: the onboarding API no longer accepts it (the server
+        // rejects step 1 with "property address should not exist").
+        // _field(_address, 'Address',
+        //     req: true, hint: '123 Main St', err: s.step1Errors['address']),
         Row(children: [
           Expanded(
               child: _field(_city, 'City',
@@ -477,8 +477,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             hint: 'clinic@example.com', keyboard: TextInputType.emailAddress),
         _field(_bizContact, 'Contact Number',
             hint: '(555) 765-4321', keyboard: TextInputType.phone),
-        _field(_bizAddress, 'Address (street, city, state, zip)',
-            hint: '456 Clinic Ave, Los Angeles, CA, 90001'),
         if (_isUniversityAccount) _sportsPicker(s),
         const SizedBox(height: 4),
         _filePickTile(
@@ -615,12 +613,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final name = _bizName.text.trim();
     final email = _bizEmail.text.trim();
     final contact = _bizContact.text.trim();
-    final address = _bizAddress.text.trim();
     if (name.isEmpty ||
         _bizAge == null ||
         email.isEmpty ||
-        contact.isEmpty ||
-        address.isEmpty) {
+        contact.isEmpty) {
       _snack('Please fill in all business fields.', error: true);
       return;
     }
@@ -633,13 +629,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       businessAge: _bizAge!,
       email: email,
       contactNumber: contact,
-      address: address,
       sports: _isUniversityAccount ? _bizSports.toList() : const [],
     ));
     _bizName.clear();
     _bizEmail.clear();
     _bizContact.clear();
-    _bizAddress.clear();
     setState(() {
       _bizAge = null;
       _bizSports.clear();

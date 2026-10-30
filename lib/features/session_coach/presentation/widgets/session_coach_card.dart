@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
+import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
+import '../../data/coach_plan_store.dart';
 import '../../data/session_coach_repository.dart';
 import '../../domain/session_coach_models.dart';
 import 'coach_body_view.dart';
@@ -28,13 +33,18 @@ final sessionCoachPlannedProvider =
 ///   1 Body  — "What are we working on?" (every body part)
 ///   2 Goal  — Support activation / Support recovery (what the coach has)
 ///   3 Sets  — the admin's 3D pads per set, a device and a protocol per set,
-///             Locate, and "Use this set".
-/// "Use this set" only puts the protocol on the chosen unit, through the
-/// screen's own protocol-apply path ([onApply]); nothing else changes.
+///             Locate, the start delay between two sets (B0-coach
+///             `jointHTML`) with Swap, and "Use this set".
+/// "Use this set" puts the protocol on the chosen unit through the screen's
+/// own protocol-apply path ([onApply]), then that set's start time on the
+/// same unit's Start Delay ([onSetDelay]).
 class SessionCoachCard extends ConsumerStatefulWidget {
   final List<CoachUnit> units;
   final Future<bool> Function(String deviceId, String protocolId) onApply;
   final void Function(String deviceId) onLocate;
+
+  /// Sets a unit's Start Delay, in seconds from Start (the unit card's Delay).
+  final void Function(String deviceId, int seconds)? onSetDelay;
 
   /// Test seam: the 3D body is a WebView, which widget tests can't host.
   final Widget Function(List<Map<String, dynamic>> markers)? bodyBuilder;
@@ -44,6 +54,7 @@ class SessionCoachCard extends ConsumerStatefulWidget {
     required this.units,
     required this.onApply,
     required this.onLocate,
+    this.onSetDelay,
     this.bodyBuilder,
   });
 
@@ -72,6 +83,21 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   int _setIndex = 0;
   final Map<int, String> _deviceBySet = {};
   final Map<int, String> _protocolBySet = {};
+
+  /// Delay before set i starts, after the set before it (set 0 starts at
+  /// Start). A set's start time is the sum up to it, so changing one delay
+  /// moves every later set with it, as in the prototype.
+  final Map<int, int> _gapBySet = {};
+
+  /// The unit each set ran on last time (from the client's saved plan). Only
+  /// a suggestion until "Use this set" puts it on.
+  final Map<int, String> _unitHintBySet = {};
+
+  /// The coach step 3 is showing, for saving from a delay change.
+  SessionCoach? _shownCoach;
+
+  /// Sets "Use this set" has put on a unit (protocol + start delay).
+  final Set<int> _appliedSets = {};
   bool _applying = false;
   List<GlobalKey> _setKeys = const [];
 
@@ -83,6 +109,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _setIndex = 0;
       _deviceBySet.clear();
       _protocolBySet.clear();
+      _gapBySet.clear();
+      _unitHintBySet.clear();
+      _appliedSets.clear();
     });
   }
 
@@ -92,6 +121,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
           _setIndex = 0;
           _deviceBySet.clear();
           _protocolBySet.clear();
+          _gapBySet.clear();
+          _unitHintBySet.clear();
+          _appliedSets.clear();
         } else if (_step == 1) {
           _body = null;
         }
@@ -101,8 +133,131 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   static String _goalShort(String g) =>
       g == kSupportActivation ? 'Support activation' : 'Support recovery';
 
+  // ── the client's own plan (saved on the phone; see CoachPlanStore) ─────────
+  /// The client this plan belongs to, or null for a guest (nothing to file
+  /// it under).
+  String? get _clientId {
+    if (ref.read(sessionClientModeProvider) == ClientMode.guest) return null;
+    return ref.read(selectedClientProvider)?.id;
+  }
+
+  String get _orgId => ref.read(authStateProvider).selectedOrgId ?? 'org';
+
+  CoachPlanRecord? _savedPlan() {
+    final client = _clientId;
+    if (client == null) return null;
+    return ref.read(coachPlanStoreProvider).load(_orgId, client);
+  }
+
+  /// Puts a saved plan's protocols, units and start delays back on the sets.
+  /// Units stay suggestions until "Use this set".
+  void _fillFrom(CoachPlanRecord plan) {
+    _protocolBySet.clear();
+    _gapBySet.clear();
+    _unitHintBySet.clear();
+    _appliedSets.clear();
+    final sets = [...plan.sets]..sort((a, b) => a.index.compareTo(b.index));
+    var prev = 0;
+    for (final set in sets) {
+      if (set.protocolId != null) _protocolBySet[set.index] = set.protocolId!;
+      if (set.unitId != null) _unitHintBySet[set.index] = set.unitId!;
+      if (set.index > 0) {
+        final gap = set.startAt - prev;
+        if (gap > 0) _gapBySet[set.index] = gap;
+      }
+      prev = set.startAt;
+    }
+    _setIndex = sets.first.index;
+  }
+
+  /// Same client, same body part and goal as last time: their own numbers
+  /// come back instead of a blank plan.
+  void _prefillSaved() {
+    final plan = _savedPlan();
+    if (plan == null || plan.bodyPartId != _body?.id || plan.goal != _goal) {
+      return;
+    }
+    _fillFrom(plan);
+  }
+
+  /// Game Prep START: reopen this client's last plan at placement.
+  void _restoreRequested(String clientId) {
+    ref.read(coachRestoreRequestProvider.notifier).state = null;
+    if (clientId != _clientId) return;
+    final plan = _savedPlan();
+    if (plan == null) return; // no history: the ordinary body step
+    setState(() {
+      _deviceBySet.clear();
+      _open = true;
+      _body = CoachBodyPart(id: plan.bodyPartId, name: plan.bodyPartName);
+      _goal = plan.goal;
+      _step = 2;
+      _fillFrom(plan);
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+        content: Text('Loaded their last setup — change anything'),
+        duration: Duration(seconds: 3)));
+  }
+
+  /// Saves what is on the units now as this client's plan.
+  void _savePlan(SessionCoach coach) {
+    final client = _clientId;
+    final body = _body;
+    final goal = _goal;
+    if (client == null || body == null || goal == null) return;
+    if (_appliedSets.isEmpty) return; // nothing has been put on a unit yet
+    final sets = coach.setsFor(goal);
+    ref.read(coachPlanStoreProvider).save(
+          _orgId,
+          client,
+          CoachPlanRecord(
+            bodyPartId: body.id,
+            bodyPartName: body.name,
+            goal: goal,
+            savedAt: DateTime.now(),
+            sets: [
+              for (var i = 0; i < sets.length; i++)
+                CoachPlanSet(
+                  index: i,
+                  protocolId: _protocolFor(i, coach),
+                  unitId: _deviceBySet[i],
+                  startAt: _startOf(i),
+                ),
+            ],
+          ),
+        );
+  }
+
+  /// The set's protocol: the one chosen (if this coach still offers it),
+  /// else the coach's default.
+  String? _protocolFor(int idx, SessionCoach coach) {
+    final chosen = _protocolBySet[idx];
+    final protocols = coach.protocolsFor(_goal);
+    if (chosen != null && protocols.any((p) => p.id == chosen)) return chosen;
+    return protocols.isNotEmpty ? protocols.first.id : null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // A START that landed before this card was built.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final pending = ref.read(coachRestoreRequestProvider);
+      if (pending != null) _restoreRequested(pending);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Another client picked: their plan is theirs, so start over rather than
+    // carry this client's units and delays across.
+    ref.listen(selectedClientProvider, (prev, next) {
+      if (prev?.id != next?.id && _step > 0) _reset();
+    });
+    ref.listen<String?>(coachRestoreRequestProvider, (_, next) {
+      if (next != null) _restoreRequested(next);
+    });
     final p = RefPalette.of(context);
     final planned = ref.watch(sessionCoachPlannedProvider);
     final unitIds = widget.units.map((u) => u.id).toSet();
@@ -323,22 +478,24 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                 sun: true,
                 title: 'Support activation',
                 note: 'Wake the area up before activity',
-                protocol: act?.defaultProtocol,
+                protocol: act?.defaultProtocolFor(kSupportActivation),
                 enabled: act != null,
                 onTap: () => setState(() {
                   _goal = kSupportActivation;
                   _step = 2;
+                  _prefillSaved();
                 }),
               ),
               _GoalCard(
                 sun: false,
                 title: 'Support recovery',
                 note: 'Help it settle after load or activity',
-                protocol: rec?.defaultProtocol,
+                protocol: rec?.defaultProtocolFor(kSupportRecovery),
                 enabled: rec != null,
                 onTap: () => setState(() {
                   _goal = kSupportRecovery;
                   _step = 2;
+                  _prefillSaved();
                 }),
               ),
             ];
@@ -365,6 +522,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final coaches = ref.watch(sessionCoachesByBodyPartProvider(body.id));
     final coach = _coachFor(coaches.valueOrNull ?? const [], goal);
     if (coach == null) return _loading(p);
+    _shownCoach = coach;
     final sets = coach.setsFor(goal);
     final idx = _setIndex.clamp(0, sets.length - 1);
     final set = sets[idx];
@@ -386,6 +544,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                       borderRadius: BorderRadius.circular(18),
                       child: CoachBodyView(
                         markers: set.markers,
+                        muscles: set.muscleNames,
                         lightStage: true,
                         showViewSwitch: false,
                         onAction: () => CoachBodyFullScreen.open(
@@ -454,15 +613,29 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.2,
                     color: p.ink3)),
-            const Spacer(),
-            Text(
-              '${sets.length} ${sets.length == 1 ? 'SET' : 'SETS'} \u00b7 $assigned ASSIGNED',
-              style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: .5,
-                  color: p.copper),
+            const SizedBox(width: 8),
+            // shrinks before Reset delays does, on a narrow phone
+            Expanded(
+              child: Text(
+                '${sets.length} ${sets.length == 1 ? 'SET' : 'SETS'} \u00b7 $assigned ASSIGNED',
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .5,
+                    color: p.copper),
+              ),
             ),
+            if (_timed) ...[
+              const SizedBox(width: 8),
+              _ResetDelays(onTap: () {
+                for (var j = 1; j < sets.length; j++) {
+                  _setGap(j, 0, sets.length);
+                }
+              }),
+            ],
           ],
         ),
         const SizedBox(height: 8),
@@ -477,18 +650,30 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             // the next card peeks, cut at the panel's edge
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < sets.length; i++) ...[
-                  SizedBox(
-                    key: _setKeys[i],
-                    width: w,
-                    child: _setCard(p, coach, sets[i], i, selected: i == idx),
-                  ),
-                  if (i < sets.length - 1) const SizedBox(width: 10),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < sets.length; i++) ...[
+                    // `.v6jt`: the delay before this set, and Swap
+                    if (i > 0)
+                      _DelayJoint(
+                        gap: _gapBySet[i] ?? 0,
+                        onLess: () =>
+                            _setGap(i, (_gapBySet[i] ?? 0) - 1, sets.length),
+                        onMore: () =>
+                            _setGap(i, (_gapBySet[i] ?? 0) + 1, sets.length),
+                        onSwap: () => _swap(i - 1, i, coach),
+                      ),
+                    SizedBox(
+                      key: _setKeys[i],
+                      width: w,
+                      child:
+                          _setCard(p, coach, sets[i], i, selected: i == idx),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           );
         }),
@@ -524,11 +709,91 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     );
   }
 
+  // ── start delay ───────────────────────────────────────────────────────────
+  /// The longest Start Delay a unit takes (the unit card's Delay stepper).
+  static const maxStartDelay = 60;
+
+  /// Seconds from Start until set [i] begins.
+  int _startOf(int i) {
+    var t = 0;
+    for (var j = 1; j <= i; j++) {
+      t += _gapBySet[j] ?? 0;
+    }
+    return t;
+  }
+
+  bool get _timed => _gapBySet.values.any((g) => g > 0);
+
+  /// Room left for the delay before set [i]: the last set must still start
+  /// within [maxStartDelay].
+  int _roomFor(int i, int setCount) {
+    final room = maxStartDelay - _startOf(setCount - 1) + (_gapBySet[i] ?? 0);
+    return room < 0 ? 0 : room;
+  }
+
+  /// Sets the delay before set [i] to [gap] — later sets move with it. Units
+  /// already given a set get their new start time straight away.
+  void _setGap(int i, int gap, int setCount) {
+    final current = _gapBySet[i] ?? 0;
+    final next = gap.clamp(0, _roomFor(i, setCount));
+    if (next == current) return;
+    setState(() => _gapBySet[i] = next);
+    final onSetDelay = widget.onSetDelay;
+    if (onSetDelay == null) return;
+    for (var j = i; j < setCount; j++) {
+      final unit = _deviceBySet[j];
+      if (unit != null && _appliedSets.contains(j)) {
+        onSetDelay(unit, _startOf(j));
+      }
+    }
+    final coach = _shownCoach;
+    if (coach != null) _savePlan(coach);
+  }
+
+  static String _clock(int sec) =>
+      '${sec ~/ 60}:${(sec % 60).toString().padLeft(2, '0')}';
+
+  static String _ord(int i) =>
+      const ['1st', '2nd', '3rd', '4th', '5th', '6th'].elementAtOrNull(i) ??
+      '${i + 1}th';
+
+  /// `.v6jt .sw2`: trade the units of two neighbouring sets. Sets already on
+  /// a unit are put on again on their new unit, protocol and start delay.
+  Future<void> _swap(int a, int b, SessionCoach coach) async {
+    final setCount = coach.setsFor(_goal!).length;
+    final ua = _suggestedUnit(a, setCount);
+    final ub = _suggestedUnit(b, setCount);
+    if (ua == null || ub == null || ua == ub) return;
+    setState(() {
+      _deviceBySet[a] = ub;
+      _deviceBySet[b] = ua;
+      _unitHintBySet.remove(a);
+      _unitHintBySet.remove(b);
+    });
+    for (final i in [a, b]) {
+      if (!_appliedSets.contains(i)) continue;
+      final protocolId = _protocolFor(i, coach);
+      final unit = _deviceBySet[i]!;
+      if (protocolId == null) continue;
+      if (await widget.onApply(unit, protocolId)) {
+        widget.onSetDelay?.call(unit, _startOf(i));
+      }
+      if (!mounted) return;
+    }
+    _savePlan(coach);
+  }
+
   /// The unit each set gets by default: its chosen one, else the unit tab
   /// for the first free set, then the next free units in order.
   String? _suggestedUnit(int idx, int setCount) {
     if (_deviceBySet[idx] != null) return _deviceBySet[idx];
     if (widget.units.isEmpty) return null;
+    String? hint(int i) {
+      final id = _unitHintBySet[i];
+      return id != null && widget.units.any((u) => u.id == id) ? id : null;
+    }
+
+    if (hint(idx) != null) return hint(idx);
     final planned = ref.read(sessionCoachPlannedProvider);
     final order = <String>[
       if (_tabUnit != null) _tabUnit!,
@@ -537,9 +802,13 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       for (final u in widget.units)
         if (u.id != _tabUnit && planned.containsKey(u.id)) u.id,
     ];
-    final used = <String>{..._deviceBySet.values};
+    final used = <String>{
+      ..._deviceBySet.values,
+      for (var i = 0; i < setCount; i++)
+        if (hint(i) != null) hint(i)!,
+    };
     for (var i = 0; i < setCount; i++) {
-      if (_deviceBySet[i] != null) continue;
+      if (_deviceBySet[i] != null || hint(i) != null) continue;
       final pick = order.firstWhere((id) => !used.contains(id),
           orElse: () => order.first);
       used.add(pick);
@@ -555,15 +824,11 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     // `.v6sc select` fill, measured from the prototype
     final card2 = dark ? const Color(0xFF212C33) : const Color(0xFFF7F3F0);
-    final protocols = coach.protocols;
+    final protocols = coach.protocolsFor(_goal);
     final setCount = coach.setsFor(_goal!).length;
     final unitId = _suggestedUnit(idx, setCount);
-    final protocolId = _protocolBySet[idx] ??
-        (protocols.isNotEmpty ? protocols.first.id : null);
+    final protocolId = _protocolFor(idx, coach);
     final unit = widget.units.where((u) => u.id == unitId).firstOrNull;
-    final assignedUnit = _deviceBySet[idx] == null
-        ? null
-        : widget.units.where((u) => u.id == _deviceBySet[idx]).firstOrNull;
     final copperLine = const Color.fromRGBO(198, 158, 131, .75);
 
     void select() {
@@ -624,10 +889,13 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                                 fontWeight: FontWeight.w800,
                                 color: p.ink)),
                         const SizedBox(height: 2),
+                        // `.t small`: 1st · starts 0:00, or together
                         Text(
-                          assignedUnit != null
-                              ? 'On ${assignedUnit.name}'
-                              : 'Not assigned yet',
+                          setCount < 2
+                              ? 'starts at Start'
+                              : _timed
+                                  ? '${_ord(idx)} \u00b7 starts ${_clock(_startOf(idx))}'
+                                  : 'starts with the others',
                           style: TextStyle(fontSize: 12.5, color: p.ink3),
                         ),
                       ],
@@ -746,12 +1014,11 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   /// What the full-screen body shows for each set: its pads, and the unit and
   /// protocol it's been given here (or "Off" when not assigned yet).
   List<CoachFullSet> _fullSets(SessionCoach coach, List<CoachSet> sets) {
-    final protocols = coach.protocols;
+    final protocols = coach.protocolsFor(_goal);
     return [
       for (var i = 0; i < sets.length; i++)
         () {
-          final pid = _protocolBySet[i] ??
-              (protocols.isNotEmpty ? protocols.first.id : null);
+          final pid = _protocolFor(i, coach);
           final pr = protocols.where((x) => x.id == pid).firstOrNull;
           final unitId = _deviceBySet[i];
           final unit = unitId == null
@@ -762,6 +1029,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
             markers: sets[i].markers,
             sunMuscles: sets[i].sunMuscles,
             moonMuscles: sets[i].moonMuscles,
+            muscles: sets[i].muscleNames,
             unitName: unit?.name,
             protocolName: pr == null
                 ? ''
@@ -797,8 +1065,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   Future<void> _apply(
       CoachBodyPart body, int idx, CoachSet set, SessionCoach coach) async {
     final unitId = _suggestedUnit(idx, coach.setsFor(_goal!).length);
-    final protocolId = _protocolBySet[idx] ??
-        (coach.protocols.isNotEmpty ? coach.protocols.first.id : null);
+    final protocolId = _protocolFor(idx, coach);
     final messenger = ScaffoldMessenger.of(context);
     if (unitId == null) {
       messenger.showSnackBar(const SnackBar(
@@ -813,11 +1080,18 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     setState(() => _applying = true);
     final ok = await widget.onApply(unitId, protocolId);
     if (!mounted) return;
+    // After the protocol: applying a protocol resets the unit's settings,
+    // Start Delay included, so the set's start time goes on last.
+    if (ok) widget.onSetDelay?.call(unitId, _startOf(idx));
     setState(() {
       _applying = false;
-      if (ok) _deviceBySet[idx] = unitId;
+      if (ok) {
+        _deviceBySet[idx] = unitId;
+        _appliedSets.add(idx);
+      }
     });
     if (!ok) return;
+    _savePlan(coach);
     ref
         .read(sessionCoachPlannedProvider.notifier)
         .update((m) => {...m, unitId: '${body.name} · Set ${idx + 1}'});
@@ -1748,4 +2022,252 @@ class _BodyChip extends StatelessWidget {
       ),
     );
   }
+}
+
+/// `.v6jt`: between two set cards — a line, the delay pill (− +8s +), Swap,
+/// a line. Dashed and grey at 0; copper once a delay is set. Holding − or +
+/// keeps stepping.
+class _DelayJoint extends StatelessWidget {
+  final int gap;
+  final VoidCallback onLess;
+  final VoidCallback onMore;
+  final VoidCallback onSwap;
+
+  const _DelayJoint({
+    required this.gap,
+    required this.onLess,
+    required this.onMore,
+    required this.onSwap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final set = gap > 0;
+    final copper = p.copper;
+    final tint = set ? copper : p.ink3;
+    Widget line() => Container(
+          width: 2,
+          height: 10,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(2),
+            color: set ? copper.withValues(alpha: .55) : p.line,
+          ),
+        );
+    // 92 wide as in the prototype, wider only if a long value needs it
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 92),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            line(),
+            const SizedBox(height: 5),
+            CustomPaint(
+              foregroundPainter: set
+                  ? null
+                  : _DashedRRect(color: p.line, radius: 12),
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: set ? copper.withValues(alpha: .14) : p.card,
+                  borderRadius: BorderRadius.circular(12),
+                  border: set
+                      ? Border.all(color: copper.withValues(alpha: .7))
+                      : null,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _HoldStep(
+                        label: '−',
+                        semantics: 'One second less',
+                        color: tint,
+                        onStep: onLess),
+                    Container(
+                      constraints: const BoxConstraints(minWidth: 30),
+                      alignment: Alignment.center,
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(
+                              text: set ? '+$gap' : '0',
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  fontFeatures: [
+                                    FontFeature.tabularFigures()
+                                  ])),
+                          const TextSpan(
+                              text: 's',
+                              style: TextStyle(
+                                  fontSize: 10, fontWeight: FontWeight.w700)),
+                        ]),
+                        style: TextStyle(color: tint),
+                      ),
+                    ),
+                    _HoldStep(
+                        label: '+',
+                        semantics: 'One second more',
+                        color: tint,
+                        onStep: onMore),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 5),
+            // `.sw2`
+            Semantics(
+              button: true,
+              label: 'Swap the devices on these two sets',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onSwap,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 28),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: p.card,
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(color: p.line),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.swap_horiz_rounded, size: 14, color: p.ink3),
+                      const SizedBox(width: 4),
+                      Text('Swap',
+                          style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              color: p.ink3)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 5),
+            line(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// `.v6jt .pm`: one second per tap; holding it keeps stepping (`v6.hold`).
+class _HoldStep extends StatefulWidget {
+  final String label;
+  final String semantics;
+  final Color color;
+  final VoidCallback onStep;
+
+  const _HoldStep({
+    required this.label,
+    required this.semantics,
+    required this.color,
+    required this.onStep,
+  });
+
+  @override
+  State<_HoldStep> createState() => _HoldStepState();
+}
+
+class _HoldStepState extends State<_HoldStep> {
+  Timer? _repeat;
+
+  void _stop() {
+    _repeat?.cancel();
+    _repeat = null;
+  }
+
+  @override
+  void dispose() {
+    _stop();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: widget.semantics,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onStep,
+        onLongPressStart: (_) {
+          widget.onStep();
+          _repeat = Timer.periodic(
+              const Duration(milliseconds: 120), (_) => widget.onStep());
+        },
+        onLongPressEnd: (_) => _stop(),
+        onLongPressCancel: _stop,
+        child: SizedBox(
+          width: 26,
+          height: 30,
+          child: Center(
+            child: Text(widget.label,
+                style: TextStyle(
+                    fontSize: 15, height: 1, color: widget.color)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.v6pg-h .rs`
+class _ResetDelays extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ResetDelays({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Semantics(
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 26),
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: p.card,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: p.line),
+          ),
+          child: Text('Reset delays',
+              style: TextStyle(
+                  fontSize: 10.5, fontWeight: FontWeight.w800, color: p.ink2)),
+        ),
+      ),
+    );
+  }
+}
+
+/// A dashed rounded outline (`border:1px dashed`), for a delay of 0.
+class _DashedRRect extends CustomPainter {
+  final Color color;
+  final double radius;
+  const _DashedRRect({required this.color, required this.radius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rr = RRect.fromRectAndRadius(
+        (Offset.zero & size).deflate(.5), Radius.circular(radius));
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    for (final metric in (Path()..addRRect(rr)).computeMetrics()) {
+      for (var d = 0.0; d < metric.length; d += 6) {
+        canvas.drawPath(metric.extractPath(d, d + 3), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedRRect old) =>
+      old.color != color || old.radius != radius;
 }

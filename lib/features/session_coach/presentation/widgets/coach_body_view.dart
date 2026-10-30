@@ -27,6 +27,10 @@ class CoachBodyView extends StatefulWidget {
   /// The selected set's markers (`{id, type, position, normal, …}`).
   final List<Map<String, dynamic>> markers;
 
+  /// The selected set's muscle names: lit on the body, the rest dimmed (the
+  /// website's coach editor does the same). Empty = the plain body.
+  final List<String> muscles;
+
   /// Top-right button (the card's expand). Hidden when null.
   final IconData actionIcon;
   final String actionLabel;
@@ -48,6 +52,7 @@ class CoachBodyView extends StatefulWidget {
   const CoachBodyView({
     super.key,
     required this.markers,
+    this.muscles = const [],
     this.actionIcon = Icons.open_in_full_rounded,
     this.actionLabel = 'Expand',
     this.onAction,
@@ -99,6 +104,9 @@ class _CoachBodyViewState extends State<CoachBodyView> {
     if (_ready && jsonEncode(old.markers) != jsonEncode(widget.markers)) {
       _loadMarkers();
     }
+    if (_ready && jsonEncode(old.muscles) != jsonEncode(widget.muscles)) {
+      _highlightMuscles();
+    }
   }
 
   Future<void> _startServer() async {
@@ -136,6 +144,7 @@ class _CoachBodyViewState extends State<CoachBodyView> {
         }
         if (!mounted) return;
         setState(() => _ready = true);
+        await _highlightMuscles();
         await _loadMarkers();
         if (_view != 'front') await _eval("window.setView('$_view')");
         return;
@@ -147,6 +156,9 @@ class _CoachBodyViewState extends State<CoachBodyView> {
 
   Future<void> _loadMarkers() =>
       _eval('window.loadMarkers(${jsonEncode(widget.markers)})');
+
+  Future<void> _highlightMuscles() => _eval(
+      'window.highlightMuscles && window.highlightMuscles(${jsonEncode(widget.muscles)})');
 
   /// A side view, re-centred on the body (so a pan doesn't carry over).
   void _setView(String v) {
@@ -342,6 +354,9 @@ class CoachFullSet {
   final List<String> sunMuscles;
   final List<String> moonMuscles;
 
+  /// Every muscle in the set (lit on the body).
+  final List<String> muscles;
+
   /// The unit this set is on, or null when it isn't in the session yet.
   final String? unitName;
   final String protocolName;
@@ -352,6 +367,7 @@ class CoachFullSet {
     required this.markers,
     required this.sunMuscles,
     required this.moonMuscles,
+    this.muscles = const [],
     required this.unitName,
     required this.protocolName,
     required this.duration,
@@ -488,6 +504,7 @@ class _CoachBodyFullScreenState extends State<CoachBodyFullScreen> {
                           child: widget.bodyBuilder?.call(set.markers) ??
                               CoachBodyView(
                                 markers: set.markers,
+                                muscles: set.muscles,
                                 showControls: false,
                                 lightStage: true,
                                 controller: _body,

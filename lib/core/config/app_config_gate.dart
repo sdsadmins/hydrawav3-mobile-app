@@ -3,15 +3,22 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../features/session/presentation/providers/active_sessions_provider.dart';
+import '../router/app_router.dart';
+import '../router/route_names.dart';
 import '../storage/preferences.dart';
 import '../theme/hw_tokens.dart';
 import 'app_config_store.dart';
 
-/// Sits above every route (MaterialApp.builder). When the server's
-/// `mobile-app-config` says this build is below `minAppVersion`, or
-/// `maintenance.enabled` is on, it covers the app with the matching screen.
-/// Both come from the config loaded at launch, so neither can appear in the
-/// middle of a running session.
+/// Sits above every route (MaterialApp.builder).
+///
+/// Update required (server `mobile-app-config`, checked once per app start):
+/// when this build is older than `latestAppVersion`, a full-screen card with
+/// only an Update button covers the app — no skip. It waits until the user
+/// is past the splash, and until any session running on this phone has
+/// ended, so a live run is never left without its controls.
+///
+/// Maintenance (`maintenance.enabled`) replaces the app with its screen.
 class AppConfigGate extends ConsumerStatefulWidget {
   final Widget child;
   const AppConfigGate({super.key, required this.child});
@@ -24,6 +31,41 @@ class _AppConfigGateState extends ConsumerState<AppConfigGate> {
   bool _maintenanceCleared = false;
   bool _checking = false;
   String? _note;
+
+  /// The router and a late config answer can change while the app below is
+  /// building (the router announces a new screen mid-build), so the gate
+  /// re-checks on the next frame rather than rebuilding right then.
+  late final Listenable _changes;
+  bool _recheckQueued = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _changes = Listenable.merge([
+      AppConfigStore.versionGate,
+      ref.read(routerProvider).routerDelegate,
+    ])
+      ..addListener(_queueRecheck);
+  }
+
+  void _queueRecheck() {
+    if (_recheckQueued) return;
+    _recheckQueued = true;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        _recheckQueued = false;
+        if (mounted) setState(() {});
+      })
+      // A late config answer can land on an idle screen: make sure a frame
+      // comes, or the card would wait for the next touch.
+      ..ensureVisualUpdate();
+  }
+
+  @override
+  void dispose() {
+    _changes.removeListener(_queueRecheck);
+    super.dispose();
+  }
 
   Future<void> _retry() async {
     setState(() {
@@ -50,24 +92,6 @@ class _AppConfigGateState extends ConsumerState<AppConfigGate> {
   @override
   Widget build(BuildContext context) {
     final c = AppConfigStore.current;
-    if (AppConfigStore.updateRequired) {
-      final store = c.storeUrl.current;
-      return _GateScreen(
-        icon: Icons.system_update_rounded,
-        title: 'Update required',
-        message: 'This version of Hydrawav3 is no longer supported. '
-            'Please update to continue.',
-        action: store.isEmpty ? null : 'Update',
-        onAction: store.isEmpty
-            ? null
-            : () => launchUrl(Uri.parse(store),
-                mode: LaunchMode.externalApplication),
-        footnote: store.isEmpty
-            ? 'Update Hydrawav3 from the '
-                '${defaultTargetPlatform == TargetPlatform.iOS ? 'App Store' : 'Google Play'}.'
-            : null,
-      );
-    }
     if (c.maintenance && !_maintenanceCleared) {
       return _GateScreen(
         icon: Icons.construction_rounded,
@@ -80,7 +104,49 @@ class _AppConfigGateState extends ConsumerState<AppConfigGate> {
         footnote: _note,
       );
     }
-    return widget.child;
+    final sessionRunning = ref.watch(activeSessionsProvider).isNotEmpty;
+    final location =
+        ref.read(routerProvider).routerDelegate.currentConfiguration.uri.path;
+    // Empty = the router hasn't settled on a screen yet (first frames).
+    final pastSplash = location.isNotEmpty && location != RoutePaths.splash;
+    final show =
+        AppConfigStore.updateRequired && pastSplash && !sessionRunning;
+    return Stack(
+      children: [
+        widget.child,
+        if (show)
+          Positioned.fill(
+            child: _UpdateRequired(
+                store: AppConfigStore.versionGate.value.storeUrl.current),
+          ),
+      ],
+    );
+  }
+}
+
+/// The no-skip update card: one Update button to the store, nothing else.
+class _UpdateRequired extends StatelessWidget {
+  final String store;
+  const _UpdateRequired({required this.store});
+
+  @override
+  Widget build(BuildContext context) {
+    final storeName = defaultTargetPlatform == TargetPlatform.iOS
+        ? 'App Store'
+        : 'Google Play';
+    return _GateScreen(
+      icon: Icons.system_update_rounded,
+      title: 'Update required',
+      message: 'A new version of Hydrawav3 is available. '
+          'Please update to continue.',
+      action: store.isEmpty ? null : 'Update',
+      onAction: store.isEmpty
+          ? null
+          : () => launchUrl(Uri.parse(store),
+              mode: LaunchMode.externalApplication),
+      footnote:
+          store.isEmpty ? 'Update Hydrawav3 from $storeName.' : null,
+    );
   }
 }
 

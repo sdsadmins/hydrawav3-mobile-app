@@ -22,6 +22,8 @@ import '../../../musics/presentation/providers/music_provider.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../../services/session_engine.dart';
 import '../widgets/live_dial.dart';
+import '../widgets/live_calm_view.dart';
+import '../../../clients/presentation/providers/client_providers.dart';
 import '../widgets/smoothed_countdown.dart';
 import '../../services/protocol_plus_controller.dart';
 import '../../../protocols/presentation/providers/protocol_plus_detail_provider.dart';
@@ -155,6 +157,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
 
   /// The device pager — its position sizes the pager to the card on screen.
   final PageController _devicePager = PageController();
+
+  /// Live view: Advanced (the full cards) or Simple (the calm full-screen
+  /// lens, v6 `30-calm`). Not remembered — every visit starts Advanced.
+  bool _calm = false;
+
+  /// What each unit's card last showed, for the Simple view. Written as the
+  /// cards build (no setState); the Simple view reads it every second.
+  final Map<String, LiveCalmUnit> _calmFeed = {};
 
   /// Devices with a "Restart this stage" request in flight — drives the
   /// button's own inline spinner and keeps it from being tapped twice.
@@ -1322,6 +1332,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
     super.dispose();
   }
 
+  /// The Simple view's top line: "Guest", or the person's name. Null when
+  /// this phone doesn't know who the run is for.
+  String? _calmWho(SessionEngine engine) {
+    if (!engine.clientContextKnown) return null;
+    final id = engine.clientId;
+    if (id == null || id.isEmpty) return 'Guest';
+    final clients = ref.watch(clientListProvider).valueOrNull ?? const [];
+    final c = clients.where((c) => c.id == id).firstOrNull;
+    return c?.displayName;
+  }
+
   static String _normalizeMac(String raw) {
     return raw.toLowerCase().replaceAll(RegExp(r'[^0-9a-f]'), '');
   }
@@ -2258,15 +2279,55 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
       ),
     );
 
+    // Units the Simple view can show: the ones live right now.
+    final calmIds = [
+      for (final id in orderedDeviceIds)
+        if (engine.deviceStatuses[id] == SessionStatus.running ||
+            engine.deviceStatuses[id] == SessionStatus.paused)
+          id,
+    ];
+    List<LiveCalmUnit> calmUnits() => [
+          for (final id in calmIds)
+            _calmFeed[id] ??
+                // a card the pager hasn't built yet: the engine's own clock
+                () {
+                  final t = engine.deviceTimers[id];
+                  final total = t?.totalDuration ?? Duration.zero;
+                  final elapsed = t?.elapsed ?? Duration.zero;
+                  final paused =
+                      engine.deviceStatuses[id] == SessionStatus.paused;
+                  return LiveCalmUnit(
+                    unit: _deviceLabel(id),
+                    remaining: total - elapsed,
+                    progress: total.inSeconds == 0
+                        ? 0
+                        : elapsed.inSeconds / total.inSeconds,
+                    paused: paused,
+                    stage: paused ? 'Paused' : 'In progress',
+                    treatment: engine.protocolPlusNameByDevice[id] ??
+                        engine.protocolByDevice[id]?.templateName ??
+                        '',
+                  );
+                }(),
+        ];
+
     return Scaffold(
       backgroundColor: pal.bg,
-      body: SafeArea(
+      body: Stack(
+        children: [
+          SafeArea(
         child: ListView(
           // 18px on a phone; the centred 786px "wide" column on a tablet.
           padding:
               EdgeInsets.symmetric(horizontal: HwTablet.sidePadding(context)),
           children: [
             header,
+            // `.v6cv-seg`: Advanced | Simple, under the live header
+            if (calmIds.isNotEmpty)
+              _LiveModeSeg(
+                calm: _calm,
+                onChanged: (calm) => setState(() => _calm = calm),
+              ),
             if (status == SessionStatus.idle) ...[
               _buildControls(status, ctrl),
               const SizedBox(height: 24),
@@ -2384,6 +2445,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
             const SizedBox(height: 16),
           ],
         ),
+      ),
+          // Simple: the calm lens over everything; the live screen keeps
+          // running underneath.
+          if (_calm && calmIds.isNotEmpty)
+            Positioned.fill(
+              child: LiveCalmView(
+                read: calmUnits,
+                who: _calmWho(ctrl),
+                onExit: () {
+                  if (mounted) setState(() => _calm = false);
+                },
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -4074,6 +4149,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen>
                         .clamp(0.0, 1.0)
                     : displayProgress;
                 final liveElapsed = displayTotal - liveRemaining;
+                _calmFeed[id] = LiveCalmUnit(
+                  unit: label,
+                  remaining: liveRemaining,
+                  progress: liveProgress,
+                  paused: status == SessionStatus.paused,
+                  stage: status == SessionStatus.paused
+                      ? 'Paused'
+                      : visualOnBreak
+                          ? 'Resting between protocols'
+                          : (plusSequence.length > 1
+                              ? plusSequence[
+                                  plusIndex.clamp(0, plusSequence.length - 1)]
+                              : 'In progress'),
+                  treatment:
+                      plusName.isNotEmpty ? plusName : protocolName,
+                );
                 // No explicit crossAxisAlignment — Column defaults to center,
                 // matching the OUTER card Column this content used to sit
                 // directly inside (also unspecified/center). An earlier pass
@@ -4888,4 +4979,92 @@ class _TimerRing extends CustomPainter {
       active != old.active ||
       accentColor != old.accentColor ||
       trackColor != old.trackColor;
+}
+
+/// `.v6cv-seg`: the live view's Advanced | Simple pill — copper gradient on
+/// the chosen one.
+class _LiveModeSeg extends StatelessWidget {
+  final bool calm;
+  final ValueChanged<bool> onChanged;
+  const _LiveModeSeg({required this.calm, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    Widget seg(String label, bool value) {
+      final on = calm == value;
+      return Expanded(
+        child: Semantics(
+          button: true,
+          selected: on,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => onChanged(value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                gradient: on
+                    ? const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFDEB393), Color(0xFFB27D5C)],
+                      )
+                    : null,
+                boxShadow: on
+                    ? const [
+                        BoxShadow(
+                          color: Color.fromRGBO(169, 130, 95, .55),
+                          blurRadius: 8,
+                          spreadRadius: -4,
+                          offset: Offset(0, 2),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w800,
+                  color: on
+                      ? const Color(0xFF2B1D12)
+                      : (dark
+                          ? const Color(0xFF9AA4AD)
+                          : const Color(0xFF9A918A)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: dark
+              ? const Color.fromRGBO(255, 255, 255, .05)
+              : const Color(0xFFFBF8F5),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: dark
+                ? const Color.fromRGBO(222, 179, 147, .16)
+                : const Color.fromRGBO(26, 26, 26, .09),
+          ),
+        ),
+        child: Row(
+          children: [
+            seg('Advanced', false),
+            const SizedBox(width: 3),
+            seg('Simple', true),
+          ],
+        ),
+      ),
+    );
+  }
 }

@@ -121,10 +121,14 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('All'));
       await settle(tester);
-      // locked stays open
+      // locked: the plan card, not a pick; the picker stays open under it
       await tester.ensureVisible(find.textContaining('Elite Lymphatic Protocol', findRichText: true));
       await tester.tap(find.textContaining('Elite Lymphatic Protocol', findRichText: true));
       await settle(tester);
+      expect(find.text('Not in your plan'), findsOneWidget);
+      await tester.tap(find.text('Choose another protocol'));
+      await settle(tester);
+      expect(find.text('Not in your plan'), findsNothing);
       expect(find.text('Unit 1 · protocol'), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'sensory');
       await settle(tester);

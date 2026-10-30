@@ -236,12 +236,16 @@ class GamePrepRow {
   /// Whole days since [last]; null before the first session.
   final int? daysSince;
 
+  /// Every session for this player, newest first (feeds readiness).
+  final List<SessionHistoryItem> history;
+
   const GamePrepRow({
     required this.client,
     required this.index,
     this.today,
     this.last,
     this.daysSince,
+    this.history = const [],
   });
 
   bool get prepped => today != null;
@@ -263,6 +267,62 @@ class GamePrepData {
   });
 
   int get total => prepped.length + left.length;
+}
+
+/// A player's readiness, derived from their post-session check-ins (the Hub
+/// rule: an answer ranked 4+ of 5 means it helped). Not a measurement.
+class PlayerReadiness {
+  /// 0–100: the share of recent check-ins that said it helped.
+  final int score;
+
+  /// One score per day that had check-ins, oldest → newest, last 14 days.
+  final List<int> trend;
+  const PlayerReadiness(this.score, this.trend);
+}
+
+/// Did this session's check-in say it helped? null when nothing was ranked.
+bool? sessionHelped(SessionHistoryItem s) {
+  final ranks = [
+    for (final p in s.protocols)
+      for (final qa in p.questionAnswers)
+        if (qa.rank > 0) qa.rank,
+  ];
+  if (ranks.isEmpty) return null;
+  return ranks.where((r) => r >= 4).length * 2 >= ranks.length;
+}
+
+/// Readiness over the last [days] days of [sessions]; when there were no
+/// check-ins in that window, every check-in counts. Null with none at all.
+PlayerReadiness? readinessOf(List<SessionHistoryItem> sessions,
+    {int days = 14, DateTime? now}) {
+  final today = () {
+    final n = now ?? DateTime.now();
+    return DateTime(n.year, n.month, n.day);
+  }();
+  final from = today.subtract(Duration(days: days - 1));
+  final byDay = <DateTime, List<bool>>{};
+  final all = <bool>[];
+  for (final s in sessions) {
+    final at = s.createdAt;
+    if (at == null) continue;
+    for (final p in s.protocols) {
+      for (final qa in p.questionAnswers) {
+        if (qa.rank <= 0) continue;
+        final good = qa.rank >= 4;
+        all.add(good);
+        final d = DateTime(at.year, at.month, at.day);
+        if (!d.isBefore(from)) byDay.putIfAbsent(d, () => []).add(good);
+      }
+    }
+  }
+  if (all.isEmpty) return null;
+  int pct(List<bool> v) => (v.where((g) => g).length / v.length * 100).round();
+  final recent = [for (final v in byDay.values) ...v];
+  final keys = byDay.keys.toList()..sort();
+  return PlayerReadiness(
+    pct(recent.isNotEmpty ? recent : all),
+    [for (final k in keys) pct(byDay[k]!)],
+  );
 }
 
 /// "Prepped" = a session run on the player today. Completion-based, like the
@@ -314,6 +374,7 @@ final gamePrepProvider =
       today: lastDay == today ? last : null,
       last: last,
       daysSince: lastDay == null ? null : today.difference(lastDay).inDays,
+      history: mine,
     ));
   }
 

@@ -175,7 +175,8 @@ Map<String, dynamic> buildCreatePractitionerJson(PractitionerForm form) {
     'email': form.email,
     'password': form.password,
     'practitionerType': form.title,
-    'address': form.address,
+    // No 'address': the create DTO dropped it (Oct 24) and the server rejects
+    // unknown fields ("property address should not exist").
     'city': form.city,
     'country': form.country,
     'userName': form.username,
@@ -199,7 +200,8 @@ Map<String, dynamic> buildOrganizationJson(OnboardingBusiness primaryBusiness) {
   return {
     'name': primaryBusiness.name,
     'mail': primaryBusiness.email,
-    'address': primaryBusiness.address,
+    // No business address: the onboarding form doesn't ask for it (the
+    // organization DTO has it optional).
     'age': primaryBusiness.businessAge,
     'phone': primaryBusiness.contactNumber,
     // Sport NAMES, e.g. ["Ice Hockey"] — the backend assigns the org's sports
@@ -228,7 +230,8 @@ Map<String, dynamic> buildAccountUpdateJson(
     'nationality': 'unknown',
     'maritalStatus': 'unknown',
     'title': form.title,
-    'address': form.address,
+    // The form no longer asks for an address; sent only if one is set.
+    if (form.address.trim().isNotEmpty) 'address': form.address,
     'address2': 'unknown',
     'city': form.city,
     'state': form.state,

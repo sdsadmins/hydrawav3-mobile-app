@@ -20,6 +20,17 @@ class ProtocolRemoteSource {
     int page = 1,
     int perPage = 50,
     String? orgId,
+  }) async =>
+      (await getProtocolsPage(page: page, perPage: perPage, orgId: orgId))
+          .items;
+
+  /// One page of `GET /protocols`, plus whether the server has another.
+  /// The server pages only regular protocols; every page also carries ALL
+  /// Protocol Plus stacks, so callers that walk pages must de-duplicate.
+  Future<({List<Protocol> items, bool hasNextPage})> getProtocolsPage({
+    int page = 1,
+    int perPage = 100,
+    String? orgId,
   }) async {
     try {
       appLogger.i(
@@ -36,10 +47,14 @@ class ProtocolRemoteSource {
 
       final data = response.data;
       final List<dynamic> items = data is List ? data : (data['data'] ?? []);
+      final pagination = data is Map ? data['pagination'] : null;
 
-      return items
-          .map((e) => Protocol.fromJson(e as Map<String, dynamic>))
-          .toList();
+      return (
+        items: items
+            .map((e) => Protocol.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        hasNextPage: pagination is Map && pagination['hasNextPage'] == true,
+      );
     } on DioException catch (e) {
       appLogger.e('Protocol: API error (status: ${e.response?.statusCode})');
       appLogger.e('Message: ${e.response?.data?['message'] ?? e.message}');

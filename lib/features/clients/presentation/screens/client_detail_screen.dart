@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/hw_tokens.dart';
@@ -138,11 +139,12 @@ class ClientDetailScreen extends ConsumerWidget {
               ),
               const SizedBox(height: HwSpace.s3),
 
-              // ── hand off a unit → the existing lease screen ──────────────
-              _DarkButton(
-                label: 'Hand off a unit',
-                icon: Icons.key_rounded,
-                onTap: () => context.push(
+              // ── device lease → the existing lease screen ─────────────────
+              // Only a client without a lease is offered a hand-off; one with
+              // a lease sees it (active or still pending) and manages it.
+              _LeaseEntry(
+                client: client,
+                onOpen: () => context.push(
                   RoutePaths.clientLease,
                   extra: <String, dynamic>{
                     'clientId': clientId,
@@ -558,6 +560,89 @@ class _OutlineButton extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The client's device lease on their detail screen:
+///   no lease  → "Hand off a unit"
+///   active    → Device lease · Active, the unit and since when, Manage lease
+///   pending   → Device lease · Pending (registered, not yet on the unit),
+///               Finish hand-off
+class _LeaseEntry extends StatelessWidget {
+  final Client? client;
+  final VoidCallback onOpen;
+  const _LeaseEntry({required this.client, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = client;
+    final active = c?.isLeaseActive ?? false;
+    final pending = c?.isLeasePending ?? false;
+    if (c == null || (!active && !pending)) {
+      return _DarkButton(
+        label: 'Hand off a unit',
+        icon: Icons.key_rounded,
+        onTap: onOpen,
+      );
+    }
+    final p = RefPalette.of(context);
+    final unit = (c.macAddress ?? '').trim();
+    final since = c.leaseDate == null
+        ? null
+        : DateFormat('MMM d, yyyy').format(c.leaseDate!.toLocal());
+    final detail = active
+        ? [
+            if (unit.isNotEmpty) 'Unit $unit',
+            if (since != null) 'since $since',
+          ].join(' · ')
+        : unit.isNotEmpty
+            ? 'Registered to unit $unit — not on the unit yet'
+            : 'Registered — not on the unit yet';
+    final tone = active ? p.good : p.mid;
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.key_rounded, size: 18, color: p.ink2),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Device lease',
+                    style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: p.ink)),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: tone.withValues(alpha: .14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(active ? 'Active' : 'Pending',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: tone)),
+              ),
+            ],
+          ),
+          if (detail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(detail,
+                style: TextStyle(fontSize: 13.5, height: 1.4, color: p.ink3)),
+          ],
+          const SizedBox(height: 12),
+          _OutlineButton(
+            label: active ? 'Manage lease' : 'Finish hand-off',
+            icon: Icons.key_rounded,
+            onTap: onOpen,
+          ),
+        ],
       ),
     );
   }

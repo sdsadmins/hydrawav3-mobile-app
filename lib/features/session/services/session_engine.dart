@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../clients/presentation/providers/lease_guard.dart';
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/services/local_notification_service.dart';
 import '../../../core/network/dio_client.dart';
@@ -441,7 +442,17 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   void setClientContext({String? clientId, GuidedAssessmentData? intake}) {
     _clientId = clientId;
     _intake = intake;
+    _clientContextKnown = true;
   }
+
+  /// Whether [setClientContext] ran for this run (it does at every launch), so
+  /// a null [clientId] really means Guest rather than "not known here" — e.g.
+  /// a session re-opened after an app restart, or one launched elsewhere.
+  bool _clientContextKnown = false;
+  bool get clientContextKnown => _clientContextKnown;
+
+  /// The client this run is for; null for a Guest session.
+  String? get clientId => _clientId;
 
   /// Register the admin-defined post-session questions for every protocol used
   /// in this session (protocol name -> questions), set by the launcher before
@@ -3081,12 +3092,20 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       selectedDelayedDeviceId: state.delayedDeviceId,
       candidateDeviceIds: state.deviceIds,
     );
-    return _protocolToRs35Payload(
+    final payload = _protocolToRs35Payload(
       p,
       mac: transportId,
       advancedSettings: advancedSettings,
       applyStartDelay: applyDelay,
     );
+    // A unit on lease to the client this session is for: send that lease's
+    // key, or the unit ignores the run (Session Plan sets it at Start).
+    String? leaseKey;
+    try {
+      leaseKey = _ref.read(sessionLeaseKeysProvider)[transportId];
+    } catch (_) {}
+    if (leaseKey != null && leaseKey.isNotEmpty) payload['leaseKey'] = leaseKey;
+    return payload;
   }
 
   Map<String, dynamic> _protocolToRs35Payload(

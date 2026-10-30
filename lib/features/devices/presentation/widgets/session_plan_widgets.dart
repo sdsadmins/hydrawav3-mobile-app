@@ -974,6 +974,9 @@ class PlanSummaryStrip extends StatelessWidget {
   final List<String> protocols;
   final bool guest;
 
+  /// Opens the per-unit breakdown (`V6.summarySheet`); ignored with no units.
+  final VoidCallback? onTap;
+
   const PlanSummaryStrip({
     super.key,
     required this.who,
@@ -981,10 +984,21 @@ class PlanSummaryStrip extends StatelessWidget {
     required this.longest,
     required this.protocols,
     required this.guest,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final strip = _strip(context);
+    if (onTap == null || units == 0) return strip;
+    return Semantics(
+      button: true,
+      label: 'Session summary, tap for the per-unit breakdown',
+      child: PlanPress(onTap: onTap, child: strip),
+    );
+  }
+
+  Widget _strip(BuildContext context) {
     final dark = PlanTones.dark(context);
     final ink = dark ? const Color(0xFFF4EFEA) : const Color(0xFF1A1A1A);
     final ink2 = dark ? const Color(0xFFC0B7AE) : const Color(0xFF5E5852);
@@ -1110,6 +1124,161 @@ class PlanSummaryStrip extends StatelessWidget {
                 Icon(Icons.chevron_right_rounded, size: 20, color: ink3),
               ],
             ),
+    );
+  }
+}
+
+/// One unit line in the "This session" sheet.
+class PlanSummaryUnit {
+  final String name;
+  final String protocol;
+
+  /// Right-hand value: "12 min · +5s", "Running" or "Off".
+  final String right;
+  final bool dim;
+  const PlanSummaryUnit({
+    required this.name,
+    required this.protocol,
+    required this.right,
+    this.dim = false,
+  });
+}
+
+/// `V6.summarySheet` body: a row per unit that will run, the running ones,
+/// then "Connected but off", the Guest note, and Close. Read-only.
+class PlanSessionSummaryBody extends StatelessWidget {
+  final List<PlanSummaryUnit> run;
+  final List<PlanSummaryUnit> off;
+  final bool guest;
+  const PlanSessionSummaryBody({
+    super.key,
+    required this.run,
+    required this.off,
+    required this.guest,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = PlanTones.dark(context);
+    final ink = dark ? const Color(0xFFF4EFEA) : const Color(0xFF1A1A1A);
+    final ink3 = dark ? const Color(0xFF9A9188) : const Color(0xFF9A918A);
+    final line = dark
+        ? const Color.fromRGBO(255, 255, 255, .06)
+        : const Color.fromRGBO(26, 26, 26, .06);
+
+    Widget row(PlanSummaryUnit u) => Opacity(
+          opacity: u.dim ? .62 : 1,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 11),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: line)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(u.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: ink)),
+                      if (u.protocol.isNotEmpty)
+                        Text(u.protocol,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: ink3)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(u.right,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: ink3,
+                        fontFeatures: const [FontFeature.tabularFigures()])),
+              ],
+            ),
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final u in run) row(u),
+        if (off.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 16, 2, 2),
+            child: Text(
+              'CONNECTED BUT OFF \u2014 THESE WILL NOT RUN',
+              style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .8,
+                  color: ink3),
+            ),
+          ),
+          for (final u in off) row(u),
+        ],
+        if (guest) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: dark ? const Color(0xFF1F2A32) : const Color(0xFFFBF8F5),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: line),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.person_outline_rounded, size: 18, color: ink3),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(
+                          text: 'Guest session\n',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w800, color: ink)),
+                      const TextSpan(
+                          text: 'Nothing is written to a client\u2019s history. '
+                              'Pick a client at the top of Session Plan to '
+                              'keep the record.'),
+                    ]),
+                    style: TextStyle(fontSize: 12.5, height: 1.4, color: ink3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        // `btn soft`: a quiet full-width Close
+        PlanPress(
+          onTap: () => Navigator.of(context).maybePop(),
+          child: Container(
+            height: 48,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: dark ? const Color(0xFF1F2A32) : const Color(0xFFF2E9E2),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text('Close',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: dark
+                        ? const Color(0xFFDDCABF)
+                        : const Color(0xFF8A5F42))),
+          ),
+        ),
+      ],
     );
   }
 }

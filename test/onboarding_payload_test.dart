@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrawav3/features/auth/domain/onboarding_models.dart';
 
-/// Sign-up bodies follow the onboarding API: address required, date of birth
-/// optional (left out when not given).
+/// Sign-up bodies follow the onboarding API: no address on create (the server
+/// rejects it), date of birth optional (left out when not given).
 void main() {
   const base = PractitionerForm(
     firstName: 'Jane',
@@ -25,8 +25,14 @@ void main() {
     final update = buildAccountUpdateJson(base, 7);
     expect(create.containsKey('dateOfBirth'), isFalse);
     expect(update.containsKey('dateOfBirth'), isFalse);
-    expect(create['address'], '123 Main St');
     expect(update['address'], '123 Main St');
+  });
+
+  test('address is never sent on create (server rejects it)', () {
+    expect(buildCreatePractitionerJson(base).containsKey('address'), isFalse);
+    // The form no longer asks for it, so the account update leaves it out too.
+    final noAddress = base.copyWith(address: '');
+    expect(buildAccountUpdateJson(noAddress, 7).containsKey('address'), isFalse);
   });
 
   test('date of birth given: sent on both', () {

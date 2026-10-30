@@ -8,6 +8,7 @@ import '../../../../core/theme/widgets/hw_icon.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../../core/utils/extensions.dart';
 import '../../../payments/presentation/providers/token_balance_provider.dart';
+import '../../../payments/presentation/widgets/plan_locked_sheet.dart';
 import '../../domain/protocol_model.dart';
 import '../providers/protocol_plus_detail_provider.dart';
 import '../providers/protocol_provider.dart';
@@ -206,7 +207,8 @@ class _StackCard extends ConsumerWidget {
       opacity: locked ? .55 : 1,
       child: HwCard(
         onTap: locked
-            ? () => _lockedNotice(context)
+            ? () => showPlanLockedSheet(context,
+                protocolName: stack.templateName)
             : () => context.push('/protocols/${stack.id}'),
         padding: EdgeInsets.zero,
         // IntrinsicHeight bounds the row so the stripe can stretch to the
@@ -381,7 +383,8 @@ class _ProtocolCard extends StatelessWidget {
       child: HwCard(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
         onTap: locked
-            ? () => _lockedNotice(context)
+            ? () => showPlanLockedSheet(context,
+                protocolName: protocol.templateName)
             : () => context.push('/protocols/${protocol.id}'),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -432,14 +435,6 @@ class _ProtocolCard extends StatelessWidget {
       ),
     );
   }
-}
-
-void _lockedNotice(BuildContext context) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(
-      content: Text("This protocol isn't included in your plan."),
-    ),
-  );
 }
 
 // ---------------------------------------------------------------------------

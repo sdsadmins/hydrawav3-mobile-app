@@ -17,7 +17,10 @@ import '../../../ble/domain/ble_device_model.dart';
 import '../../../ble/presentation/providers/ble_connection_provider.dart';
 import '../../../clients/domain/client_model.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../session_coach/data/coach_plan_store.dart';
 import '../../../devices/data/device_repository.dart';
+import '../../../devices/presentation/providers/players_provider.dart'
+    show orgSportsProvider;
 import '../../../devices/presentation/screens/device_list_screen.dart'
     show sessionDefaultsForProtocol;
 import '../../../pad_placement/domain/recovery_engine_models.dart';
@@ -2303,9 +2306,43 @@ Color _prepTone(bool prepped, bool dark) => prepped
     ? (dark ? const Color(0xFF6FBF98) : const Color(0xFF3F8E6E))
     : (dark ? const Color(0xFFD8B79C) : const Color(0xFFA87B5C));
 
+/// A prep card's height with a one-line status (prototype `.v5g-pc`):
+/// border 4 + padding 26 + avatar row 38 + gap 9 + status + gap 9 + button 30.
+const double _kPrepCardMin = 129;
+
+/// The height every card in [rows] shares — the tallest status decides it
+/// (a long one like "Ready for first session" wraps to two lines).
+double _prepCardHeight(BuildContext context, List<GamePrepRow> rows) {
+  final scaler = MediaQuery.textScalerOf(context);
+  var status = 0.0;
+  for (final r in rows) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: _prepStatus(r).toUpperCase(),
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .44,
+          height: 1.2,
+        ),
+      ),
+      maxLines: 2,
+      textDirection: Directionality.of(context),
+      textScaler: scaler,
+    )..layout(maxWidth: 156 - 4 - 26 - 6 - 5); // card − border − pad − dot
+    if (tp.height > status) status = tp.height;
+    tp.dispose();
+  }
+  if (status == 0) status = 13.2;
+  // + a pixel of slack so rounding never squeezes the button
+  return _kPrepCardMin - 13.2 + status + 1;
+}
+
 String _prepStatus(GamePrepRow r) {
   if (r.prepped) {
-    return 'Prepped ✓ · ${DateFormat('h:mm a').format(r.today!.createdAt!)}';
+    // the local clock time it was prepped, short ("Prepped ✓ · 9:40") so it
+    // fits the card on one line, as in the prototype
+    return 'Prepped ✓ · ${DateFormat('h:mm').format(r.today!.createdAt!)}';
   }
   final d = r.daysSince;
   if (d == null) return 'Ready for first session';
@@ -2320,15 +2357,34 @@ String _prepMomentum(int done, int total) {
       'squad ready';
 }
 
-String _playerSub(Client c) => [
-      if ((c.sport ?? '').trim().isNotEmpty) c.sport!.trim(),
-      if (c.jerseyNumber != null) '#${c.jerseyNumber}',
-    ].join(' · ');
+/// "Football · Quarterback" — sport and the player's position (the
+/// prototype's subline); the jersey stands in when no position is set.
+String _playerSub(Client c, WidgetRef ref) {
+  final names = <String, String>{
+    for (final sport in ref.watch(orgSportsProvider).valueOrNull ?? const [])
+      for (final pos in sport.positions)
+        if (pos.id.isNotEmpty) pos.id: pos.name,
+  };
+  final position = [
+    for (final id in c.positions ?? const <String>[])
+      if ((names[id] ?? '').trim().isNotEmpty) names[id]!.trim(),
+  ].firstOrNull;
+  return [
+    if ((c.sport ?? '').trim().isNotEmpty) c.sport!.trim(),
+    if (position != null)
+      position
+    else if (c.jerseyNumber != null)
+      '#${c.jerseyNumber}',
+  ].join(' · ');
+}
 
-/// Game Prep's Start: straight to the Session tab with the player selected.
+/// Game Prep's Start: straight to the Session tab with the player selected,
+/// and the Session Coach reopens what they ran last time (when this phone
+/// has it — see CoachPlanStore).
 void _prepStart(BuildContext context, WidgetRef ref, Client c) {
   ref.read(sessionClientModeProvider.notifier).state = ClientMode.client;
   ref.read(selectedClientProvider.notifier).state = c;
+  ref.read(coachRestoreRequestProvider.notifier).state = c.id;
   context.go(RoutePaths.devices);
 }
 
@@ -2396,6 +2452,7 @@ class HubGamePrep extends ConsumerWidget {
     final done = data.prepped.length;
     final pct = done / data.total;
     final todo = _prepTone(false, v.dark);
+    final cardH = _prepCardHeight(context, list);
 
     final section = _Section(
       title: 'Game Prep',
@@ -2500,6 +2557,7 @@ class HubGamePrep extends ConsumerWidget {
                     stepMs: 60,
                     child: _PrepCard(
                       row: list[i],
+                      height: cardH,
                       upNext: i == 0 &&
                           !list[i].prepped &&
                           filter != GamePrepFilter.done,
@@ -2521,7 +2579,7 @@ class HubGamePrep extends ConsumerWidget {
             Transform.translate(
               offset: const Offset(-14, 0),
               child: SizedBox(
-                height: 222,
+                height: cardH + 32,
                 child: OverflowBox(
                   alignment: Alignment.centerLeft,
                   maxWidth: MediaQuery.sizeOf(context).width,
@@ -2536,6 +2594,7 @@ class HubGamePrep extends ConsumerWidget {
                       stepMs: 60,
                       child: _PrepCard(
                         row: list[i],
+                        height: cardH,
                         upNext: i == 0 &&
                             !list[i].prepped &&
                             filter != GamePrepFilter.done,
@@ -2560,6 +2619,7 @@ class HubGamePrep extends ConsumerWidget {
               'No one prepped yet today. Start with whoever is up next.',
               style: TextStyle(fontSize: HwType.sm, height: 1.5, color: p.ink3),
             ),
+          _GameDayLines(data: data, live: gameDay),
         ],
       ),
     );
@@ -2827,7 +2887,15 @@ class _PrepSegment extends StatelessWidget {
 class _PrepCard extends ConsumerWidget {
   final GamePrepRow row;
   final bool upNext;
-  const _PrepCard({required this.row, required this.upNext});
+
+  /// The row's shared height — the tallest card's content (see
+  /// [_prepCardHeight]), as the prototype's flex row stretches its cards.
+  final double height;
+  const _PrepCard({
+    required this.row,
+    required this.upNext,
+    this.height = _kPrepCardMin,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -2836,7 +2904,7 @@ class _PrepCard extends ConsumerWidget {
     final (tintBg, tintInk) = _kPrepTints[row.index % _kPrepTints.length];
     final c = row.client;
     final sev = _prepTone(row.prepped, dark);
-    final sub = _playerSub(c);
+    final sub = _playerSub(c, ref);
     final radius = BorderRadius.circular(22);
 
     final Color bg;
@@ -2862,9 +2930,10 @@ class _PrepCard extends ConsumerWidget {
       onTap: () => _showAthleteFocus(context, ref, row),
       child: Container(
         width: 156,
-        // A fixed height, so Start sits on the card's floor both in the
-        // phone's sideways rail and in the tablet's wrapping rows.
-        height: 190,
+        // Sized to the content like the prototype's `.v5g-pc` (≈129px with a
+        // one-line status); every card in a row shares the tallest one's
+        // height, so Start sits on the same floor across the row.
+        height: height,
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(
           color: bg,
@@ -3109,19 +3178,25 @@ class _SquadPrepped extends StatelessWidget {
   }
 }
 
-/// The athlete focus card: who they are, where they stand today, their last
-/// session, and the way in. (The prototype's readiness dial and trend are left
-/// out — the app has no readiness measurement to show honestly.)
+/// The athlete focus card (`G.focus`): who they are, where they stand today
+/// (readiness ring beside the last session), their readiness over 14 days, and
+/// the way in. Readiness comes from their real post-session check-ins (see
+/// [readinessOf]); the ring and chart stay hidden until there are some.
 Future<void> _showAthleteFocus(
     BuildContext context, WidgetRef ref, GamePrepRow row) {
   final c = row.client;
-  final sub = _playerSub(c);
+  final sub = _playerSub(c, ref);
   final last = row.last;
-  final lastLabel = last == null || last.protocols.isEmpty
-      ? (last == null ? 'No sessions yet' : 'Session')
-      : [last.protocols.first.protocol, last.protocols.first.bodyPart]
-          .where((e) => e != null && e.isNotEmpty)
-          .join(' · ');
+  final readiness = readinessOf(row.history);
+  final first = c.displayName.split(RegExp(r'\s+')).first;
+  // "Performance Activation · Football": the protocol and the player's sport
+  final lastLabel = last == null
+      ? 'No sessions yet'
+      : [
+          if (last.protocols.isNotEmpty) last.protocols.first.protocol,
+          if ((c.sport ?? '').trim().isNotEmpty) c.sport!.trim(),
+        ].whereType<String>().where((e) => e.isNotEmpty).join(' · ');
+  // "Today · 9:40 · said it helped"
   String lastWhen() {
     final at = last!.createdAt!;
     final now = DateTime.now();
@@ -3129,7 +3204,13 @@ Future<void> _showAthleteFocus(
             DateTime(now.year, now.month, now.day)
         ? 'Today'
         : DateFormat('EEE, MMM d').format(at);
-    return '$day · ${DateFormat('h:mm a').format(at)}';
+    final helped = sessionHelped(last);
+    return [
+      day,
+      DateFormat('h:mm').format(at),
+      if (helped == true) 'said it helped',
+      if (helped == false) "said it didn't help",
+    ].join(' · ');
   }
 
   return showHwSheet<void>(
@@ -3273,45 +3354,64 @@ Future<void> _showAthleteFocus(
               ),
             ),
             const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: p.card2,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: p.line2),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            // `.dialrow`: the readiness ring beside the last session
+            Row(
+              children: [
+                if (readiness != null) ...[
+                  _ReadinessDial(value: readiness.score, dark: dark),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  child: _FocusBox(
+                    title: 'LAST SESSION',
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        lastLabel.isEmpty ? 'Session' : lastLabel,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                          color: p.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        last == null
+                            ? 'Start their first session below.'
+                            : lastWhen(),
+                        style: TextStyle(fontSize: 12, color: p.ink3),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            // `.box.w`: readiness over the last 14 days
+            // shown from the first check-in; a single day is a point that
+            // the line grows from
+            if (readiness != null && readiness.trend.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _FocusBox(
+                title: 'READINESS · LAST 14 DAYS',
                 children: [
-                  const Text(
-                    'LAST SESSION',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.3,
-                      color: Color(0xFFC09D84),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
+                  _ReadinessTrend(values: readiness.trend, dark: dark),
+                  const SizedBox(height: 6),
                   Text(
-                    lastLabel.isEmpty ? 'Session' : lastLabel,
-                    style: TextStyle(
-                      fontSize: HwType.sm,
-                      fontWeight: FontWeight.w700,
-                      height: 1.3,
-                      color: p.ink,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    last == null
-                        ? 'Start their first session below.'
-                        : lastWhen(),
-                    style: TextStyle(fontSize: HwType.cap, color: p.ink3),
+                    readiness.trend.length < 2
+                        ? "$first's first check-in. The line builds as more "
+                            'sessions are checked in. Wellness insight, not a '
+                            'medical measurement.'
+                        : "$first's readiness across recent days. Higher is "
+                            'better. Wellness insight, not a medical '
+                            'measurement.',
+                    style:
+                        TextStyle(fontSize: 12, height: 1.4, color: p.ink3),
                   ),
                 ],
               ),
-            ),
+            ],
             const SizedBox(height: 14),
             HwPress(
               onTap: () {
@@ -3394,6 +3494,238 @@ Future<void> _showAthleteFocus(
       );
     },
   );
+}
+
+/// `.v5g-fb .box`: the focus sheet's soft card with a copper eyebrow.
+class _FocusBox extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+  const _FocusBox({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: p.card2,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: p.line2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.3,
+              color: Color(0xFFC09D84),
+            ),
+          ),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+/// `dialSVG`: 48 radial ticks round a 124px ring — the filled ones longer and
+/// copper, the rest faint — with the score and READINESS in the middle. The
+/// ticks come in one after another.
+class _ReadinessDial extends StatelessWidget {
+  final int value;
+  final bool dark;
+  const _ReadinessDial({required this.value, required this.dark});
+
+  @override
+  Widget build(BuildContext context) {
+    final v = value.clamp(0, 100);
+    return Semantics(
+      label: 'Readiness $v',
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.easeOut,
+        builder: (context, t, _) => SizedBox(
+          width: 124,
+          height: 124,
+          child: CustomPaint(
+            painter: _DialPainter(value: v, reveal: t, dark: dark),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '$v',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      height: 1,
+                      color: dark
+                          ? const Color(0xFFF1EDE7)
+                          : const Color(0xFF2A2320),
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'READINESS',
+                    style: TextStyle(
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.4,
+                      color: Color(0xFFC09D84),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DialPainter extends CustomPainter {
+  final int value;
+  final double reveal;
+  final bool dark;
+  _DialPainter({required this.value, required this.reveal, required this.dark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // the prototype's 132-unit viewBox, scaled to the box
+    final k = size.width / 132;
+    final c = Offset(size.width / 2, size.height / 2);
+    const n = 48;
+    final filled = (value / 100 * n).round();
+    final shown = (reveal * n).ceil();
+    for (var i = 0; i < n && i < shown; i++) {
+      final a = (-90 + i / n * 360) * math.pi / 180;
+      final on = i < filled;
+      final r = 52 * k, inner = (on ? 52 - 11 : 52 - 7) * k;
+      final dir = Offset(math.cos(a), math.sin(a));
+      final paint = Paint()
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = (on ? 3.4 : 2.2) * k
+        ..color = on
+            // #E4BE97 → #B27D5C across the ring
+            ? Color.lerp(const Color(0xFFE4BE97), const Color(0xFFB27D5C),
+                i / math.max(1, filled - 1))!
+            : (dark ? const Color(0xFF2A2E36) : const Color(0xFFEADFD2));
+      canvas.drawLine(c + dir * inner, c + dir * r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DialPainter old) =>
+      old.value != value || old.reveal != reveal || old.dark != dark;
+}
+
+/// `trendSVG`: an area-filled line of daily readiness, drawing itself in,
+/// with a dot on today's end.
+class _ReadinessTrend extends StatelessWidget {
+  final List<int> values;
+  final bool dark;
+  const _ReadinessTrend({required this.values, required this.dark});
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 1100),
+        curve: const Cubic(.22, .61, .36, 1),
+        builder: (context, t, _) => SizedBox(
+          height: 90,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _TrendPainter(values: values, draw: t, dark: dark),
+          ),
+        ),
+      );
+}
+
+class _TrendPainter extends CustomPainter {
+  final List<int> values;
+  final double draw;
+  final bool dark;
+  _TrendPainter({required this.values, required this.draw, required this.dark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    const pad = 8.0;
+    if (values.length == 1) {
+      // one day so far: today's point on the right, a faint dashed guide at
+      // its level (on a 0–100 scale) for the line to grow from
+      final y = pad + (1 - values.first / 100) * (size.height - pad * 2);
+      final guide = Paint()
+        ..strokeWidth = 1.4
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xFFB47A45).withValues(alpha: .35 * draw);
+      for (double x = pad; x < size.width - pad - 10; x += 9) {
+        canvas.drawLine(Offset(x, y), Offset(x + 4, y), guide);
+      }
+      final dot = Offset(size.width - pad, y);
+      canvas.drawCircle(dot, 4.5 + 1.2,
+          Paint()..color = dark ? const Color(0xFF1C252B) : Colors.white);
+      canvas.drawCircle(dot, 4.5,
+          Paint()..color = const Color(0xFFB47A45).withValues(alpha: draw));
+      return;
+    }
+    final lo = values.reduce(math.min) - 6.0;
+    final hi = values.reduce(math.max) + 6.0;
+    final span = math.max(1.0, hi - lo);
+    final pts = [
+      for (var i = 0; i < values.length; i++)
+        Offset(
+          pad + i / (values.length - 1) * (size.width - pad * 2),
+          pad + (1 - (values[i] - lo) / span) * (size.height - pad * 2),
+        ),
+    ];
+    final line = Path()..moveTo(pts.first.dx, pts.first.dy);
+    for (final q in pts.skip(1)) {
+      line.lineTo(q.dx, q.dy);
+    }
+    final area = Path.from(line)
+      ..lineTo(pts.last.dx, size.height)
+      ..lineTo(pad, size.height)
+      ..close();
+    canvas.drawPath(
+      area,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFFC69E83).withValues(alpha: .3 * draw),
+            const Color(0xFFC69E83).withValues(alpha: 0),
+          ],
+        ).createShader(Offset.zero & size),
+    );
+    // draw the line in, start → end
+    final metric = line.computeMetrics().first;
+    canvas.drawPath(
+      metric.extractPath(0, metric.length * draw),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.6
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..color = const Color(0xFFB47A45),
+    );
+    if (draw >= 1) {
+      canvas.drawCircle(pts.last, 4.5 + 1.2,
+          Paint()..color = dark ? const Color(0xFF1C252B) : Colors.white);
+      canvas.drawCircle(pts.last, 4.5, Paint()..color = const Color(0xFFB47A45));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TrendPainter old) =>
+      old.draw != draw || old.values != values || old.dark != dark;
 }
 
 // ===========================================================================
@@ -5052,6 +5384,137 @@ class _PlayerCell extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// `.v6gd` (prototype C0-gameday): under the roster, today's game day and
+/// the last one, each with how many of the roster had a session that day.
+/// Shown only once there is a game day to report.
+class _GameDayLines extends ConsumerWidget {
+  final GamePrepData data;
+  final bool live;
+  const _GameDayLines({required this.data, required this.live});
+
+  /// Players on the board who had a session on [day].
+  int _activatedOn(DateTime day) => [...data.prepped, ...data.left]
+      .where((r) => r.history.any((s) {
+            final t = s.createdAt;
+            return t != null &&
+                t.year == day.year &&
+                t.month == day.month &&
+                t.day == day.day;
+          }))
+      .length;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final past = ref
+        .watch(gameDaysProvider)
+        .where((d) => DateTime(d.year, d.month, d.day) != today)
+        .toList();
+    if (!live && past.isEmpty) return const SizedBox.shrink();
+    final fmt = DateFormat('EEEE, MMM d');
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (live)
+            _GameDayLine(
+              live: true,
+              label: 'Game day',
+              date: fmt.format(today),
+              count: '${_activatedOn(today)} of ${data.total} activated',
+            ),
+          if (live && past.isNotEmpty) const SizedBox(height: 6),
+          if (past.isNotEmpty)
+            _GameDayLine(
+              live: false,
+              label: 'Last game day',
+              date: fmt.format(past.first),
+              count: '${_activatedOn(past.first)} of ${data.total} activated',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// `.v6gd-row`: dot, label with the date under it, and the count on the
+/// right.
+class _GameDayLine extends StatelessWidget {
+  final bool live;
+  final String label;
+  final String date;
+  final String count;
+  const _GameDayLine({
+    required this.live,
+    required this.label,
+    required this.date,
+    required this.count,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = RefPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF212C33) : const Color(0xFFF7F3F0),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: p.cardline, width: 1.5),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: live ? const Color(0xFFC69E83) : p.ink3,
+              boxShadow: live
+                  ? const [
+                      BoxShadow(
+                          color: Color.fromRGBO(198, 158, 131, .22),
+                          spreadRadius: 3),
+                    ]
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Label over date, so the count keeps its room on a narrow phone.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: p.ink)),
+                Text(date,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5, color: p.ink3)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(count,
+              style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: dark
+                      ? const Color(0xFFDEB393)
+                      : const Color(0xFF8A5F42))),
+        ],
       ),
     );
   }

@@ -37,8 +37,11 @@ class SessionHistoryItem {
           [],
       sessionNotes: json['sessionNotes'] as String?,
       createdBy: json['createdBy']?.toString(),
+      // The server sends UTC ("…Z"); convert once here so every screen shows
+      // the local clock time and "today" is the local day (Game Prep's
+      // "Prepped ✓ · 9:40", History, Hub stats).
       createdAt: json['createdAt'] != null
-          ? DateTime.tryParse(json['createdAt'] as String)
+          ? DateTime.tryParse(json['createdAt'] as String)?.toLocal()
           : null,
     );
   }

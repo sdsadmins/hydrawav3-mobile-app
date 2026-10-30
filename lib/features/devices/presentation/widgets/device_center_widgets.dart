@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -43,23 +45,74 @@ UnitLink watchUnitLink(WidgetRef ref, DeviceInfo d, List<String> candidates) {
   return UnitLink(bleId: id, busy: busy);
 }
 
-/// Live signal of a connected unit, in dBm (null when it can't be read).
-final unitRssiProvider =
-    FutureProvider.autoDispose.family<int?, String>((ref, bleId) async {
-  try {
-    return await BluetoothDevice.fromId(bleId).readRssi();
-  } catch (_) {
-    return null;
+/// How often the live signal is re-read while a card shows it.
+const _rssiEvery = Duration(seconds: 3);
+
+/// Readings averaged: a single Bluetooth sample swings ±10 dBm, so one
+/// unlucky read used to pin a unit right beside the phone at "Weak".
+const _rssiWindow = 4;
+
+/// Rolling average of the last [size] signal readings, in dBm.
+class RssiAverage {
+  final int size;
+  final _readings = <int>[];
+  RssiAverage(this.size);
+
+  /// Adds a reading. 0 and positive values (iOS reports 127 for
+  /// "unavailable") aren't real signal strengths and are ignored.
+  void add(int rssi) {
+    if (rssi >= 0) return;
+    _readings.add(rssi);
+    if (_readings.length > size) _readings.removeAt(0);
   }
+
+  /// The rounded average, or null before the first valid reading.
+  int? get value => _readings.isEmpty
+      ? null
+      : (_readings.reduce((a, b) => a + b) / _readings.length).round();
+}
+
+/// Live signal of a connected unit, in dBm (null until a reading succeeds):
+/// read now, then every [_rssiEvery], as the average of the last
+/// [_rssiWindow] readings. Reading stops when no card shows it.
+final unitRssiProvider =
+    StreamProvider.autoDispose.family<int?, String>((ref, bleId) {
+  final average = RssiAverage(_rssiWindow);
+  final out = StreamController<int?>();
+  var reading = false;
+
+  Future<void> read() async {
+    if (reading) return; // a slow read (busy radio) — skip this tick
+    reading = true;
+    try {
+      average.add(await BluetoothDevice.fromId(bleId).readRssi());
+    } catch (_) {
+      // Not connected right now: keep the last average.
+    }
+    reading = false;
+    if (!out.isClosed) out.add(average.value);
+  }
+
+  read();
+  final timer = Timer.periodic(_rssiEvery, (_) => read());
+  ref.onDispose(() {
+    timer.cancel();
+    out.close();
+  });
+  return out.stream;
 });
 
+/// v6 `bars4` (hydrawav3-reya/30-session.js): four levels at -52 / -58 /
+/// -70 dBm; the word and colour follow the prototype's `signalInfo`
+/// (strong ≥ -58, fair ≥ -70, else weak).
 ({int bars, String word}) signalOf(int rssi) {
-  if (rssi >= -60) return (bars: 3, word: 'Strong signal');
-  if (rssi >= -75) return (bars: 2, word: 'Good signal');
+  if (rssi >= -52) return (bars: 4, word: 'Strong signal');
+  if (rssi >= -58) return (bars: 3, word: 'Strong signal');
+  if (rssi >= -70) return (bars: 2, word: 'Good signal');
   return (bars: 1, word: 'Weak signal');
 }
 
-/// `.sigbars` — three rising bars, green / amber / red by strength.
+/// `.ry-ses-bars` — four rising bars, green (3–4) / amber (2) / red (1).
 class SignalBars extends StatelessWidget {
   final int bars;
   const SignalBars(this.bars, {super.key});
@@ -72,14 +125,14 @@ class SignalBars extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 4; i++)
           Container(
-            margin: const EdgeInsets.only(right: 1.5),
+            margin: EdgeInsets.only(right: i < 3 ? 2 : 0),
             width: 3,
-            height: 5.0 + i * 3,
+            height: (i + 1) * 3.0 + 2,
             decoration: BoxDecoration(
               color: i < bars ? c : p.line,
-              borderRadius: BorderRadius.circular(1),
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
       ],

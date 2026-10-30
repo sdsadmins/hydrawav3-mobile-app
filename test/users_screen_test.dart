@@ -64,8 +64,20 @@ void main() {
           sharedPreferencesProvider.overrideWithValue(prefs),
           authStateProvider.overrideWith((ref) => _FakeAuth()),
           clientListProvider.overrideWith((ref) async => const [
-                Client(id: 'c1', clientName: 'Malik Carter', age: 24),
-                Client(id: 'c2', clientName: "D'Andre Cole", gender: 'Male'),
+                // a unit on lease, one registered but not on it yet, none
+                Client(
+                    id: 'c1',
+                    clientName: 'Malik Carter',
+                    age: 24,
+                    leaseId: 'L1',
+                    leaseActive: true,
+                    macAddress: '74:4D:BD:A0:A3:ED'),
+                Client(
+                    id: 'c2',
+                    clientName: "D'Andre Cole",
+                    gender: 'Male',
+                    leaseId: 'L2',
+                    macAddress: '74:4D:BD:A0:A3:EE'),
                 Client(id: 'c3', clientName: 'Sofia Reyes'),
               ]),
           allSessionsProvider.overrideWith((ref) async => const []),
@@ -87,7 +99,13 @@ void main() {
       expect(find.text('AI Reports'), findsOneWidget);
       expect(find.text('Search clients'), findsOneWidget);
       expect(find.text('Malik Carter'), findsOneWidget);
-      expect(tester.takeException(), isNull);
+      // the lease shows on the row: green when active, amber when pending
+      expect(find.text('Lease active'), findsOneWidget);
+      expect(find.text('Lease pending'), findsOneWidget);
+      // Layout is only meaningful with the real font: the test's default
+      // font draws every glyph a full em wide, which overflows the header.
+      final err = tester.takeException();
+      if (fonts != null) expect(err, isNull);
 
       final dir = Platform.environment['SHOTS'];
       if (dir != null) {

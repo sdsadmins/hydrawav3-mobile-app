@@ -54,7 +54,7 @@ class ApiEndpoints {
   static const String practitionerOnboarding = '/practitioners/onboarding';
   // The website's plan page. US storefront only: Plan & usage opens it in the
   // phone's browser (see subscription_screen.dart). Website host for
-  // now: api.hydrawav3.studio (hydrawav3.app is the device/PHP server → 404).
+  // now: www.hydrawav3.studio (hydrawav3.app is the device/PHP server → 404).
   static String get practitionerSubscriptionUrl =>
       AppConfigStore.current.websitePlanUrl;
   // Profile

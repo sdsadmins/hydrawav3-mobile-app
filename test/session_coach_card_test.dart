@@ -54,6 +54,8 @@ final _knee = SessionCoach.fromJson({
 void main() {
   late List<(String, String)> applied;
   late List<List<Map<String, dynamic>>> shown;
+  // apply and delay calls in the order they happened
+  late List<String> calls;
 
   Future<void> pump(WidgetTester tester, Size size) async {
     tester.view.physicalSize = size * 2;
@@ -61,6 +63,7 @@ void main() {
     addTearDown(tester.view.reset);
     applied = [];
     shown = [];
+    calls = [];
     await tester.pumpWidget(ProviderScope(
       key: UniqueKey(),
       overrides: [
@@ -84,8 +87,10 @@ void main() {
               ],
               onApply: (d, p) async {
                 applied.add((d, p));
+                calls.add('apply $d');
                 return true;
               },
+              onSetDelay: (d, s) => calls.add('delay $d ${s}s'),
               onLocate: (_) {},
               bodyBuilder: (m) {
                 shown.add(m);
@@ -141,7 +146,8 @@ void main() {
       expect(applied, [('u1', 'p1')]);
       expect(find.text('1 of 2 planned'), findsOneWidget);
       // moves on to set 2, defaulting to the next free unit
-      expect(find.text('On Unit 1'), findsOneWidget); // set 1 is assigned
+      // set 1 is assigned
+      expect(find.text('2 SETS \u00b7 1 ASSIGNED'), findsOneWidget);
       expect(shown.last.length, 1); // the body now shows set 2
       await tap(tester, find.text('Use this set  →'));
       expect(applied.last, ('u2', 'p1'));
@@ -149,6 +155,109 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  Future<void> toSets(WidgetTester tester) async {
+    await pump(tester, const Size(390, 844));
+    await tap(tester, find.text('Session coach'));
+    await tap(tester, find.text('Knee'));
+    await tap(tester, find.text('Support recovery'));
+  }
+
+  Finder plus() => find.text('+');
+  Finder minus() => find.text('\u2212');
+  Finder delay(String v) => find.text('${v}s', findRichText: true);
+
+  testWidgets('the delay sits between the two set cards, 0 at first',
+      (tester) async {
+    await toSets(tester);
+    expect(delay('0'), findsOneWidget); // one joint for 2 sets
+    expect(find.text('Swap'), findsOneWidget);
+    expect(find.text('starts with the others'), findsNWidgets(2));
+    expect(find.text('Reset delays'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('− / + step a second; cards show their order and start',
+      (tester) async {
+    await toSets(tester);
+    await tap(tester, plus());
+    expect(delay('+1'), findsOneWidget);
+    expect(find.text('1st \u00b7 starts 0:00'), findsOneWidget);
+    expect(find.text('2nd \u00b7 starts 0:01'), findsOneWidget);
+    expect(find.text('Reset delays'), findsOneWidget);
+    for (var k = 0; k < 4; k++) {
+      await tap(tester, plus());
+    }
+    expect(find.text('2nd \u00b7 starts 0:05'), findsOneWidget);
+    await tap(tester, minus());
+    expect(delay('+4'), findsOneWidget);
+    await tap(tester, find.text('Reset delays'));
+    expect(delay('0'), findsOneWidget);
+    expect(find.text('Reset delays'), findsNothing);
+  });
+
+  testWidgets('holding + keeps stepping, and it stops at 60 s',
+      (tester) async {
+    await toSets(tester);
+    await tester.ensureVisible(plus());
+    final g = await tester.startGesture(tester.getCenter(plus()));
+    await tester.pump(const Duration(milliseconds: 600)); // long press starts
+    for (var k = 0; k < 80; k++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    await g.up();
+    await tester.pump();
+    expect(delay('+60'), findsOneWidget); // a unit's Start Delay tops out
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Use this set: protocol first, then the start delay',
+      (tester) async {
+    await toSets(tester);
+    for (var k = 0; k < 8; k++) {
+      await tap(tester, plus()); // set 2 starts at 0:08
+    }
+    await tap(tester, find.text('Use this set  \u2192'));
+    await tap(tester, find.text('Use this set  \u2192'));
+    expect(calls, [
+      'apply u1',
+      'delay u1 0s',
+      'apply u2',
+      'delay u2 8s',
+    ]);
+    // a later change reaches the unit that already has the set
+    calls.clear();
+    await tap(tester, plus());
+    expect(calls, ['delay u2 9s']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a delay before anything is on a unit touches no unit',
+      (tester) async {
+    await toSets(tester);
+    await tap(tester, plus());
+    expect(calls, isEmpty);
+  });
+
+  testWidgets('Swap trades the units and re-applies sets already on',
+      (tester) async {
+    await toSets(tester);
+    for (var k = 0; k < 3; k++) {
+      await tap(tester, plus());
+    }
+    await tap(tester, find.text('Use this set  \u2192'));
+    await tap(tester, find.text('Use this set  \u2192'));
+    calls.clear();
+    await tap(tester, find.text('Swap'));
+    expect(calls, [
+      'apply u2',
+      'delay u2 0s',
+      'apply u1',
+      'delay u1 3s',
+    ]);
+    expect(find.text('Locate Unit 2'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('a body part without a coach says so', (tester) async {
     await pump(tester, const Size(390, 844));

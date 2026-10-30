@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/error/exceptions.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/utils/logger.dart';
 import '../domain/plan_model.dart';
 
 final paymentRepositoryProvider = Provider<PaymentRepository>((ref) {
@@ -36,7 +37,11 @@ class PaymentRepository {
     try {
       await _dio.post(ApiEndpoints.freePlan(orgId), data: const {});
       return true;
-    } on DioException {
+    } on DioException catch (e) {
+      // Still non-blocking, but say why — a silent 400 here (the server
+      // rejecting the request) once meant new orgs quietly got no tokens.
+      appLogger.w('Payments: free plan for org $orgId failed '
+          '(${e.response?.statusCode}): ${e.response?.data ?? e.message}');
       return false;
     }
   }

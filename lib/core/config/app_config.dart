@@ -62,6 +62,10 @@ class AppConfig {
   /// Node REST base. Ends with `/`: Node paths are relative.
   final String nodeBaseUrl;
 
+  /// The test Node server (`nodetestBaseUrl`), used by test installs — an APK
+  /// or TestFlight — instead of [nodeBaseUrl]. See [forTestInstall].
+  final String nodeTestBaseUrl;
+
   /// Socket.IO origin (`scheme://host[:port]`).
   final String socketOrigin;
 
@@ -80,6 +84,7 @@ class AppConfig {
     required this.version,
     required this.djangoBaseUrl,
     required this.nodeBaseUrl,
+    this.nodeTestBaseUrl = '',
     required this.socketOrigin,
     required this.deviceControlUrl,
     required this.onboardingProxyUrl,
@@ -97,11 +102,12 @@ class AppConfig {
   static const defaults = AppConfig(
     version: 0,
     djangoBaseUrl: 'http://54.241.236.53:8080/api/v1',
-    nodeBaseUrl: 'https://api.hydrawav3.studio/api/hydrawav/v1/',
-    socketOrigin: 'https://api.hydrawav3.studio',
+    nodeBaseUrl: 'https://www.hydrawav3.studio/api/hydrawav/v1/',
+    nodeTestBaseUrl: 'https://api.hydrawav3.studio/api/hydrawav/v1/',
+    socketOrigin: 'https://www.hydrawav3.studio',
     deviceControlUrl: 'https://hydrawav3.app',
     onboardingProxyUrl: 'https://hydrawav3.app/proxy_create_user.php',
-    websitePlanUrl: 'https://api.hydrawav3.studio/practitioner/subscription',
+    websitePlanUrl: 'https://www.hydrawav3.studio/practitioner/subscription',
     links: AppLinks(
       helpCenter: 'https://www.hydrawav3.com/help-center',
       buy: 'https://www.hydrawav3.com/buy',
@@ -140,19 +146,19 @@ class AppConfig {
     return '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
   }
 
-  /// Server JSON → config. [useTestNode]: debug builds read `nodetestBaseUrl`
-  /// first; store builds read `nodeBaseUrl`.
-  factory AppConfig.fromServer(Map<String, dynamic> j,
-      {required bool useTestNode}) {
+  /// Server JSON → config. Store installs use `nodeBaseUrl`; test installs
+  /// switch to `nodetestBaseUrl` through [forTestInstall].
+  factory AppConfig.fromServer(Map<String, dynamic> j) {
     const d = defaults;
     var django = _pick(j['javaBaseUrl'] ?? j['djangoBaseUrl'], d.djangoBaseUrl);
     django = django.replaceFirst(RegExp(r'/+$'), '');
 
-    final nodeRaw = useTestNode
-        ? _pick(j['nodetestBaseUrl'], _pick(j['nodeBaseUrl'], ''))
-        : _pick(j['nodeBaseUrl'], '');
+    final nodeRaw = _pick(j['nodeBaseUrl'], '');
     var node = nodeRaw.isEmpty ? d.nodeBaseUrl : nodeRaw;
     if (!node.endsWith('/')) node = '$node/';
+
+    var testNode = _pick(j['nodetestBaseUrl'] ?? j['nodeTestBaseUrl'], d.nodeTestBaseUrl);
+    if (!testNode.endsWith('/')) testNode = '$testNode/';
 
     // The socket follows the Node host unless the server names its own.
     final socket = _pick(j['socketUrl'], '');
@@ -163,6 +169,7 @@ class AppConfig {
       version: (j['version'] as num?)?.toInt() ?? 0,
       djangoBaseUrl: django,
       nodeBaseUrl: node,
+      nodeTestBaseUrl: testNode,
       socketOrigin: socket.isNotEmpty ? _origin(socket) : _origin(node),
       deviceControlUrl: _pick(j['deviceControlUrl'], d.deviceControlUrl)
           .replaceFirst(RegExp(r'/+$'), ''),
@@ -195,12 +202,35 @@ class AppConfig {
     );
   }
 
+  /// This config for a test install: Node and the socket on the test server
+  /// (it runs its own socket — session events come from the server that
+  /// started the session). Everything else is unchanged.
+  AppConfig forTestInstall() => nodeTestBaseUrl.isEmpty
+      ? this
+      : AppConfig(
+          version: version,
+          djangoBaseUrl: djangoBaseUrl,
+          nodeBaseUrl: nodeTestBaseUrl,
+          nodeTestBaseUrl: nodeTestBaseUrl,
+          socketOrigin: _origin(nodeTestBaseUrl),
+          deviceControlUrl: deviceControlUrl,
+          onboardingProxyUrl: onboardingProxyUrl,
+          websitePlanUrl: websitePlanUrl,
+          links: links,
+          minAppVersion: minAppVersion,
+          latestAppVersion: latestAppVersion,
+          storeUrl: storeUrl,
+          maintenance: maintenance,
+          maintenanceMessage: maintenanceMessage,
+        );
+
   // ── the saved copy (already validated; re-validated on load anyway) ───────
 
   Map<String, dynamic> toCache() => {
         'version': version,
         'javaBaseUrl': djangoBaseUrl,
         'nodeBaseUrl': nodeBaseUrl,
+        'nodetestBaseUrl': nodeTestBaseUrl,
         'socketUrl': socketOrigin,
         'deviceControlUrl': deviceControlUrl,
         'onboardingProxyUrl': onboardingProxyUrl,
@@ -213,7 +243,7 @@ class AppConfig {
       };
 
   factory AppConfig.fromCache(Map<String, dynamic> j) =>
-      AppConfig.fromServer(j, useTestNode: false);
+      AppConfig.fromServer(j);
 }
 
 /// `1.2.10` vs `1.2.9` → positive. Missing parts count as 0; non-numeric

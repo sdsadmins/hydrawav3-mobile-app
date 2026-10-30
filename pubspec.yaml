@@ -87,6 +87,7 @@ dependencies:
   path_provider: ^2.1.5
   path: ^1.9.1
   flutter_local_notifications: ^22.3.0
+  in_app_purchase: ^3.3.1
 
 dev_dependencies:
   flutter_test:
@@ -127,14 +128,21 @@ flutter:
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
-  # Square icons composed from the wide wordmark (the raw 2266x407 logo gets
-  # squished into the 1:1 icon). app_icon.png = wordmark centered on the brand
-  # bg; app_icon_foreground.png = transparent wordmark sized for adaptive masks.
+  # Rendered from Hydrawav3_App_Icon_Vector.svg (navy gradient + silver/gold
+  # wordmark) as full-bleed squares: the launcher cuts its own rounded shape,
+  # so the SVG's own corners and glow are left out. app_icon.png keeps the
+  # gradient border, drawn along the iOS corner (~22.4% radius) so the cut
+  # leaves it whole; app_icon_background.png = the navy gradient only (Android
+  # masks vary by phone — circle, squircle — so a border there would get cut);
+  # app_icon_foreground.png = transparent wordmark inside the adaptive safe zone.
   image_path: "assets/images/app_icon.png"
   min_sdk_android: 21
   # Opaque brand background (transparent icons are rejected by the iOS App
   # Store and look invisible on light launchers).
   remove_alpha_ios: true
-  background_color_ios: "#132A35"
-  adaptive_icon_background: "#132A35"
+  background_color_ios: "#071F3D"
+  adaptive_icon_background: "assets/images/app_icon_background.png"
   adaptive_icon_foreground: "assets/images/app_icon_foreground.png"
+  # The foreground PNG is already sized for the safe zone; the default 16%
+  # inset would shrink the wordmark a second time.
+  adaptive_icon_foreground_inset: 0

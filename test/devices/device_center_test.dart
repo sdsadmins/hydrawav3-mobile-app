@@ -75,7 +75,7 @@ void main() {
             ])),
         bleConnectionStatesProvider.overrideWith((ref) =>
             Stream.value({'ble-1': BleConnectionStatus.connected})),
-        unitRssiProvider.overrideWith((ref, id) async => -52),
+        unitRssiProvider.overrideWith((ref, id) => Stream.value(-52)),
         bleScannerProvider.overrideWithValue(_FakeScanner()),
         startScanProvider.overrideWithValue(() async {}),
       ],

@@ -41,11 +41,9 @@ class ProtocolRepository {
         _isOnline = isOnline,
         _orgId = orgId;
 
-  Future<List<Protocol>> getProtocols({
-    int page = 1,
-    int perPage = 50,
-    String? orgId,
-  }) async {
+  /// Every protocol the org can see: walks all pages of `GET /protocols`
+  /// (a single 50-item page used to silently drop the rest).
+  Future<List<Protocol>> getProtocols({String? orgId}) async {
     List<CachedProtocol> cached = [];
     try {
       cached = await _db.getAllCachedProtocols();
@@ -60,11 +58,7 @@ class ProtocolRepository {
     // So always fetch fresh when online; the cache is only an offline fallback.
     if (_isOnline) {
       try {
-        final protocols = await _remoteSource.getProtocols(
-          page: page,
-          perPage: perPage,
-          orgId: orgId ?? _orgId,
-        );
+        final protocols = await _fetchAllPages(orgId ?? _orgId);
 
         for (final protocol in protocols) {
           try {
@@ -100,6 +94,29 @@ class ProtocolRepository {
     final protocols = cached.map(_cachedToProtocol).toList();
     protocols.sort((a, b) => a.templateName.compareTo(b.templateName));
     return protocols;
+  }
+
+  /// Server page cap is 100. The server pages only regular protocols and
+  /// repeats every Protocol Plus stack on each page, so ids are de-duplicated
+  /// (first copy kept). [_maxPages] guards against a server that never says
+  /// it's done.
+  static const _perPage = 100;
+  static const _maxPages = 20;
+
+  Future<List<Protocol>> _fetchAllPages(String? orgId) async {
+    final byId = <String, Protocol>{};
+    for (var page = 1; page <= _maxPages; page++) {
+      final result = await _remoteSource.getProtocolsPage(
+        page: page,
+        perPage: _perPage,
+        orgId: orgId,
+      );
+      for (final p in result.items) {
+        byId.putIfAbsent(p.id, () => p);
+      }
+      if (!result.hasNextPage) break;
+    }
+    return byId.values.toList();
   }
 
   Future<List<ProtocolSelectionOption>> getProtocolsForGoalTag(

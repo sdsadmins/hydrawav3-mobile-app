@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -349,18 +350,53 @@ final gameDayActiveProvider =
 
 class GameDayNotifier extends StateNotifier<bool> {
   static const _key = 'hub_game_day_on';
+
+  /// Every day game day was turned on (yyyy-MM-dd), so a past one can still
+  /// be reported on after the switch has moved on (prototype C0-gameday).
+  static const historyKey = 'hub_game_days';
   final SharedPreferences _prefs;
+  Timer? _midnight;
 
   static String get _today {
     final n = DateTime.now();
     return '${n.year}-${n.month}-${n.day}';
   }
 
-  GameDayNotifier(this._prefs) : super(_prefs.getString(_key) == _today);
+  static String dayKey(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  GameDayNotifier(this._prefs) : super(_prefs.getString(_key) == _today) {
+    _armMidnight();
+  }
+
+  /// Game day is the day it was called: at midnight it ends by itself, even
+  /// with the app left open.
+  void _armMidnight() {
+    _midnight?.cancel();
+    final now = DateTime.now();
+    final next = DateTime(now.year, now.month, now.day + 1);
+    _midnight = Timer(next.difference(now) + const Duration(seconds: 1), () {
+      if (!mounted) return;
+      state = _prefs.getString(_key) == _today;
+      _armMidnight();
+    });
+  }
 
   Future<void> activate() async {
     state = true;
     await _prefs.setString(_key, _today);
+    final days = _prefs.getStringList(historyKey) ?? const <String>[];
+    final today = dayKey(DateTime.now());
+    if (!days.contains(today)) {
+      await _prefs.setStringList(historyKey, [...days, today]..sort());
+    }
+  }
+
+  @override
+  void dispose() {
+    _midnight?.cancel();
+    super.dispose();
   }
 
   Future<void> end() async {
@@ -368,3 +404,16 @@ class GameDayNotifier extends StateNotifier<bool> {
     await _prefs.remove(_key);
   }
 }
+
+/// The days game day was on, newest first (ending one early still counts:
+/// it happened). Refreshes when game day is switched on.
+final gameDaysProvider = Provider<List<DateTime>>((ref) {
+  ref.watch(gameDayActiveProvider);
+  final raw = ref
+          .read(sharedPreferencesProvider)
+          .getStringList(GameDayNotifier.historyKey) ??
+      const <String>[];
+  final days = [for (final s in raw) DateTime.tryParse(s)].nonNulls.toList()
+    ..sort((a, b) => b.compareTo(a));
+  return days;
+});
