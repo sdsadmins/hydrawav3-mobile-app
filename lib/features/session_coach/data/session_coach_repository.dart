@@ -59,6 +59,35 @@ class SessionCoachRepository {
       rethrow;
     }
   }
+
+  /// The client's latest saved Session Coach intake. Older server deployments
+  /// may not have this route yet; callers can keep using the phone's cached
+  /// plan in that case.
+  Future<SessionCoachRun?> recentRun(String clientId) async {
+    try {
+      final res = await _dio.get(
+        ApiEndpoints.recentSessionCoachByClient(clientId),
+        queryParameters: {'limit': 1},
+      );
+      final data = res.data;
+      final records = data is List
+          ? data
+          : data is Map && data['data'] is List
+              ? data['data'] as List
+              : data is Map
+                  ? [data]
+                  : const [];
+      if (records.isEmpty || records.first is! Map) return null;
+      final intake = Map<String, dynamic>.from(records.first as Map);
+      final rawRun = intake['sessionCoach'];
+      if (rawRun is! Map) return null;
+      final run = SessionCoachRun.fromJson(Map<String, dynamic>.from(rawRun));
+      return run.isValid ? run : null;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
 }
 
 final sessionCoachRepositoryProvider = Provider<SessionCoachRepository>(

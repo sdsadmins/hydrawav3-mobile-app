@@ -17,12 +17,17 @@ import 'coach_body_view.dart';
 class CoachUnit {
   final String id;
   final String name;
+  final String? macAddress;
 
   /// BLE-connected: Locate is offered (same rule as the unit card).
   final bool canLocate;
 
-  const CoachUnit(
-      {required this.id, required this.name, this.canLocate = false});
+  const CoachUnit({
+    required this.id,
+    required this.name,
+    this.macAddress,
+    this.canLocate = false,
+  });
 }
 
 /// Which units the coach has planned this visit: deviceId → "Knee · Set 1".
@@ -113,22 +118,29 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _unitHintBySet.clear();
       _appliedSets.clear();
     });
+    ref.read(sessionCoachRunProvider.notifier).state = null;
   }
 
-  void _back() => setState(() {
-        if (_step == 2) {
-          _goal = null;
-          _setIndex = 0;
-          _deviceBySet.clear();
-          _protocolBySet.clear();
-          _gapBySet.clear();
-          _unitHintBySet.clear();
-          _appliedSets.clear();
-        } else if (_step == 1) {
-          _body = null;
-        }
-        _step = (_step - 1).clamp(0, 2);
-      });
+  void _back() {
+    final clearSessionCoach = _step == 2;
+    setState(() {
+      if (_step == 2) {
+        _goal = null;
+        _setIndex = 0;
+        _deviceBySet.clear();
+        _protocolBySet.clear();
+        _gapBySet.clear();
+        _unitHintBySet.clear();
+        _appliedSets.clear();
+      } else if (_step == 1) {
+        _body = null;
+      }
+      _step = (_step - 1).clamp(0, 2);
+    });
+    if (clearSessionCoach) {
+      ref.read(sessionCoachRunProvider.notifier).state = null;
+    }
+  }
 
   static String _goalShort(String g) =>
       g == kSupportActivation ? 'Support activation' : 'Support recovery';
@@ -181,11 +193,33 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   }
 
   /// Game Prep START: reopen this client's last plan at placement.
-  void _restoreRequested(String clientId) {
+  Future<void> _restoreRequested(String clientId) async {
     ref.read(coachRestoreRequestProvider.notifier).state = null;
     if (clientId != _clientId) return;
-    final plan = _savedPlan();
-    if (plan == null) return; // no history: the ordinary body step
+    final localPlan = _savedPlan();
+    if (localPlan != null) _restorePlan(localPlan);
+    try {
+      final run =
+          await ref.read(sessionCoachRepositoryProvider).recentRun(clientId);
+      final remotePlan = run == null ? null : CoachPlanRecord.fromRun(run);
+      if (remotePlan != null && mounted) {
+        _restorePlan(remotePlan, showMessage: localPlan == null);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+        content: Text(localPlan == null
+            ? 'Couldn’t load their saved Session Coach setup: $e'
+            : 'Couldn’t refresh their saved setup. Using this device’s copy.'),
+        duration: const Duration(seconds: 4),
+      ));
+      if (localPlan == null) return;
+    }
+    if (localPlan == null && !mounted) return;
+  }
+
+  void _restorePlan(CoachPlanRecord plan, {bool showMessage = true}) {
+    if (!mounted) return;
     setState(() {
       _deviceBySet.clear();
       _open = true;
@@ -194,20 +228,82 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _step = 2;
       _fillFrom(plan);
     });
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
-        content: Text('Loaded their last setup — change anything'),
-        duration: Duration(seconds: 3)));
+    if (showMessage) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+          content: Text('Loaded their last setup — change anything'),
+          duration: Duration(seconds: 3)));
+    }
+  }
+
+  void _restoreHistoryPlan() {
+    final plan = ref.read(coachHistoryRestoreRequestProvider);
+    ref.read(coachHistoryRestoreRequestProvider.notifier).state = null;
+    if (plan == null) return;
+    _restorePlan(plan);
+  }
+
+  SessionCoachRun? _sessionCoachRun(SessionCoach coach) {
+    final body = _body;
+    final goal = _goal;
+    if (body == null || goal == null) return null;
+    final sets = coach.setsFor(goal);
+    final runSets = <SessionCoachRunSet>[];
+    for (final i in _appliedSets.toList()..sort()) {
+      if (i < 0 || i >= sets.length) continue;
+      final protocolId = _protocolFor(i, coach);
+      final unitId = _deviceBySet[i];
+      final unit = widget.units.where((u) => u.id == unitId).firstOrNull;
+      final suppliedMacAddress = unit?.macAddress?.trim();
+      final macAddress =
+          suppliedMacAddress == null || suppliedMacAddress.isEmpty
+              ? unitId
+              : suppliedMacAddress;
+      if (protocolId == null ||
+          unitId == null ||
+          macAddress == null ||
+          macAddress.isEmpty) {
+        continue;
+      }
+      final protocolRef =
+          coach.protocolsFor(goal).where((p) => p.id == protocolId).firstOrNull;
+      final protocolName = protocolRef?.name.isNotEmpty == true
+          ? protocolRef!.name
+          : ref
+                  .read(protocolDetailProvider(protocolId))
+                  .valueOrNull
+                  ?.templateName ??
+              '';
+      runSets.add(SessionCoachRunSet(
+        index: i,
+        setId: sets[i].id,
+        name: sets[i].name,
+        protocolId: protocolId,
+        protocolName: protocolName,
+        macAddress: macAddress,
+        startDelay: _startOf(i),
+      ));
+    }
+    final run = SessionCoachRun(
+      sessionCoachId: coach.id,
+      bodyPartId: body.id,
+      bodyPartName: body.name,
+      supportType: goal,
+      sets: runSets,
+    );
+    return run.isValid ? run : null;
   }
 
   /// Saves what is on the units now as this client's plan.
-  void _savePlan(SessionCoach coach) {
-    final client = _clientId;
+  Future<void> _savePlan(SessionCoach coach) async {
     final body = _body;
     final goal = _goal;
-    if (client == null || body == null || goal == null) return;
-    if (_appliedSets.isEmpty) return; // nothing has been put on a unit yet
+    if (body == null || goal == null || _appliedSets.isEmpty) return;
+    final run = _sessionCoachRun(coach);
+    ref.read(sessionCoachRunProvider.notifier).state = run;
+    final client = _clientId;
+    if (client == null || run == null) return;
     final sets = coach.setsFor(goal);
-    ref.read(coachPlanStoreProvider).save(
+    await ref.read(coachPlanStoreProvider).save(
           _orgId,
           client,
           CoachPlanRecord(
@@ -219,11 +315,19 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
               for (var i = 0; i < sets.length; i++)
                 CoachPlanSet(
                   index: i,
+                  setId: sets[i].id,
+                  name: sets[i].name,
                   protocolId: _protocolFor(i, coach),
+                  protocolName: coach
+                      .protocolsFor(goal)
+                      .where((p) => p.id == _protocolFor(i, coach))
+                      .map((p) => p.name)
+                      .firstOrNull,
                   unitId: _deviceBySet[i],
                   startAt: _startOf(i),
                 ),
             ],
+            run: run,
           ),
         );
   }
@@ -244,7 +348,8 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = ref.read(coachRestoreRequestProvider);
-      if (pending != null) _restoreRequested(pending);
+      if (pending != null) unawaited(_restoreRequested(pending));
+      _restoreHistoryPlan();
     });
   }
 
@@ -256,7 +361,10 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       if (prev?.id != next?.id && _step > 0) _reset();
     });
     ref.listen<String?>(coachRestoreRequestProvider, (_, next) {
-      if (next != null) _restoreRequested(next);
+      if (next != null) unawaited(_restoreRequested(next));
+    });
+    ref.listen<CoachPlanRecord?>(coachHistoryRestoreRequestProvider, (_, next) {
+      if (next != null) _restoreHistoryPlan();
     });
     final p = RefPalette.of(context);
     final planned = ref.watch(sessionCoachPlannedProvider);
@@ -668,8 +776,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                     SizedBox(
                       key: _setKeys[i],
                       width: w,
-                      child:
-                          _setCard(p, coach, sets[i], i, selected: i == idx),
+                      child: _setCard(p, coach, sets[i], i, selected: i == idx),
                     ),
                   ],
                 ],
@@ -780,7 +887,8 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       }
       if (!mounted) return;
     }
-    _savePlan(coach);
+    await _savePlan(coach);
+    if (!mounted) return;
   }
 
   /// The unit each set gets by default: its chosen one, else the unit tab
@@ -789,8 +897,12 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     if (_deviceBySet[idx] != null) return _deviceBySet[idx];
     if (widget.units.isEmpty) return null;
     String? hint(int i) {
-      final id = _unitHintBySet[i];
-      return id != null && widget.units.any((u) => u.id == id) ? id : null;
+      final hintId = _unitHintBySet[i];
+      if (hintId == null) return null;
+      final unit = widget.units
+          .where((u) => u.id == hintId || u.macAddress == hintId)
+          .firstOrNull;
+      return unit?.id;
     }
 
     if (hint(idx) != null) return hint(idx);
@@ -2064,9 +2176,8 @@ class _DelayJoint extends StatelessWidget {
             line(),
             const SizedBox(height: 5),
             CustomPaint(
-              foregroundPainter: set
-                  ? null
-                  : _DashedRRect(color: p.line, radius: 12),
+              foregroundPainter:
+                  set ? null : _DashedRRect(color: p.line, radius: 12),
               child: Container(
                 padding: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
@@ -2206,8 +2317,7 @@ class _HoldStepState extends State<_HoldStep> {
           height: 30,
           child: Center(
             child: Text(widget.label,
-                style: TextStyle(
-                    fontSize: 15, height: 1, color: widget.color)),
+                style: TextStyle(fontSize: 15, height: 1, color: widget.color)),
           ),
         ),
       ),

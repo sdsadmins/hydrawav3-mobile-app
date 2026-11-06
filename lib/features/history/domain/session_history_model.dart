@@ -1,3 +1,5 @@
+import '../../session_coach/domain/session_coach_models.dart';
+
 class SessionHistoryItem {
   final String? id;
   final String? clientId;
@@ -5,6 +7,8 @@ class SessionHistoryItem {
   final List<HistoryProtocol> protocols;
   final List<HistoryDiscomfort> discomfortAreas;
   final String? sessionNotes;
+  final String sessionType;
+  final SessionCoachRun? sessionCoach;
   final DateTime? createdAt;
   final String? createdBy;
 
@@ -16,10 +20,31 @@ class SessionHistoryItem {
     this.protocols = const [],
     this.discomfortAreas = const [],
     this.sessionNotes,
+    this.sessionType = 'session',
+    this.sessionCoach,
     this.createdAt,
   });
 
   bool get isGuest => (clientType ?? '').toLowerCase() == 'guest';
+  bool get isSessionCoach =>
+      sessionType == 'session_coach' || sessionCoach != null;
+
+  SessionHistoryItem copyWith({
+    String? sessionType,
+    SessionCoachRun? sessionCoach,
+  }) =>
+      SessionHistoryItem(
+        id: id,
+        clientId: clientId,
+        clientType: clientType,
+        createdBy: createdBy,
+        protocols: protocols,
+        discomfortAreas: discomfortAreas,
+        sessionNotes: sessionNotes,
+        sessionType: sessionType ?? this.sessionType,
+        sessionCoach: sessionCoach ?? this.sessionCoach,
+        createdAt: createdAt,
+      );
 
   factory SessionHistoryItem.fromJson(Map<String, dynamic> json) {
     return SessionHistoryItem(
@@ -36,6 +61,11 @@ class SessionHistoryItem {
               .toList() ??
           [],
       sessionNotes: json['sessionNotes'] as String?,
+      sessionType: (json['sessionType'] ?? 'session').toString(),
+      sessionCoach: json['sessionCoach'] is Map
+          ? SessionCoachRun.fromJson(
+              Map<String, dynamic>.from(json['sessionCoach'] as Map))
+          : null,
       createdBy: json['createdBy']?.toString(),
       // The server sends UTC ("…Z"); convert once here so every screen shows
       // the local clock time and "today" is the local day (Game Prep's
@@ -68,6 +98,9 @@ class HistoryProtocol {
   final String? protocol;
   final int? duration;
   final String? deviceName;
+  final String? protocolId;
+  final String? macAddress;
+  final Map<String, dynamic>? advancedSettings;
 
   /// The post-session outcome check, as answered on the outcomes sheet and
   /// POSTed inside `protocols[].questionAnswers`. This — not the discomfort
@@ -80,6 +113,9 @@ class HistoryProtocol {
     this.protocol,
     this.duration,
     this.deviceName,
+    this.protocolId,
+    this.macAddress,
+    this.advancedSettings,
     this.questionAnswers = const [],
   });
 
@@ -89,6 +125,11 @@ class HistoryProtocol {
       protocol: json['protocol'] as String?,
       duration: _parseHistoryDuration(json),
       deviceName: json['deviceName'] as String?,
+      protocolId: json['protocolId']?.toString(),
+      macAddress: json['macAddress']?.toString(),
+      advancedSettings: json['advancedSettings'] is Map
+          ? Map<String, dynamic>.from(json['advancedSettings'] as Map)
+          : null,
       questionAnswers: (json['questionAnswers'] as List<dynamic>?)
               ?.whereType<Map>()
               .map((e) =>

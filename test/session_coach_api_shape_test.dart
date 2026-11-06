@@ -19,7 +19,7 @@ const _live = r'''
     "muscleName":"Leg - Lower - Back - Left Gastrocnemius",
     "sun":{"id":"pad_mvuvizmdtirv8","type":"sun","position":[-0.0664,0.3031,0.1331],"normal":[-0.432,-0.4771,0.7653],"mesh":"external abdominal oblique muscle.r","region":"external abdominal oblique","facing":"front","side":"right","createdAt":1793358801877},
     "moon":{"id":"pad_mvuvj17x6nxx7","type":"moon","position":[0.1272,0.406,0.1219],"normal":[0.6633,-0.2259,0.7134],"mesh":"external abdominal oblique muscle.l","region":"external abdominal oblique","facing":"front","side":"left","createdAt":1793358803949},
-    "sunColor":"#818CF8","moonColor":"#818CF8"}]}]},
+    "sunColor":"#FBBF24","moonColor":"#818CF8"}]}]},
   "createdBy":1,"updatedBy":1,
   "createdAt":"2026-10-30T11:13:44.145Z","updatedAt":"2026-10-30T11:13:44.145Z","__v":0}]
 ''';
@@ -44,7 +44,7 @@ void main() {
     expect(set.sunMuscles, ['Leg - Lower - Back - Left Gastrocnemius']);
     expect(set.moonMuscles, ['Leg - Lower - Back - Left Gastrocnemius']);
     expect(set.markers.map((m) => '${m['type']} ${m['color']}'),
-        ['sun #818CF8', 'moon #818CF8']);
+        ['sun #FBBF24', 'moon #818CF8']);
     // the pad itself is passed through as stored
     expect(set.markers.first['position'], [-0.0664, 0.3031, 0.1331]);
   });

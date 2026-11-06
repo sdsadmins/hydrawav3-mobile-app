@@ -6,6 +6,8 @@ import '../../../../core/router/route_names.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_primitives.dart';
 import '../../../clients/presentation/providers/client_providers.dart';
+import '../../../session_coach/data/coach_plan_store.dart';
+import '../../../session_coach/domain/session_coach_models.dart';
 import '../../data/history_repository.dart';
 import '../../domain/session_history_model.dart';
 
@@ -92,6 +94,10 @@ class _Detail extends ConsumerWidget {
                   children: [
                     _DetailRow('Client', name),
                     const Divider(height: 1),
+                    if (session.isSessionCoach) ...[
+                      _DetailRow('Session type', 'Session Coach'),
+                      const Divider(height: 1),
+                    ],
                     _DetailRow('Session', first?.protocol ?? '--'),
                     const Divider(height: 1),
                     _DetailRow('Duration', _formatDuration(first?.duration)),
@@ -102,6 +108,47 @@ class _Detail extends ConsumerWidget {
                   ],
                 ),
               ),
+
+              if (session.sessionCoach?.isValid == true) ...[
+                const SizedBox(height: HwSpace.s2),
+                _SessionCoachDetails(
+                  run: session.sessionCoach!,
+                  protocols: session.protocols,
+                ),
+                const SizedBox(height: HwSpace.s2),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      final run = session.sessionCoach!;
+                      final plan = CoachPlanRecord.fromRun(
+                        run,
+                        savedAt: session.createdAt,
+                      );
+                      if (plan == null) return;
+                      final selected = clients
+                          .where((c) => c.id == session.clientId)
+                          .firstOrNull;
+                      if (session.isGuest) {
+                        ref.read(sessionClientModeProvider.notifier).state =
+                            ClientMode.guest;
+                        ref.read(selectedClientProvider.notifier).state = null;
+                      } else if (selected != null) {
+                        ref.read(sessionClientModeProvider.notifier).state =
+                            ClientMode.client;
+                        ref.read(selectedClientProvider.notifier).state =
+                            selected;
+                      }
+                      ref
+                          .read(coachHistoryRestoreRequestProvider.notifier)
+                          .state = plan;
+                      context.go(RoutePaths.devices);
+                    },
+                    icon: const Icon(Icons.replay_rounded),
+                    label: const Text('Load in Session Coach'),
+                  ),
+                ),
+              ],
 
               if (_answers(session).isNotEmpty) ...[
                 const SizedBox(height: HwSpace.s2),
@@ -168,6 +215,125 @@ class _Detail extends ConsumerWidget {
     } else {
       context.go(RoutePaths.history);
     }
+  }
+}
+
+class _SessionCoachDetails extends StatefulWidget {
+  final SessionCoachRun run;
+  final List<HistoryProtocol> protocols;
+
+  const _SessionCoachDetails({
+    required this.run,
+    required this.protocols,
+  });
+
+  @override
+  State<_SessionCoachDetails> createState() => _SessionCoachDetailsState();
+}
+
+class _SessionCoachDetailsState extends State<_SessionCoachDetails> {
+  final Set<int> _expandedSets = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const HwEyebrow('Session Coach details'),
+        HwCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _DetailRow('Body area', widget.run.bodyPartName),
+              const Divider(height: 1),
+              _DetailRow('Support type', widget.run.supportType),
+            ],
+          ),
+        ),
+        for (final (index, set) in widget.run.sets.indexed) ...[
+          const SizedBox(height: HwSpace.s2),
+          HwCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Set ${index + 1} · ${set.name}',
+                  style: const TextStyle(
+                    fontSize: HwType.sm,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _DetailRow('Protocol', set.protocolName),
+                _DetailRow('Protocol ID', set.protocolId),
+                _DetailRow('Device MAC', set.macAddress),
+                if (set.startDelay != null)
+                  _DetailRow('Start delay', '${set.startDelay}s'),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ActionChip(
+                    avatar: Icon(
+                      _expandedSets.contains(index)
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                      size: 18,
+                    ),
+                    label: const Text('Advanced settings'),
+                    onPressed: () => setState(() {
+                      if (!_expandedSets.add(index)) {
+                        _expandedSets.remove(index);
+                      }
+                    }),
+                  ),
+                ),
+                if (_expandedSets.contains(index)) ...[
+                  const Divider(height: 1),
+                  ..._settingsFor(set).entries.map(
+                        (entry) => _DetailRow(
+                          _settingLabel(entry.key),
+                          _settingValue(entry.value),
+                        ),
+                      ),
+                  if (_settingsFor(set).isEmpty)
+                    const _DetailRow('Settings', 'No saved settings'),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Map<String, dynamic> _settingsFor(SessionCoachRunSet set) {
+    final matching = widget.protocols.where((protocol) =>
+        protocol.protocolId == set.protocolId &&
+        protocol.macAddress == set.macAddress);
+    final protocol = matching.firstOrNull ??
+        widget.protocols
+            .where((protocol) => protocol.protocolId == set.protocolId)
+            .firstOrNull ??
+        widget.protocols
+            .where((protocol) => protocol.macAddress == set.macAddress)
+            .firstOrNull;
+    return protocol?.advancedSettings ?? const {};
+  }
+
+  static String _settingLabel(String key) {
+    final words = key.replaceAllMapped(
+      RegExp(r'([a-z0-9])([A-Z])'),
+      (match) => '${match[1]} ${match[2]}',
+    );
+    return words.isEmpty
+        ? words
+        : '${words[0].toUpperCase()}${words.substring(1)}';
+  }
+
+  static String _settingValue(dynamic value) {
+    if (value is bool) return value ? 'On' : 'Off';
+    if (value is Map || value is List) return value.toString();
+    return value?.toString() ?? '--';
   }
 }
 

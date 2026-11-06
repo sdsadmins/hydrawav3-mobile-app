@@ -43,8 +43,8 @@ class ApiEndpoints {
   // Auth
 
   static const String refreshToken = '/auth/refreshToken';
-  static String get baseUrl =>
-      AppConfigStore.current.djangoBaseUrl.replaceFirst(RegExp(r'/api/v1$'), '');
+  static String get baseUrl => AppConfigStore.current.djangoBaseUrl
+      .replaceFirst(RegExp(r'/api/v1$'), '');
 
   // Practitioner onboarding (native "Create account" flow, parity with web).
   // The submit needs an admin token from this public proxy (the user isn't
@@ -301,6 +301,8 @@ class ApiEndpoints {
   static String intakeAll(String organizationId) =>
       '/intake/allByorg/$organizationId';
   static String intakeByClient(String clientId) => '/intake/client/$clientId';
+  static String recentSessionCoachByClient(String clientId) =>
+      '/intake/recent-session-coach/$clientId';
   static String intakeDashboard(String orgId) => '/intake/dashboard/$orgId';
 
   // Body Parts & Muscles

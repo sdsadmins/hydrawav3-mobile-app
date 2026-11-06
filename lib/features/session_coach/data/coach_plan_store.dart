@@ -4,32 +4,45 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/storage/preferences.dart';
+import '../domain/session_coach_models.dart';
 
 /// One set of a saved coach plan: the protocol, the unit it ran on and its
 /// start time (seconds from Start).
 class CoachPlanSet {
   final int index;
+  final String? setId;
+  final String? name;
   final String? protocolId;
+  final String? protocolName;
   final String? unitId;
   final int startAt;
 
   const CoachPlanSet({
     required this.index,
+    this.setId,
+    this.name,
     this.protocolId,
+    this.protocolName,
     this.unitId,
     this.startAt = 0,
   });
 
   Map<String, dynamic> toJson() => {
         'i': index,
+        if (setId != null) 'setId': setId,
+        if (name != null) 'name': name,
         if (protocolId != null) 'protocolId': protocolId,
+        if (protocolName != null) 'protocolName': protocolName,
         if (unitId != null) 'unitId': unitId,
         'at': startAt,
       };
 
   factory CoachPlanSet.fromJson(Map<String, dynamic> j) => CoachPlanSet(
         index: (j['i'] as num?)?.toInt() ?? 0,
+        setId: j['setId'] as String?,
+        name: j['name'] as String?,
         protocolId: j['protocolId'] as String?,
+        protocolName: j['protocolName'] as String?,
         unitId: j['unitId'] as String?,
         startAt: (j['at'] as num?)?.toInt() ?? 0,
       );
@@ -44,6 +57,7 @@ class CoachPlanRecord {
   final String goal;
   final List<CoachPlanSet> sets;
   final DateTime savedAt;
+  final SessionCoachRun? run;
 
   const CoachPlanRecord({
     required this.bodyPartId,
@@ -51,6 +65,7 @@ class CoachPlanRecord {
     required this.goal,
     required this.sets,
     required this.savedAt,
+    this.run,
   });
 
   Map<String, dynamic> toJson() => {
@@ -59,7 +74,34 @@ class CoachPlanRecord {
         'goal': goal,
         'sets': [for (final s in sets) s.toJson()],
         'savedAt': savedAt.toIso8601String(),
+        if (run != null) 'sessionCoach': run!.toJson(),
       };
+
+  static CoachPlanRecord? fromRun(
+    SessionCoachRun run, {
+    DateTime? savedAt,
+  }) {
+    if (!run.isValid) return null;
+    return CoachPlanRecord(
+      bodyPartId: run.bodyPartId,
+      bodyPartName: run.bodyPartName,
+      goal: run.supportType,
+      sets: [
+        for (final set in run.sets)
+          CoachPlanSet(
+            index: set.index,
+            setId: set.setId,
+            name: set.name,
+            protocolId: set.protocolId,
+            protocolName: set.protocolName,
+            unitId: set.macAddress,
+            startAt: set.startDelay ?? 0,
+          ),
+      ],
+      savedAt: savedAt ?? DateTime.now(),
+      run: run,
+    );
+  }
 
   static CoachPlanRecord? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -80,16 +122,18 @@ class CoachPlanRecord {
       ],
       savedAt: DateTime.tryParse(j['savedAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      run: j['sessionCoach'] is Map
+          ? SessionCoachRun.fromJson(
+              Map<String, dynamic>.from(j['sessionCoach'] as Map))
+          : null,
     );
   }
 }
 
-/// Saves each client's last coach plan, per organization.
-///
-/// ON THE PHONE FOR NOW (SharedPreferences): the plan exists only on the
-/// phone that made it. When the backend has an endpoint for client plans,
-/// swap this class's body for API calls — everything else reads and writes
-/// plans only through [load] and [save].
+/// Local cache of each client's most recently applied coach plan, per
+/// organization. Server intake history is the cross-device source of truth;
+/// this cache keeps Game Prep useful offline and before a coached session is
+/// finalized.
 class CoachPlanStore {
   static const _key = 'coach_client_plans_v1';
   final SharedPreferences _prefs;
@@ -124,6 +168,14 @@ class CoachPlanStore {
 final coachPlanStoreProvider = Provider<CoachPlanStore>(
     (ref) => CoachPlanStore(ref.read(sharedPreferencesProvider)));
 
+/// Session Coach details attached to the next session started from the device
+/// screen. Cleared after launch so later normal sessions aren't mislabeled.
+final sessionCoachRunProvider = StateProvider<SessionCoachRun?>((ref) => null);
+
 /// Set by Game Prep's START: the client whose last plan the coach should
 /// reopen at placement. The coach clears it once handled.
 final coachRestoreRequestProvider = StateProvider<String?>((ref) => null);
+
+/// Set when a saved history row asks Session Coach to reopen that exact plan.
+final coachHistoryRestoreRequestProvider =
+    StateProvider<CoachPlanRecord?>((ref) => null);

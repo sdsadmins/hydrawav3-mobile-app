@@ -82,6 +82,106 @@ String _hexColor(dynamic raw) {
   return RegExp(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$').hasMatch(v) ? v : '';
 }
 
+/// The Session Coach selection attached to an intake record.
+class SessionCoachRun {
+  final String sessionCoachId;
+  final String bodyPartId;
+  final String bodyPartName;
+  final String supportType;
+  final List<SessionCoachRunSet> sets;
+
+  const SessionCoachRun({
+    required this.sessionCoachId,
+    required this.bodyPartId,
+    required this.bodyPartName,
+    required this.supportType,
+    required this.sets,
+  });
+
+  bool get isValid =>
+      sessionCoachId.isNotEmpty &&
+      bodyPartId.isNotEmpty &&
+      bodyPartName.isNotEmpty &&
+      supportType.isNotEmpty &&
+      sets.isNotEmpty &&
+      sets.every((set) =>
+          set.setId.isNotEmpty &&
+          set.name.isNotEmpty &&
+          set.protocolId.isNotEmpty &&
+          set.protocolName.isNotEmpty &&
+          set.macAddress.isNotEmpty);
+
+  SessionCoachRun copyWith({List<SessionCoachRunSet>? sets}) => SessionCoachRun(
+        sessionCoachId: sessionCoachId,
+        bodyPartId: bodyPartId,
+        bodyPartName: bodyPartName,
+        supportType: supportType,
+        sets: sets ?? this.sets,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'sessionCoachId': sessionCoachId,
+        'bodyPartId': bodyPartId,
+        'bodyPartName': bodyPartName,
+        'supportType': supportType,
+        'sets': [for (final set in sets) set.toJson()],
+      };
+
+  factory SessionCoachRun.fromJson(Map<String, dynamic> json) =>
+      SessionCoachRun(
+        sessionCoachId: (json['sessionCoachId'] ?? '').toString(),
+        bodyPartId: (json['bodyPartId'] ?? '').toString(),
+        bodyPartName: (json['bodyPartName'] ?? '').toString(),
+        supportType: (json['supportType'] ?? '').toString(),
+        sets: (json['sets'] is List ? json['sets'] as List : const [])
+            .whereType<Map>()
+            .map((set) =>
+                SessionCoachRunSet.fromJson(Map<String, dynamic>.from(set)))
+            .toList(),
+      );
+}
+
+class SessionCoachRunSet {
+  final int index;
+  final String setId;
+  final String name;
+  final String protocolId;
+  final String protocolName;
+  final String macAddress;
+  final int? startDelay;
+
+  const SessionCoachRunSet({
+    required this.index,
+    required this.setId,
+    required this.name,
+    required this.protocolId,
+    required this.protocolName,
+    required this.macAddress,
+    this.startDelay,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'index': index,
+        'setId': setId,
+        'name': name,
+        'protocolId': protocolId,
+        'protocolName': protocolName,
+        'macAddress': macAddress,
+        if (startDelay != null) 'startDelay': startDelay,
+      };
+
+  factory SessionCoachRunSet.fromJson(Map<String, dynamic> json) =>
+      SessionCoachRunSet(
+        index: (json['index'] as num?)?.toInt() ?? 0,
+        setId: (json['setId'] ?? '').toString(),
+        name: (json['name'] ?? '').toString(),
+        protocolId: (json['protocolId'] ?? '').toString(),
+        protocolName: (json['protocolName'] ?? '').toString(),
+        macAddress: (json['macAddress'] ?? '').toString(),
+        startDelay: (json['startDelay'] as num?)?.toInt(),
+      );
+}
+
 class CoachSet {
   final String id;
   final String name;
@@ -115,10 +215,14 @@ class CoachSet {
           if (m.muscleName.trim().isNotEmpty) m.muscleName,
       ];
 
-  List<String> get sunMuscles =>
-      [for (final m in muscles) if (m.sun != null) m.muscleName];
-  List<String> get moonMuscles =>
-      [for (final m in muscles) if (m.moon != null) m.muscleName];
+  List<String> get sunMuscles => [
+        for (final m in muscles)
+          if (m.sun != null) m.muscleName
+      ];
+  List<String> get moonMuscles => [
+        for (final m in muscles)
+          if (m.moon != null) m.muscleName
+      ];
 }
 
 /// A support type's protocols: `protocols[type]` on the coach.
@@ -133,11 +237,12 @@ class CoachProtocolChoice {
 
   factory CoachProtocolChoice.fromJson(Map j) => CoachProtocolChoice(
         defaultProtocol: CoachProtocolRef.fromRef(j['defaultProtocolId']),
-        secondaryProtocols:
-            (j['secondaryProtocolIds'] is List ? j['secondaryProtocolIds'] as List : const [])
-                .map(CoachProtocolRef.fromRef)
-                .whereType<CoachProtocolRef>()
-                .toList(),
+        secondaryProtocols: (j['secondaryProtocolIds'] is List
+                ? j['secondaryProtocolIds'] as List
+                : const [])
+            .map(CoachProtocolRef.fromRef)
+            .whereType<CoachProtocolRef>()
+            .toList(),
       );
 
   /// Default first, then the secondaries (de-duplicated, server order).
@@ -192,9 +297,10 @@ class SessionCoach {
           if (e.value is Map)
             e.key.toString(): CoachProtocolChoice.fromJson(e.value as Map),
       },
-      supportTypes: (j['supportTypes'] is List ? j['supportTypes'] as List : const [])
-          .map((e) => e.toString())
-          .toList(),
+      supportTypes:
+          (j['supportTypes'] is List ? j['supportTypes'] as List : const [])
+              .map((e) => e.toString())
+              .toList(),
       sets: {
         for (final e in rawSets.entries)
           e.key.toString(): (e.value is List ? e.value as List : const [])

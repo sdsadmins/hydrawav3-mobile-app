@@ -88,12 +88,13 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
     final clientAsync =
         isAllMode ? null : ref.watch(clientHistoryProvider(_clientId!));
 
-    final rows = isAllMode ? pageState.items : (clientAsync!.valueOrNull ?? const []);
-    final rowsLoading = isAllMode ? pageState.isLoading : (clientAsync!.isLoading);
+    final rows =
+        isAllMode ? pageState.items : (clientAsync!.valueOrNull ?? const []);
+    final rowsLoading =
+        isAllMode ? pageState.isLoading : (clientAsync!.isLoading);
     final rowsError = isAllMode ? pageState.error : clientAsync!.error;
 
-    final filtered = [...rows]
-      ..sort((a, b) {
+    final filtered = [...rows]..sort((a, b) {
         final ad = a.createdAt;
         final bd = b.createdAt;
         if (ad == null && bd == null) return 0;
@@ -176,7 +177,9 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                   _Message(
                     "Couldn't load history.",
                     onRetry: () => isAllMode
-                        ? ref.read(historyPagingProvider.notifier).loadFirstPage()
+                        ? ref
+                            .read(historyPagingProvider.notifier)
+                            .loadFirstPage()
                         : ref.invalidate(clientHistoryProvider(_clientId!)),
                   )
                 else if (filtered.isEmpty)
@@ -208,9 +211,11 @@ class _HistoryListScreenState extends ConsumerState<HistoryListScreen> {
                       padding: const EdgeInsets.symmetric(vertical: HwSpace.s2),
                       child: Center(
                         child: TextButton(
-                          onPressed: () =>
-                              ref.read(historyPagingProvider.notifier).loadMore(),
-                          child: const Text('Couldn\'t load more, tap to retry'),
+                          onPressed: () => ref
+                              .read(historyPagingProvider.notifier)
+                              .loadMore(),
+                          child:
+                              const Text('Couldn\'t load more, tap to retry'),
                         ),
                       ),
                     ),
@@ -373,6 +378,7 @@ class _SessionRow extends StatelessWidget {
     final duration = _formatDuration(s.protocols.firstOrNull?.duration);
     final device = s.protocols.firstOrNull?.deviceName;
     final parts = <String>[];
+    if (s.isSessionCoach) parts.add('Session Coach');
     if (protocol.isNotEmpty) parts.add(protocol);
     if (time != null) parts.add(time);
     if (duration != null && duration.isNotEmpty) parts.add(duration);

@@ -1,4 +1,5 @@
 import '../../intake/domain/intake_models.dart';
+import '../../session_coach/domain/session_coach_models.dart';
 import 'pending_session_outcome_model.dart';
 import 'question_answer_model.dart';
 
@@ -17,6 +18,12 @@ class SessionRecord {
   /// Lets a single session store a different protocol per device. Falls back to
   /// [protocolName] / overall duration for any device missing from the map.
   final Map<String, ({String name, int durationSeconds})> protocolByDeviceId;
+
+  /// Metadata needed by `/intake` to preserve protocol/device setup for history.
+  final Map<String, Map<String, dynamic>> protocolMetadataByDeviceId;
+
+  /// Present only when this session was run from Session Coach.
+  final SessionCoachRun? sessionCoach;
 
   /// Per-device ordered protocol names (one for a normal device, the
   /// sub-protocol sequence for a Protocol Plus device). Used to attach
@@ -53,8 +60,10 @@ class SessionRecord {
     required this.protocolName,
     required this.deviceIds,
     this.protocolByDeviceId = const {},
+    this.protocolMetadataByDeviceId = const {},
     this.protocolNamesByDeviceId = const {},
     this.questionAnswersByProtocol = const {},
+    this.sessionCoach,
     required this.totalDurationSeconds,
     required this.elapsedSeconds,
     this.discomfortBefore,
@@ -76,6 +85,9 @@ class SessionRecord {
   /// (`whitelist + forbidNonWhitelisted`). `createdBy`/`updatedBy`/timestamps
   /// are derived server-side from the authenticated user, so we don't send them.
   Map<String, dynamic> toIntakeJson() {
+    if (sessionCoach != null && !sessionCoach!.isValid) {
+      throw StateError('The Session Coach intake details are incomplete.');
+    }
     final fallbackRaw =
         elapsedSeconds > 0 ? elapsedSeconds : totalDurationSeconds;
     final fallbackDuration = fallbackRaw > 0 ? fallbackRaw : 1;
@@ -83,14 +95,15 @@ class SessionRecord {
     final protocolEntries = <Map<String, dynamic>>[];
     for (final deviceId in deviceIds) {
       final info = protocolByDeviceId[deviceId];
+      final metadata = protocolMetadataByDeviceId[deviceId] ?? const {};
       final rawDuration = info?.durationSeconds ?? fallbackDuration;
 
       // Collect this device's per-protocol answers. A Plus device runs several
       // sub-protocols; flatten all their answers into this one entry, de-duped
       // by question text. `questionAnswers` is omitted entirely when empty
       // (web parity).
-      final names = protocolNamesByDeviceId[deviceId] ??
-          [info?.name ?? protocolName];
+      final names =
+          protocolNamesByDeviceId[deviceId] ?? [info?.name ?? protocolName];
       final seenQ = <String>{};
       final answers = <Map<String, dynamic>>[];
       for (final name in names) {
@@ -105,12 +118,20 @@ class SessionRecord {
         'protocol': info?.name ?? protocolName,
         'duration': rawDuration > 0 ? rawDuration : 1, // DTO requires @Min(1)
         'deviceName': deviceId,
+        if (metadata['protocolId'] != null)
+          'protocolId': metadata['protocolId'],
+        if (metadata['macAddress'] != null)
+          'macAddress': metadata['macAddress'],
+        if (metadata['advancedSettings'] is Map)
+          'advancedSettings': metadata['advancedSettings'],
         if (answers.isNotEmpty) 'questionAnswers': answers,
       });
     }
 
     final body = <String, dynamic>{
       'clientType': clientType,
+      'sessionType': sessionCoach == null ? 'session' : 'session_coach',
+      if (sessionCoach != null) 'sessionCoach': sessionCoach!.toJson(),
       if (clientId != null && clientId!.isNotEmpty) 'clientId': clientId,
       'protocols': protocolEntries,
     };
@@ -169,7 +190,9 @@ class SessionRecord {
     // discomfortAfter` (web parity — pain maps per body area, not one value).
     GuidedAssessmentData? intake = pending.intake;
     final byArea = outcomes?.discomfortAfterByArea ?? const {};
-    if (intake != null && byArea.isNotEmpty && intake.discomfortAreas.isNotEmpty) {
+    if (intake != null &&
+        byArea.isNotEmpty &&
+        intake.discomfortAreas.isNotEmpty) {
       final areas = [
         for (var i = 0; i < intake.discomfortAreas.length; i++)
           byArea.containsKey(i)
@@ -185,8 +208,10 @@ class SessionRecord {
       protocolName: pending.protocolName,
       deviceIds: pending.deviceIds,
       protocolByDeviceId: pending.protocolByDeviceId,
+      protocolMetadataByDeviceId: pending.protocolMetadataByDeviceId,
       protocolNamesByDeviceId: pending.protocolNamesByDeviceId,
       questionAnswersByProtocol: outcomes?.answersByProtocol ?? const {},
+      sessionCoach: pending.sessionCoach,
       totalDurationSeconds: pending.totalDurationSeconds,
       elapsedSeconds: pending.elapsedSeconds,
       discomfortBefore: pending.discomfortBefore,

@@ -23,6 +23,7 @@ import '../../devices/presentation/providers/wifi_devices_provider.dart';
 import '../../protocols/domain/protocol_model.dart';
 import '../../protocols/domain/protocol_plus_model.dart';
 import '../../protocols/presentation/providers/protocol_provider.dart';
+import '../../session_coach/domain/session_coach_models.dart';
 import '../domain/session_model.dart';
 import '../presentation/providers/active_sessions_provider.dart';
 import '../presentation/providers/live_sessions_provider.dart';
@@ -204,7 +205,8 @@ class ProtocolPlusController {
   /// true`, carrying the server's confirmed advancedSettings) — null for a
   /// normal switch, matching [SessionEngine.applyProtocolPlusSwitch]'s
   /// `advancedOverride`.
-  final Map<String, ({Protocol protocol, int index, AdvancedSettings? advanced})>
+  final Map<String,
+          ({Protocol protocol, int index, AdvancedSettings? advanced})>
       _pendingSwitches = {};
 
   /// Devices whose OWN server session has already been stopped because the user
@@ -1916,11 +1918,11 @@ class ProtocolPlusController {
     unawaited(
       engine
           .applyProtocolPlusSwitch(
-            mac,
-            pending.protocol,
-            pending.index,
-            advancedOverride: pending.advanced,
-          )
+        mac,
+        pending.protocol,
+        pending.index,
+        advancedOverride: pending.advanced,
+      )
           .then((ok) {
         // Re-queue on failure so the next reconciler tick retries — keep trying
         // until the device actually accepts the switch.
@@ -1998,14 +2000,27 @@ AdvancedSettings _advancedFromProtocol(Protocol p) => AdvancedSettings(
 /// starts locally, the rest arrive via the `/sessions` socket).
 class SessionDeviceSelection {
   final String deviceId;
+  final String? macAddress;
   final Protocol protocol;
   final AdvancedSettings advanced;
 
   const SessionDeviceSelection({
     required this.deviceId,
+    this.macAddress,
     required this.protocol,
     required this.advanced,
   });
+}
+
+String _macAddressForSelection(
+  String deviceId,
+  List<SessionDeviceSelection> selections,
+) {
+  final macAddress = selections
+      .firstWhere((selection) => selection.deviceId == deviceId)
+      .macAddress
+      ?.trim();
+  return macAddress == null || macAddress.isEmpty ? deviceId : macAddress;
 }
 
 /// Single-device Protocol Plus entry point (auto-detect from the protocol list).
@@ -2048,6 +2063,7 @@ Future<void> launchSession(
   String? delayedDeviceId,
   String? clientId,
   GuidedAssessmentData? intake,
+  SessionCoachRun? sessionCoach,
 }) async {
   if (selections.isEmpty) return;
   final controller = ref.read(protocolPlusControllerProvider);
@@ -2157,7 +2173,23 @@ Future<void> launchSession(
     final engine = ref.read(sessionEngineFamilyProvider(sessionId).notifier);
     // Thread the Client/Guest + Guided Assessment context so the intake POSTed
     // on session capture carries clientType/clientId and the guided fields.
-    engine.setClientContext(clientId: clientId, intake: intake);
+    final protocolMetadataByDeviceId = <String, Map<String, dynamic>>{
+      for (final id in deviceIds)
+        id: {
+          'protocolId': protocolByDevice[id]!.id,
+          'macAddress': _macAddressForSelection(id, selections),
+          'advancedSettings': advancedByDevice[id]!.toJson(),
+        },
+    };
+    if (sessionCoach != null && !sessionCoach.isValid) {
+      throw StateError('The Session Coach plan is incomplete.');
+    }
+    engine.setClientContext(
+      clientId: clientId,
+      intake: intake,
+      sessionCoach: sessionCoach,
+      protocolMetadataByDeviceId: protocolMetadataByDeviceId,
+    );
     final commonProtocol = protocolByDevice[deviceIds.first]!;
     final commonAdvanced = advancedByDevice[deviceIds.first]!;
     final effectiveDelayedDeviceId =
@@ -2178,41 +2210,38 @@ Future<void> launchSession(
     // guarantee "every session ends up in history, no matter how or where
     // it ends": it reads ActiveSession.totalDurationSeconds, which was
     // previously never set anywhere and always silently defaulted to 0.
-    final maxTotalDurationSeconds = deviceIds
-        .map((id) {
-          // Protocol Plus: protocolByDevice[id] is only protocol[0] of the
-          // sequence (see above), so computing the firmware duration off it
-          // would give protocol[0]'s own runtime, not the whole sequence's.
-          // durationsByDevice[id] already holds the correct whole-sequence
-          // total (detail.totalDuration from the Plus detail API) — using
-          // protocol[0]'s duration here previously made ActiveSession.
-          // totalDurationSeconds too short, which made SessionOutcomeGate's
-          // watchdog force the post-session screen the moment sub-protocol[0]
-          // finished, even though the sequence was still meant to continue.
-          if (plusDeviceIds.contains(id)) {
-            final plusTotal = durationsByDevice[id];
-            if (plusTotal != null && plusTotal > 0) {
-              // A Plus Start Delay lengthens the whole run by that much (it
-              // sits before protocol[0]) — the backend adds it to when the
-              // protocol[1] switch fires, so the sequence total the
-              // watchdog checks must include it too.
-              final plusStartDelay = advancedByDevice[id]?.startDelay ?? 0;
-              return plusTotal + plusStartDelay;
-            }
-          }
-          final proto = protocolByDevice[id];
-          final settings = advancedByDevice[id];
-          if (proto == null || settings == null) return 0;
-          final applyStartDelay = settings.startDelay > 0 &&
-              (effectiveDelayedDeviceId == null ||
-                  effectiveDelayedDeviceId == id);
-          return SessionEngine.computeEffectiveTotalDurationSeconds(
-            proto,
-            settings,
-            applyStartDelay: applyStartDelay,
-          );
-        })
-        .fold<int>(0, (a, b) => a > b ? a : b);
+    final maxTotalDurationSeconds = deviceIds.map((id) {
+      // Protocol Plus: protocolByDevice[id] is only protocol[0] of the
+      // sequence (see above), so computing the firmware duration off it
+      // would give protocol[0]'s own runtime, not the whole sequence's.
+      // durationsByDevice[id] already holds the correct whole-sequence
+      // total (detail.totalDuration from the Plus detail API) — using
+      // protocol[0]'s duration here previously made ActiveSession.
+      // totalDurationSeconds too short, which made SessionOutcomeGate's
+      // watchdog force the post-session screen the moment sub-protocol[0]
+      // finished, even though the sequence was still meant to continue.
+      if (plusDeviceIds.contains(id)) {
+        final plusTotal = durationsByDevice[id];
+        if (plusTotal != null && plusTotal > 0) {
+          // A Plus Start Delay lengthens the whole run by that much (it
+          // sits before protocol[0]) — the backend adds it to when the
+          // protocol[1] switch fires, so the sequence total the
+          // watchdog checks must include it too.
+          final plusStartDelay = advancedByDevice[id]?.startDelay ?? 0;
+          return plusTotal + plusStartDelay;
+        }
+      }
+      final proto = protocolByDevice[id];
+      final settings = advancedByDevice[id];
+      if (proto == null || settings == null) return 0;
+      final applyStartDelay = settings.startDelay > 0 &&
+          (effectiveDelayedDeviceId == null || effectiveDelayedDeviceId == id);
+      return SessionEngine.computeEffectiveTotalDurationSeconds(
+        proto,
+        settings,
+        applyStartDelay: applyStartDelay,
+      );
+    }).fold<int>(0, (a, b) => a > b ? a : b);
     await ref.read(activeSessionsProvider.notifier).createSession(
           sessionId: sessionId,
           protocolId: commonProtocol.id,
@@ -2289,38 +2318,36 @@ Future<void> launchSession(
     // [normalServerSessionIdProvider] so the live session screen can drive
     // pause/resume/stop (and so the terminal stop reliably deducts tokens).
     if (normalSelections.isNotEmpty) {
-      final specs = normalSelections
-          .map((s) {
-            // Same delay-gating rule as SessionEngine's own: a start delay
-            // only applies to every device when no specific device was
-            // singled out, or to just that one device when it was.
-            final applyStartDelay = s.advanced.startDelay > 0 &&
-                (effectiveDelayedDeviceId == null ||
-                    effectiveDelayedDeviceId == s.deviceId);
-            return NormalDeviceSpec(
-              localMac: s.deviceId,
-              protocolId: s.protocol.id,
-              protocolName: s.protocol.templateName,
-              advancedSettings: s.advanced.toJson(),
-              // The delay/cycle1/cycle5-ADJUSTED duration — not the
-              // protocol's plain totalDurationSeconds — so the backend
-              // session record (the live screen's timer source of truth)
-              // matches what was actually sent to the device over BLE.
-              totalDurationSeconds: SessionEngine.computeEffectiveTotalDurationSeconds(
-                s.protocol,
-                s.advanced,
-                applyStartDelay: applyStartDelay,
-              ),
-            );
-          })
-          .toList();
-      final backendId = await ref
-          .read(sessionSyncServiceProvider)
-          .startServerSession(
-            devices: specs,
-            transport: transport,
-            clientId: clientId,
-          );
+      final specs = normalSelections.map((s) {
+        // Same delay-gating rule as SessionEngine's own: a start delay
+        // only applies to every device when no specific device was
+        // singled out, or to just that one device when it was.
+        final applyStartDelay = s.advanced.startDelay > 0 &&
+            (effectiveDelayedDeviceId == null ||
+                effectiveDelayedDeviceId == s.deviceId);
+        return NormalDeviceSpec(
+          localMac: s.deviceId,
+          protocolId: s.protocol.id,
+          protocolName: s.protocol.templateName,
+          advancedSettings: s.advanced.toJson(),
+          // The delay/cycle1/cycle5-ADJUSTED duration — not the
+          // protocol's plain totalDurationSeconds — so the backend
+          // session record (the live screen's timer source of truth)
+          // matches what was actually sent to the device over BLE.
+          totalDurationSeconds:
+              SessionEngine.computeEffectiveTotalDurationSeconds(
+            s.protocol,
+            s.advanced,
+            applyStartDelay: applyStartDelay,
+          ),
+        );
+      }).toList();
+      final backendId =
+          await ref.read(sessionSyncServiceProvider).startServerSession(
+                devices: specs,
+                transport: transport,
+                clientId: clientId,
+              );
       if (backendId != null) {
         ref.read(normalServerSessionIdProvider(sid).notifier).state = backendId;
         ref.read(liveSessionsProvider.notifier).markOwned(backendId);

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hydrawav3/features/protocols/domain/protocol_model.dart';
 import 'package:hydrawav3/features/protocols/presentation/providers/protocol_provider.dart';
 import 'package:hydrawav3/features/session_coach/data/session_coach_repository.dart';
+import 'package:hydrawav3/features/session_coach/data/coach_plan_store.dart';
 import 'package:hydrawav3/features/session_coach/domain/session_coach_models.dart';
 import 'package:hydrawav3/features/session_coach/presentation/widgets/session_coach_card.dart';
 
@@ -44,7 +45,11 @@ final _knee = SessionCoach.fromJson({
         'id': 's2',
         'name': 'Above the knee',
         'muscles': [
-          {'muscleId': 'm2', 'muscleName': 'Vastus medialis', 'sun': _marker('c', 'sun')},
+          {
+            'muscleId': 'm2',
+            'muscleName': 'Vastus medialis',
+            'sun': _marker('c', 'sun')
+          },
         ],
       },
     ],
@@ -82,8 +87,18 @@ void main() {
             padding: const EdgeInsets.all(16),
             child: SessionCoachCard(
               units: const [
-                CoachUnit(id: 'u1', name: 'Unit 1', canLocate: true),
-                CoachUnit(id: 'u2', name: 'Unit 2', canLocate: true),
+                CoachUnit(
+                  id: 'u1',
+                  name: 'Unit 1',
+                  macAddress: 'AA:BB:CC',
+                  canLocate: true,
+                ),
+                CoachUnit(
+                  id: 'u2',
+                  name: 'Unit 2',
+                  macAddress: 'DD:EE:FF',
+                  canLocate: true,
+                ),
               ],
               onApply: (d, p) async {
                 applied.add((d, p));
@@ -144,6 +159,12 @@ void main() {
 
       await tap(tester, find.text('Use this set  →'));
       expect(applied, [('u1', 'p1')]);
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(SessionCoachCard)));
+      expect(
+        container.read(sessionCoachRunProvider)?.sets.single.macAddress,
+        'AA:BB:CC',
+      );
       expect(find.text('1 of 2 planned'), findsOneWidget);
       // moves on to set 2, defaulting to the next free unit
       // set 1 is assigned
@@ -196,8 +217,7 @@ void main() {
     expect(find.text('Reset delays'), findsNothing);
   });
 
-  testWidgets('holding + keeps stepping, and it stops at 60 s',
-      (tester) async {
+  testWidgets('holding + keeps stepping, and it stops at 60 s', (tester) async {
     await toSets(tester);
     await tester.ensureVisible(plus());
     final g = await tester.startGesture(tester.getCenter(plus()));

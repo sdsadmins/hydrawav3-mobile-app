@@ -20,6 +20,7 @@ import '../../home/presentation/providers/hub_prefs_provider.dart';
 import '../../advanced_settings/domain/advanced_settings_model.dart';
 import '../../intake/domain/intake_models.dart';
 import '../../protocols/domain/protocol_model.dart';
+import '../../session_coach/domain/session_coach_models.dart';
 import 'background_session_runtime.dart';
 import 'session_sync_service.dart';
 import '../data/session_repository.dart';
@@ -435,13 +436,22 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
   /// [setClientContext]. Threads into the `POST /intake` body (and AI report).
   String? _clientId;
   GuidedAssessmentData? _intake;
+  SessionCoachRun? _sessionCoach;
+  Map<String, Map<String, dynamic>> _protocolMetadataByDeviceId = const {};
 
   /// Set the client/guest + guided-assessment context for this session. Called
   /// before [start] from the launcher; defaults keep behaviour unchanged
   /// (guest, no intake) when not provided.
-  void setClientContext({String? clientId, GuidedAssessmentData? intake}) {
+  void setClientContext({
+    String? clientId,
+    GuidedAssessmentData? intake,
+    SessionCoachRun? sessionCoach,
+    Map<String, Map<String, dynamic>> protocolMetadataByDeviceId = const {},
+  }) {
     _clientId = clientId;
     _intake = intake;
+    _sessionCoach = sessionCoach;
+    _protocolMetadataByDeviceId = protocolMetadataByDeviceId;
     _clientContextKnown = true;
   }
 
@@ -567,11 +577,13 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocolName: state.protocol!.templateName,
       deviceIds: List<String>.from(state.deviceIds),
       protocolByDeviceId: protocolByDeviceId,
+      protocolMetadataByDeviceId: _protocolMetadataByDeviceId,
       protocolNamesByDeviceId: protocolNamesByDeviceId,
       questionsByProtocolName: Map<String, List<ProtocolQuestion>>.from(
           state.questionsByProtocolName),
       clientType: resolvedClientType,
       clientId: _clientId,
+      sessionCoach: _sessionCoach,
       discomfortBefore: null,
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
       elapsedSeconds: _effectiveElapsed.inSeconds,
@@ -3734,6 +3746,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       protocolName: state.protocol!.templateName,
       deviceIds: state.deviceIds,
       protocolByDeviceId: protocolByDeviceId,
+      protocolMetadataByDeviceId: _protocolMetadataByDeviceId,
       totalDurationSeconds: state.timer.totalDuration.inSeconds,
       elapsedSeconds: _effectiveElapsed.inSeconds,
       discomfortBefore: discomfortBefore,
@@ -3742,6 +3755,7 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
       clientType: resolvedClientType,
       clientId: resolvedClientId,
       intake: resolvedIntake,
+      sessionCoach: _sessionCoach,
       createdBy: createdBy,
       updatedBy: updatedBy,
       createdAt: recordedAt,
@@ -3763,6 +3777,11 @@ class SessionEngine extends StateNotifier<SessionEngineState> {
     _deviceClockOffset.clear();
     _startInProgress = false;
     _historyCaptured = false;
+    _clientId = null;
+    _intake = null;
+    _sessionCoach = null;
+    _protocolMetadataByDeviceId = const {};
+    _clientContextKnown = false;
     // A reused engine gets a fresh backend session, so it must be allowed to end
     // that one too.
     _backendSessionEnded = false;

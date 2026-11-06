@@ -760,12 +760,13 @@ class _PadText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final color = sun ? const Color(0xFFFBBF24) : const Color(0xFF818CF8);
     return Padding(
       padding: const EdgeInsets.only(top: 2),
       child: Row(
         children: [
           Icon(sun ? Icons.wb_twilight_rounded : Icons.nightlight_round,
-              size: 15, color: const Color(0xFFD9D2CB)),
+              size: 15, color: color),
           const SizedBox(width: 6),
           Expanded(
             child: Text(text,

@@ -31,6 +31,7 @@ import '../widgets/continue_last_protocol.dart';
 import '../widgets/device_center_widgets.dart'
     show SignalBars, signalOf, unitRssiProvider;
 import '../../../session_coach/presentation/widgets/session_coach_card.dart';
+import '../../../session_coach/data/coach_plan_store.dart';
 import '../widgets/session_plan_widgets.dart';
 import '../../../musics/services/session_music_controller.dart';
 import '../widgets/session_music_card.dart' show showSessionMusicPicker;
@@ -670,6 +671,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
   Future<void> _startSession({
     required List<String> runIds,
     required SessionTransport transport,
+    required Map<String, String> macAddressByDeviceId,
   }) async {
     // In Client mode a client must be selected so the intake syncs with a
     // clientId (the backend requires it when clientType != 'guest').
@@ -762,6 +764,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         for (final id in runnableIds)
           SessionDeviceSelection(
             deviceId: id,
+            macAddress: macAddressByDeviceId[id],
             protocol: fullProtocolById[_protocolIdByDeviceId[id]!]!,
             advanced: _settingsByDeviceId[id]!,
           ),
@@ -776,6 +779,16 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
           (clientMode == ClientMode.client || sessionType == SessionType.guided)
               ? ref.read(guidedAssessmentProvider)
               : null;
+      final coachRun = ref.read(sessionCoachRunProvider);
+      final sessionCoach = coachRun?.copyWith(
+        sets: coachRun.sets
+            .where((set) => selections.any((selection) =>
+                (selection.macAddress ?? selection.deviceId) ==
+                    set.macAddress &&
+                selection.protocol.id == set.protocolId))
+            .toList(),
+      );
+      if (!mounted) return;
       await launchSession(
         ref,
         context,
@@ -784,7 +797,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
         delayedDeviceId: effectiveDelayedDeviceId,
         clientId: clientMode == ClientMode.client ? selectedClient?.id : null,
         intake: intake,
+        sessionCoach:
+            sessionCoach != null && sessionCoach.isValid ? sessionCoach : null,
       );
+      if (!mounted) return;
+      if (coachRun != null) {
+        ref.read(sessionCoachRunProvider.notifier).state = null;
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -807,6 +826,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required List<String> runIds,
     required SessionTransport transport,
     required bool canStart,
+    required Map<String, String> macAddressByDeviceId,
   }) {
     final enabled = !_starting && canStart;
 
@@ -830,7 +850,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
           height: 50,
           child: ElevatedButton.icon(
             onPressed: enabled
-                ? () => _startSession(runIds: runIds, transport: transport)
+                ? () => _startSession(
+                      runIds: runIds,
+                      transport: transport,
+                      macAddressByDeviceId: macAddressByDeviceId,
+                    )
                 : null,
             icon: Icon(
               _starting
@@ -891,8 +915,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final connector = ref.read(bleConnectorProvider);
     final keys = <String, String>{};
     for (final id in runIds) {
-      final holder =
-          leaseHolderOf(leases, [id, connector.getHardwareMac(id)]);
+      final holder = leaseHolderOf(leases, [id, connector.getHardwareMac(id)]);
       if (holder == null) continue;
       if (selected != null && selected.id == holder.id) {
         final key = (holder.leaseId ?? '').trim();
@@ -944,6 +967,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     required List<String> runIds,
     required SessionTransport transport,
     required bool canStart,
+    required Map<String, String> macAddressByDeviceId,
     List<String> connectedIds = const [],
     Map<String, String> labels = const {},
     Set<String> inUseIds = const {},
@@ -1001,7 +1025,11 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                       _showOnLease(onLease);
                       return;
                     }
-                    _startSession(runIds: runIds, transport: transport);
+                    _startSession(
+                      runIds: runIds,
+                      transport: transport,
+                      macAddressByDeviceId: macAddressByDeviceId,
+                    );
                     return;
                   }
                   final reason = _startBlockedReason(runIds, canStart);
@@ -1574,6 +1602,16 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final currentSessionDeviceIds = target.transport == SessionTransport.ble
         ? bleConnectedDevices.map((device) => device.id).toList()
         : selectedWifiDevices.map((device) => device.macAddress).toList();
+    final macAddressByDeviceId = <String, String>{
+      if (target.transport == SessionTransport.ble)
+        for (final device in bleConnectedDevices)
+          device.id: device.macAddress.trim().isNotEmpty
+              ? device.macAddress
+              : device.id,
+      if (target.transport == SessionTransport.wifi)
+        for (final device in selectedWifiDevices)
+          device.macAddress: device.macAddress,
+    };
     final currentLabelsById = <String, String>{
       if (target.transport == SessionTransport.ble)
         for (final device in bleConnectedDevices) device.id: device.name,
@@ -1877,6 +1915,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         CoachUnit(
                                           id: id,
                                           name: currentLabelsById[id] ?? 'Unit',
+                                          macAddress: macAddressByDeviceId[id],
                                           canLocate: target.transport ==
                                               SessionTransport.ble,
                                         ),
@@ -2427,6 +2466,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                     runIds: runIds,
                                     transport: target.transport,
                                     canStart: canStart,
+                                    macAddressByDeviceId: macAddressByDeviceId,
                                   ),
                                 ],
                               ),
@@ -2646,6 +2686,8 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                       runIds: runIds,
                                       transport: target.transport,
                                       canStart: canStart,
+                                      macAddressByDeviceId:
+                                          macAddressByDeviceId,
                                     ),
                                     const SizedBox(height: 16),
                                   ],
@@ -2922,6 +2964,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                   runIds: runIds,
                   transport: target.transport,
                   canStart: canStart,
+                  macAddressByDeviceId: macAddressByDeviceId,
                   connectedIds: currentSessionDeviceIds,
                   labels: currentLabelsById,
                   inUseIds: inUseDeviceIds,

@@ -1,5 +1,6 @@
 import '../../intake/domain/intake_models.dart';
 import '../../protocols/domain/protocol_model.dart';
+import '../../session_coach/domain/session_coach_models.dart';
 import 'question_answer_model.dart';
 
 /// A self-contained snapshot of a completed session, captured the moment it
@@ -20,6 +21,9 @@ class PendingSessionOutcome {
   /// sub-protocol names live in [protocolNamesByDeviceId].
   final Map<String, ({String name, int durationSeconds})> protocolByDeviceId;
 
+  /// Backend protocol ids, MAC addresses and settings for each device.
+  final Map<String, Map<String, dynamic>> protocolMetadataByDeviceId;
+
   /// deviceId -> the ordered protocol names run on it (one for a normal
   /// device, the sub-protocol sequence for a Plus device). Drives which
   /// protocol sections show and how answers attach.
@@ -30,6 +34,7 @@ class PendingSessionOutcome {
 
   final String clientType;
   final String? clientId;
+  final SessionCoachRun? sessionCoach;
   final int? discomfortBefore;
   final int totalDurationSeconds;
   final int elapsedSeconds;
@@ -59,10 +64,12 @@ class PendingSessionOutcome {
     required this.protocolName,
     required this.deviceIds,
     this.protocolByDeviceId = const {},
+    this.protocolMetadataByDeviceId = const {},
     this.protocolNamesByDeviceId = const {},
     this.questionsByProtocolName = const {},
     this.clientType = 'guest',
     this.clientId,
+    this.sessionCoach,
     this.discomfortBefore,
     this.totalDurationSeconds = 0,
     this.elapsedSeconds = 0,
@@ -83,10 +90,12 @@ class PendingSessionOutcome {
       protocolName: protocolName,
       deviceIds: deviceIds,
       protocolByDeviceId: protocolByDeviceId,
+      protocolMetadataByDeviceId: protocolMetadataByDeviceId,
       protocolNamesByDeviceId: protocolNamesByDeviceId,
       questionsByProtocolName: questionsByProtocolName,
       clientType: clientType,
       clientId: clientId,
+      sessionCoach: sessionCoach,
       discomfortBefore: discomfortBefore,
       totalDurationSeconds: totalDurationSeconds,
       elapsedSeconds: elapsedSeconds,
@@ -136,12 +145,14 @@ class PendingSessionOutcome {
           (k, v) =>
               MapEntry(k, {'name': v.name, 'duration': v.durationSeconds}),
         ),
+        'protocolMetadataByDeviceId': protocolMetadataByDeviceId,
         'protocolNamesByDeviceId': protocolNamesByDeviceId,
         'questionsByProtocolName': questionsByProtocolName.map(
           (k, v) => MapEntry(k, v.map((q) => q.toJson()).toList()),
         ),
         'clientType': clientType,
         if (clientId != null) 'clientId': clientId,
+        if (sessionCoach != null) 'sessionCoach': sessionCoach!.toJson(),
         if (discomfortBefore != null) 'discomfortBefore': discomfortBefore,
         'totalDurationSeconds': totalDurationSeconds,
         'elapsedSeconds': elapsedSeconds,
@@ -195,6 +206,16 @@ class PendingSessionOutcome {
       });
     }
 
+    final metadataByDevice = <String, Map<String, dynamic>>{};
+    final rawMetadataByDevice = json['protocolMetadataByDeviceId'];
+    if (rawMetadataByDevice is Map) {
+      rawMetadataByDevice.forEach((k, v) {
+        if (v is Map) {
+          metadataByDevice[k.toString()] = Map<String, dynamic>.from(v);
+        }
+      });
+    }
+
     return PendingSessionOutcome(
       sessionId: (json['sessionId'] ?? '').toString(),
       protocolId: (json['protocolId'] ?? '').toString(),
@@ -203,10 +224,15 @@ class PendingSessionOutcome {
           .map((e) => e.toString())
           .toList(),
       protocolByDeviceId: byDevice,
+      protocolMetadataByDeviceId: metadataByDevice,
       protocolNamesByDeviceId: parseNames(json['protocolNamesByDeviceId']),
       questionsByProtocolName: parseQuestions(json['questionsByProtocolName']),
       clientType: (json['clientType'] ?? 'guest').toString(),
       clientId: json['clientId']?.toString(),
+      sessionCoach: json['sessionCoach'] is Map
+          ? SessionCoachRun.fromJson(
+              Map<String, dynamic>.from(json['sessionCoach'] as Map))
+          : null,
       discomfortBefore: (json['discomfortBefore'] as num?)?.toInt(),
       totalDurationSeconds:
           (json['totalDurationSeconds'] as num?)?.toInt() ?? 0,

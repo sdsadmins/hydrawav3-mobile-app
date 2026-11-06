@@ -10,6 +10,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/storage/local_db.dart';
 import '../../../core/utils/logger.dart';
 import '../../intake/domain/intake_models.dart';
+import '../../session_coach/domain/session_coach_models.dart';
 import '../domain/session_model.dart';
 
 final sessionRepositoryProvider = Provider<SessionRepository>((ref) {
@@ -46,7 +47,15 @@ class SessionRepository {
 
   bool get _isOnline => _ref.read(isOnlineProvider);
 
-  LocalSessionsCompanion _companion(SessionRecord record, {required bool synced}) {
+  LocalSessionsCompanion _companion(SessionRecord record,
+      {required bool synced}) {
+    final intakeData = <String, dynamic>{
+      if (record.intake != null) 'intake': record.intake!.toJson(),
+      if (record.protocolMetadataByDeviceId.isNotEmpty)
+        'protocolMetadataByDeviceId': record.protocolMetadataByDeviceId,
+      if (record.sessionCoach != null)
+        'sessionCoach': record.sessionCoach!.toJson(),
+    };
     return LocalSessionsCompanion(
       id: Value(record.id),
       protocolId: Value(record.protocolId),
@@ -59,9 +68,7 @@ class SessionRepository {
       notes: Value(record.notes),
       clientType: Value(record.clientType),
       clientId: Value(record.clientId),
-      intakeJson: Value(
-        record.intake == null ? null : jsonEncode(record.intake!.toJson()),
-      ),
+      intakeJson: Value(intakeData.isEmpty ? null : jsonEncode(intakeData)),
       synced: Value(synced),
       completedAt: Value(record.completedAt),
     );
@@ -122,12 +129,34 @@ class SessionRepository {
     for (final session in unsynced) {
       try {
         GuidedAssessmentData? intake;
+        var protocolMetadataByDeviceId = <String, Map<String, dynamic>>{};
+        SessionCoachRun? sessionCoach;
         if (session.intakeJson != null && session.intakeJson!.isNotEmpty) {
-          try {
-            intake = GuidedAssessmentData.fromJson(
-                jsonDecode(session.intakeJson!) as Map<String, dynamic>);
-          } catch (_) {
-            intake = null;
+          final decoded =
+              jsonDecode(session.intakeJson!) as Map<String, dynamic>;
+          if (decoded.containsKey('intake') ||
+              decoded.containsKey('sessionCoach') ||
+              decoded.containsKey('protocolMetadataByDeviceId')) {
+            if (decoded['intake'] is Map) {
+              intake = GuidedAssessmentData.fromJson(
+                  Map<String, dynamic>.from(decoded['intake'] as Map));
+            }
+            final rawMetadata = decoded['protocolMetadataByDeviceId'];
+            if (rawMetadata is Map) {
+              for (final entry in rawMetadata.entries) {
+                if (entry.value is Map) {
+                  protocolMetadataByDeviceId[entry.key.toString()] =
+                      Map<String, dynamic>.from(entry.value as Map);
+                }
+              }
+            }
+            if (decoded['sessionCoach'] is Map) {
+              sessionCoach = SessionCoachRun.fromJson(
+                  Map<String, dynamic>.from(decoded['sessionCoach'] as Map));
+            }
+          } else {
+            // Older app versions stored the guided assessment directly.
+            intake = GuidedAssessmentData.fromJson(decoded);
           }
         }
         final record = SessionRecord(
@@ -144,6 +173,8 @@ class SessionRepository {
           clientType: session.clientType,
           clientId: session.clientId,
           intake: intake,
+          protocolMetadataByDeviceId: protocolMetadataByDeviceId,
+          sessionCoach: sessionCoach,
           createdAt: session.completedAt,
           updatedAt: session.completedAt,
           completedAt: session.completedAt,

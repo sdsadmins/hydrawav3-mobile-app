@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -71,6 +72,15 @@ class _Auth extends StateNotifier<AuthState> implements AuthNotifier {
 const _jalen = Client(id: 'jalen', clientName: 'Jalen Brooks');
 const _marcus = Client(id: 'marcus', clientName: 'Marcus Reed');
 
+class _FakeSessionCoachRepository extends SessionCoachRepository {
+  final SessionCoachRun? run;
+
+  _FakeSessionCoachRepository({this.run}) : super(Dio());
+
+  @override
+  Future<SessionCoachRun?> recentRun(String clientId) async => run;
+}
+
 /// The Session Coach keeps each client's own plan (on this phone): it is
 /// saved when a set goes on a unit, comes back for the same client, body
 /// part and goal, and Game Prep's START reopens it at placement.
@@ -83,6 +93,7 @@ void main() {
     Client? client = _jalen,
     ClientMode mode = ClientMode.client,
     String? restore,
+    SessionCoachRun? serverRun,
     Map<String, Object> prefs = const {},
   }) async {
     tester.view.physicalSize = const Size(390, 844) * 2;
@@ -94,6 +105,8 @@ void main() {
     container = ProviderContainer(overrides: [
       sharedPreferencesProvider.overrideWithValue(sp),
       authStateProvider.overrideWith((ref) => _Auth()),
+      sessionCoachRepositoryProvider
+          .overrideWithValue(_FakeSessionCoachRepository(run: serverRun)),
       coachBodyPartsProvider.overrideWith(
           (ref) async => const [CoachBodyPart(id: 'b1', name: 'Knee')]),
       sessionCoachesByBodyPartProvider.overrideWith((ref, id) async => [_knee]),
@@ -168,10 +181,13 @@ void main() {
     expect(plan, isNotNull);
     expect(plan!.bodyPartName, 'Knee');
     expect(plan.goal, 'Support recovery');
-    expect([for (final s in plan.sets) (s.unitId, s.protocolId, s.startAt)], [
+    expect([
+      for (final s in plan.sets) (s.unitId, s.protocolId, s.startAt)
+    ], [
       ('u1', 'p1', 0),
       ('u2', 'p1', 5),
     ]);
+    expect(container.read(sessionCoachRunProvider)?.sets, hasLength(2));
     expect(saved('marcus'), isNull);
   });
 
@@ -179,6 +195,7 @@ void main() {
     await pump(tester, client: null, mode: ClientMode.guest);
     await planJalen(tester);
     expect(saved('jalen'), isNull);
+    expect(container.read(sessionCoachRunProvider)?.isValid, isTrue);
   });
 
   testWidgets('the same client, body part and goal brings their delays back',
@@ -186,8 +203,8 @@ void main() {
     await pump(tester);
     await planJalen(tester);
     final stored = Map<String, Object>.from({
-      'coach_client_plans_v1':
-          (await SharedPreferences.getInstance()).getString('coach_client_plans_v1')!,
+      'coach_client_plans_v1': (await SharedPreferences.getInstance())
+          .getString('coach_client_plans_v1')!,
     });
     await pump(tester, prefs: stored);
     await toSets(tester);
@@ -205,12 +222,41 @@ void main() {
     };
     await pump(tester, prefs: stored, restore: 'jalen');
     expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
-    expect(find.text('Loaded their last setup — change anything'),
-        findsOneWidget);
+    expect(
+        find.text('Loaded their last setup — change anything'), findsOneWidget);
     expect(find.text('+5s', findRichText: true), findsOneWidget);
     // last time's units are suggested, not yet put on
     expect(calls, isEmpty);
     expect(container.read(coachRestoreRequestProvider), isNull);
+  });
+
+  testWidgets('Game Prep START restores the latest plan from the server',
+      (tester) async {
+    await pump(
+      tester,
+      restore: 'jalen',
+      serverRun: const SessionCoachRun(
+        sessionCoachId: 'c1',
+        bodyPartId: 'b1',
+        bodyPartName: 'Knee',
+        supportType: 'Support recovery',
+        sets: [
+          SessionCoachRunSet(
+            index: 1,
+            setId: 's2',
+            name: 'Above the knee',
+            protocolId: 'p2',
+            protocolName: 'Post-Workout Recovery',
+            macAddress: 'u2',
+            startDelay: 10,
+          ),
+        ],
+      ),
+    );
+    expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
+    expect(find.textContaining('+10s'), findsOneWidget);
+    expect(find.text('Loaded their last setup — change anything'),
+        findsOneWidget);
   });
 
   testWidgets('START with no saved plan opens the ordinary first step',
