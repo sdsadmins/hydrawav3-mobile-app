@@ -5,6 +5,7 @@ import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../../../history/data/history_repository.dart';
 import '../../../history/domain/session_history_model.dart';
+import '../../../pad_placement/domain/recovery_engine_models.dart';
 import '../../../home/presentation/providers/hub_stats_provider.dart'
     show PulseCheck, scoreOf;
 import '../../../performance_protocols/domain/performance_models.dart';
@@ -1511,6 +1512,30 @@ class ChatTranscriptScreen extends ConsumerWidget {
   }
 }
 
+/// The saved placement as the pad map reads it.
+///
+/// A performance card is saved in the pad-set shape (`discipline`, a `sun` /
+/// `moon` per set). A recovery card is saved as the recovery engine's whole
+/// resolve response — no `discipline`, and its sets carry `pads[]` — so it is
+/// rebuilt the same way the chat built it, with [regionLabel] (the "Pad
+/// placement: Neck" message's region) as its name. Read as a pad-set payload
+/// it has no Sun/Moon pads, so the 3D view drew and lit nothing.
+PadSetPayload savedPlacementPayload(
+    Map<String, dynamic> saved, String regionLabel) {
+  final data = saved['data'] is Map
+      ? Map<String, dynamic>.from(saved['data'] as Map)
+      : saved;
+  final sets = data['sets'];
+  final recoveryShape = (data['discipline'] ?? '').toString().trim().isEmpty &&
+      (data['pathway'] != null ||
+          data['point'] is Map ||
+          (sets is List && sets.whereType<Map>().any((s) => s['pads'] is List)));
+  if (recoveryShape) {
+    return RecoveryPlacement.fromJson(data, regionLabel: regionLabel).payload;
+  }
+  return PadSetPayload.fromJson(saved);
+}
+
 /// A saved pad placement: its name and sets, and "View in 3D" — the same
 /// pad map the Assistant opened when it was made.
 class _PlacementCard extends StatelessWidget {
@@ -1521,11 +1546,11 @@ class _PlacementCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
-    final payload = PadSetPayload.fromJson(message.placement!);
+    final region = message.message.replaceFirst('Pad placement: ', '').trim();
+    final payload = savedPlacementPayload(message.placement!, region);
     final recovery = payload.discipline == 'recovery';
-    final title = payload.displayName.isNotEmpty
-        ? payload.displayName
-        : message.message.replaceFirst('Pad placement: ', '');
+    final title =
+        payload.displayName.isNotEmpty ? payload.displayName : region;
     final sets = payload.sets.length;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
