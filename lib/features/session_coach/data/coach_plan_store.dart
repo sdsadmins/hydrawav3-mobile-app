@@ -15,6 +15,7 @@ class CoachPlanSet {
   final String? protocolId;
   final String? protocolName;
   final String? unitId;
+  final int? durationSeconds;
   final Map<String, dynamic>? advancedSettings;
   final int startAt;
 
@@ -25,6 +26,7 @@ class CoachPlanSet {
     this.protocolId,
     this.protocolName,
     this.unitId,
+    this.durationSeconds,
     this.advancedSettings,
     this.startAt = 0,
   });
@@ -36,6 +38,7 @@ class CoachPlanSet {
         if (protocolId != null) 'protocolId': protocolId,
         if (protocolName != null) 'protocolName': protocolName,
         if (unitId != null) 'unitId': unitId,
+        if (durationSeconds != null) 'durationSeconds': durationSeconds,
         if (advancedSettings != null) 'advancedSettings': advancedSettings,
         'at': startAt,
       };
@@ -47,6 +50,7 @@ class CoachPlanSet {
         protocolId: j['protocolId'] as String?,
         protocolName: j['protocolName'] as String?,
         unitId: j['unitId'] as String?,
+        durationSeconds: (j['durationSeconds'] as num?)?.toInt(),
         advancedSettings: j['advancedSettings'] is Map
             ? Map<String, dynamic>.from(j['advancedSettings'] as Map)
             : null,
@@ -87,6 +91,7 @@ class CoachPlanRecord {
     SessionCoachRun run, {
     DateTime? savedAt,
     Map<String, Map<String, dynamic>> advancedSettingsByMac = const {},
+    Map<String, int> durationSecondsByMac = const {},
   }) {
     if (!run.isValid) return null;
     return CoachPlanRecord(
@@ -102,6 +107,8 @@ class CoachPlanRecord {
             protocolId: set.protocolId,
             protocolName: set.protocolName,
             unitId: set.macAddress,
+            durationSeconds:
+                _durationForMac(durationSecondsByMac, set.macAddress),
             advancedSettings:
                 _settingsForMac(advancedSettingsByMac, set.macAddress),
             startAt: set.startDelay ?? 0,
@@ -120,6 +127,7 @@ class CoachPlanRecord {
     final run = SessionCoachRun.fromJson(Map<String, dynamic>.from(rawRun));
     if (!run.isValid) return null;
     final settingsByMac = <String, Map<String, dynamic>>{};
+    final durationSecondsByMac = <String, int>{};
     final rawProtocols = intake['protocols'];
     if (rawProtocols is List) {
       for (final rawProtocol in rawProtocols.whereType<Map>()) {
@@ -130,27 +138,32 @@ class CoachPlanRecord {
           settingsByMac[macAddress.toUpperCase()] =
               Map<String, dynamic>.from(settings);
         }
+        final duration = protocol['duration'];
+        if (macAddress.isNotEmpty && duration is num && duration > 0) {
+          durationSecondsByMac[macAddress.toUpperCase()] = duration.toInt();
+        }
       }
     }
     return fromRun(
       run,
       savedAt: DateTime.tryParse(intake['createdAt']?.toString() ?? ''),
       advancedSettingsByMac: settingsByMac,
+      durationSecondsByMac: durationSecondsByMac,
     );
   }
 
   static CoachPlanRecord? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final j = Map<String, dynamic>.from(raw);
-    final body = j['bodyPartId'] as String?;
+    final body = _referenceId(j['bodyPartId']);
     final goal = j['goal'] as String?;
     final sets = j['sets'];
-    if (body == null || goal == null || sets is! List || sets.isEmpty) {
+    if (body.isEmpty || goal == null || sets is! List || sets.isEmpty) {
       return null;
     }
     return CoachPlanRecord(
       bodyPartId: body,
-      bodyPartName: (j['bodyPartName'] as String?) ?? '',
+      bodyPartName: _referenceName(j['bodyPartId'], j['bodyPartName']),
       goal: goal,
       sets: [
         for (final s in sets)
@@ -174,6 +187,27 @@ class CoachPlanRecord {
       if (entry.key.trim().toUpperCase() == normalized) return entry.value;
     }
     return null;
+  }
+
+  static int? _durationForMac(Map<String, int> durationsByMac, String mac) {
+    final normalized = mac.trim().toUpperCase();
+    for (final entry in durationsByMac.entries) {
+      if (entry.key.trim().toUpperCase() == normalized) return entry.value;
+    }
+    return null;
+  }
+
+  static String _referenceId(dynamic value) {
+    if (value is Map) return (value['_id'] ?? value['id'] ?? '').toString();
+    return (value ?? '').toString();
+  }
+
+  static String _referenceName(dynamic value, dynamic fallback) {
+    if (value is Map) {
+      final name = (value['partName'] ?? value['name'] ?? '').toString();
+      if (name.isNotEmpty) return name;
+    }
+    return (fallback ?? '').toString();
   }
 }
 

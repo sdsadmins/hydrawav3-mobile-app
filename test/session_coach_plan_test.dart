@@ -75,10 +75,12 @@ const _marcus = Client(id: 'marcus', clientName: 'Marcus Reed');
 class _FakeSessionCoachRepository extends SessionCoachRepository {
   final SessionCoachRun? run;
   final Map<String, Map<String, dynamic>> advancedSettingsByMac;
+  final Map<String, int> durationSecondsByMac;
 
   _FakeSessionCoachRepository({
     this.run,
     this.advancedSettingsByMac = const {},
+    this.durationSecondsByMac = const {},
   }) : super(Dio());
 
   @override
@@ -87,6 +89,7 @@ class _FakeSessionCoachRepository extends SessionCoachRepository {
       : CoachPlanRecord.fromRun(
           run!,
           advancedSettingsByMac: advancedSettingsByMac,
+          durationSecondsByMac: durationSecondsByMac,
         );
 }
 
@@ -105,6 +108,10 @@ void main() {
     CoachPlanRecord? historyPlan,
     SessionCoachRun? serverRun,
     Map<String, Map<String, dynamic>> serverSettingsByMac = const {},
+    Map<String, int> serverDurationsByMac = const {},
+    List<CoachBodyPart> bodyParts = const [
+      CoachBodyPart(id: 'b1', name: 'Knee'),
+    ],
     Map<String, Object> prefs = const {},
   }) async {
     tester.view.physicalSize = const Size(390, 844) * 2;
@@ -120,9 +127,9 @@ void main() {
           .overrideWithValue(_FakeSessionCoachRepository(
         run: serverRun,
         advancedSettingsByMac: serverSettingsByMac,
+        durationSecondsByMac: serverDurationsByMac,
       )),
-      coachBodyPartsProvider.overrideWith(
-          (ref) async => const [CoachBodyPart(id: 'b1', name: 'Knee')]),
+      coachBodyPartsProvider.overrideWith((ref) async => bodyParts),
       sessionCoachesByBodyPartProvider.overrideWith((ref, id) async => [_knee]),
       protocolDetailProvider
           .overrideWith((ref, id) => Completer<Protocol>().future),
@@ -236,9 +243,153 @@ void main() {
           .getString('coach_client_plans_v1')!,
     });
     await pump(tester, prefs: stored);
-    await toSets(tester);
     expect(find.text('+5s', findRichText: true), findsOneWidget);
     expect(find.text('2nd \u00b7 starts 0:05'), findsOneWidget);
+  });
+
+  testWidgets('selecting a client loads the latest plan ready to repeat',
+      (tester) async {
+    await pump(
+      tester,
+      client: null,
+      mode: ClientMode.guest,
+      bodyParts: [
+        for (var i = 0; i < 20; i++)
+          CoachBodyPart(id: 'body-$i', name: 'Body area $i'),
+        const CoachBodyPart(id: 'b1', name: 'Knee'),
+      ],
+      serverRun: const SessionCoachRun(
+        sessionCoachId: 'c1',
+        bodyPartId: 'b1',
+        bodyPartName: 'Knee',
+        supportType: 'Support recovery',
+        sets: [
+          SessionCoachRunSet(
+            index: 1,
+            setId: 's2',
+            name: 'Above the knee',
+            protocolId: 'p2',
+            protocolName: 'Post-Workout Recovery',
+            macAddress: 'MAC-2',
+            startDelay: 10,
+          ),
+        ],
+      ),
+      serverSettingsByMac: const {
+        'MAC-2': {'lights': false, 'vibrationMode': 'Single'},
+      },
+      serverDurationsByMac: const {'MAC-2': 125},
+    );
+    container.read(selectedClientProvider.notifier).state = _jalen;
+    container.read(sessionClientModeProvider.notifier).state =
+        ClientMode.client;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+
+    expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
+    expect(find.textContaining('Support recovery'), findsOneWidget);
+    expect(find.text('Vastus medialis'), findsNWidgets(2));
+    expect(find.text('Unit 2'), findsWidgets);
+    expect(find.text('Post-Workout Recovery'), findsWidgets);
+    expect(find.text('2:05'), findsOneWidget);
+    expect(find.text('Repeat last session  →'), findsOneWidget);
+    expect(calls, isEmpty);
+
+    await tap(tester, find.bySemanticsLabel('Back to the previous step'));
+    expect(find.text('STEP 2 OF 3 · GOAL'), findsOneWidget);
+    final selectedGoal = find.byWidgetPredicate(
+      (widget) =>
+          widget is Semantics &&
+          widget.properties.label == 'Support recovery' &&
+          widget.properties.selected == true,
+    );
+    expect(selectedGoal, findsOneWidget);
+    await tap(tester, find.bySemanticsLabel('Back to the previous step'));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('STEP 1 OF 3 · BODY'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label == 'Knee' &&
+            widget.properties.selected == true,
+      ),
+      findsOneWidget,
+    );
+    final selectedBodyIcon = find.byKey(const ValueKey('selected-body-part'));
+    expect(selectedBodyIcon, findsOneWidget);
+    final bodyPartScroller = find
+        .ancestor(
+          of: selectedBodyIcon,
+          matching: find.byType(SingleChildScrollView),
+        )
+        .first;
+    expect(
+      tester
+          .getRect(selectedBodyIcon)
+          .overlaps(tester.getRect(bodyPartScroller)),
+      isTrue,
+      reason:
+          'selected chip ${tester.getRect(selectedBodyIcon)} should be within body-part viewport ${tester.getRect(bodyPartScroller)}',
+    );
+    await tap(tester, find.text('Knee'));
+    await tap(tester, find.text('Support recovery'));
+    await tap(tester, find.text('Repeat last session  →'));
+    expect(
+      calls,
+      containsAll([
+        'apply u2 p2',
+        'settings u2 false',
+        'delay u2 10s',
+      ]),
+    );
+  });
+
+  testWidgets('a saved body part stays visible if it is missing from catalog',
+      (tester) async {
+    await pump(
+      tester,
+      client: null,
+      mode: ClientMode.guest,
+      bodyParts: const [CoachBodyPart(id: 'hip-id', name: 'Hip')],
+      serverRun: const SessionCoachRun(
+        sessionCoachId: 'c1',
+        bodyPartId: 'inactive-knee-id',
+        bodyPartName: 'Knee',
+        supportType: 'Support recovery',
+        sets: [
+          SessionCoachRunSet(
+            index: 0,
+            setId: 's1',
+            name: 'Set 1',
+            protocolId: 'p1',
+            protocolName: 'Recovery',
+            macAddress: 'MAC-1',
+          ),
+        ],
+      ),
+    );
+    container.read(selectedClientProvider.notifier).state = _jalen;
+    container.read(sessionClientModeProvider.notifier).state =
+        ClientMode.client;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    await tap(tester, find.bySemanticsLabel('Back to the previous step'));
+    await tap(tester, find.bySemanticsLabel('Back to the previous step'));
+
+    expect(find.text('STEP 1 OF 3 · BODY'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label == 'Knee' &&
+            widget.properties.selected == true,
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('selected-body-part')), findsOneWidget);
   });
 
   testWidgets('Game Prep START reopens the last plan at placement',

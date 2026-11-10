@@ -23,7 +23,6 @@ class AuthRepository {
 
   Future<UserProfile> login(LoginRequest request) async {
     final tokens = await _remoteSource.login(request);
-    print("LOGIN TOKEN RAW: ${tokens.accessToken}");
 
     final cleanAccessToken = tokens.accessToken.replaceFirst("Bearer ", "");
     final cleanRefreshToken = tokens.refreshToken.replaceFirst("Bearer ", "");
@@ -61,10 +60,7 @@ class AuthRepository {
       }
 
       final storedToken = await _secureStorage.getAccessToken();
-      print("TOKEN AFTER SAVE [attempt ${attempt + 1}]: $storedToken");
-
       if (storedToken == null || storedToken.isEmpty) {
-        print("TOKEN MISSING AFTER SAVE, REWRITING TOKENS");
         await _secureStorage.clearTokens();
         await _secureStorage.saveTokens(
           accessToken: accessToken,
@@ -77,8 +73,6 @@ class AuthRepository {
         return await _remoteSource.getProfile();
       } catch (e) {
         lastError = e;
-        print("PROFILE FETCH FAILED AFTER LOGIN [attempt ${attempt + 1}]: $e");
-
         if (attempt == 0) {
           await _secureStorage.clearTokens();
           await _secureStorage.saveTokens(

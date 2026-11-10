@@ -24,8 +24,8 @@ final djangoDioProvider = Provider<Dio>((ref) {
 
   dio.interceptors.add(ref.read(authInterceptorProvider));
   dio.interceptors.add(LogInterceptor(
-    requestBody: true,
-    responseBody: true,
+    requestBody: false,
+    responseBody: false,
     logPrint: (obj) => ref.read(loggerProvider).d(obj),
   ));
 
@@ -46,8 +46,8 @@ final nodeDioProvider = Provider<Dio>((ref) {
 
   dio.interceptors.add(ref.read(authInterceptorProvider));
   dio.interceptors.add(LogInterceptor(
-    requestBody: true,
-    responseBody: true,
+    requestBody: false,
+    responseBody: false,
     logPrint: (obj) => ref.read(loggerProvider).d(obj),
   ));
 

@@ -30,7 +30,6 @@ class SecureStorageService {
   }) async {
     final cleanAccessToken = accessToken.withoutBearerPrefix;
     final cleanRefreshToken = refreshToken.withoutBearerPrefix;
-    print('SAVED TOKEN: $cleanAccessToken');
     await _safeWrite(_accessTokenKey, cleanAccessToken);
     await _safeWrite(_refreshTokenKey, cleanRefreshToken);
   }
@@ -106,7 +105,6 @@ class SecureStorageService {
   Future<String?> getAccessToken() async {
     final token = await _safeRead(_accessTokenKey);
     final normalizedToken = token?.withoutBearerPrefix;
-    print('GET TOKEN FROM STORAGE: $normalizedToken');
     return normalizedToken;
   }
 

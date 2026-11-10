@@ -11,6 +11,22 @@ library;
 
 const kSupportActivation = 'Support activation';
 const kSupportRecovery = 'Support recovery';
+const kDefaultCoachMuscleColor = '#EF4444';
+const kDefaultCoachSunColor = '#FBBF24';
+const kDefaultCoachMoonColor = '#818CF8';
+
+String _referenceId(dynamic value) {
+  if (value is Map) return (value['_id'] ?? value['id'] ?? '').toString();
+  return (value ?? '').toString();
+}
+
+String _referenceName(dynamic value, dynamic fallback) {
+  if (value is Map) {
+    final name = (value['partName'] ?? value['name'] ?? '').toString();
+    if (name.isNotEmpty) return name;
+  }
+  return (fallback ?? '').toString();
+}
 
 /// A body part from `GET /body-part` (id + name; the coach is looked up by id).
 class CoachBodyPart {
@@ -47,8 +63,8 @@ class CoachMuscle {
   final Map<String, dynamic>? sun;
   final Map<String, dynamic>? moon;
 
-  /// The pad colours the admin picked for this muscle (`#RRGGBB`), or empty
-  /// for the viewer's default Sun/Moon colours.
+  /// The admin-selected 3D muscle highlight and Sun/Moon pad colours.
+  final String muscleColor;
   final String sunColor;
   final String moonColor;
 
@@ -57,8 +73,9 @@ class CoachMuscle {
     required this.muscleName,
     this.sun,
     this.moon,
-    this.sunColor = '',
-    this.moonColor = '',
+    this.muscleColor = kDefaultCoachMuscleColor,
+    this.sunColor = kDefaultCoachSunColor,
+    this.moonColor = kDefaultCoachMoonColor,
   });
 
   factory CoachMuscle.fromJson(Map<String, dynamic> j) {
@@ -69,17 +86,22 @@ class CoachMuscle {
       muscleName: (j['muscleName'] ?? '').toString(),
       sun: marker(j['sun']),
       moon: marker(j['moon']),
-      sunColor: _hexColor(j['sunColor']),
-      moonColor: _hexColor(j['moonColor']),
+      muscleColor: _hexColor(
+        j['muscleColor'],
+        fallback: kDefaultCoachMuscleColor,
+      ),
+      sunColor: _hexColor(j['sunColor'], fallback: kDefaultCoachSunColor),
+      moonColor: _hexColor(j['moonColor'], fallback: kDefaultCoachMoonColor),
     );
   }
 }
 
-/// `#RRGGBB` (or `#RGB`) as sent, else empty — it goes into the viewer's
-/// JavaScript, so nothing else is let through.
-String _hexColor(dynamic raw) {
+/// `#RRGGBB` (or `#RGB`) as sent, else a safe viewer-compatible default.
+String _hexColor(dynamic raw, {required String fallback}) {
   final v = (raw ?? '').toString().trim();
-  return RegExp(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$').hasMatch(v) ? v : '';
+  return RegExp(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$').hasMatch(v)
+      ? v
+      : fallback;
 }
 
 /// The Session Coach selection attached to an intake record.
@@ -130,8 +152,9 @@ class SessionCoachRun {
   factory SessionCoachRun.fromJson(Map<String, dynamic> json) =>
       SessionCoachRun(
         sessionCoachId: (json['sessionCoachId'] ?? '').toString(),
-        bodyPartId: (json['bodyPartId'] ?? '').toString(),
-        bodyPartName: (json['bodyPartName'] ?? '').toString(),
+        bodyPartId: _referenceId(json['bodyPartId']),
+        bodyPartName:
+            _referenceName(json['bodyPartId'], json['bodyPartName']),
         supportType: (json['supportType'] ?? '').toString(),
         sets: (json['sets'] is List ? json['sets'] as List : const [])
             .whereType<Map>()
@@ -198,14 +221,28 @@ class CoachSet {
             .toList(),
       );
 
-  /// Every placed pad in this set, in the viewer's marker shape, with the
-  /// muscle's pad colour as `color` when the admin picked one.
+  List<Map<String, String>> get muscleHighlights => [
+        for (final m in muscles)
+          if (m.muscleName.trim().isNotEmpty)
+            {'name': m.muscleName, 'color': m.muscleColor},
+      ];
+
+  List<CoachPadLabel> get padLabels => [
+        for (final m in muscles) ...[
+          if (m.sun != null)
+            CoachPadLabel(type: 'sun', muscleName: m.muscleName, color: m.sunColor),
+          if (m.moon != null)
+            CoachPadLabel(type: 'moon', muscleName: m.muscleName, color: m.moonColor),
+        ],
+      ];
+
+  /// Every placed pad in this set, with the admin-selected color attached.
   List<Map<String, dynamic>> get markers => [
         for (final m in muscles) ...[
           if (m.sun != null)
-            {...m.sun!, if (m.sunColor.isNotEmpty) 'color': m.sunColor},
+            {...m.sun!, 'color': m.sunColor},
           if (m.moon != null)
-            {...m.moon!, if (m.moonColor.isNotEmpty) 'color': m.moonColor},
+            {...m.moon!, 'color': m.moonColor},
         ],
       ];
 
@@ -223,6 +260,18 @@ class CoachSet {
         for (final m in muscles)
           if (m.moon != null) m.muscleName
       ];
+}
+
+class CoachPadLabel {
+      final String type;
+      final String muscleName;
+      final String color;
+
+      const CoachPadLabel({
+        required this.type,
+        required this.muscleName,
+        required this.color,
+      });
 }
 
 /// A support type's protocols: `protocols[type]` on the coach.

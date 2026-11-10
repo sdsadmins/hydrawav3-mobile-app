@@ -148,7 +148,9 @@ void main() {
               Protocol(
                   id: 'a', templateName: 'Hot Pack', description: 'Warm up.'),
               Protocol(
-                  id: 'b', templateName: 'Deep Session', description: 'Settle.'),
+                  id: 'b',
+                  templateName: 'Deep Session',
+                  description: 'Settle.'),
             ],
           ),
         ),

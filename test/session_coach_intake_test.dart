@@ -112,6 +112,7 @@ void main() {
         {
           'protocolId': 'protocol-1',
           'macAddress': 'aa:bb:cc',
+          'duration': 120,
           'advancedSettings': {
             'lights': false,
             'vibrationMode': 'Single',
@@ -126,9 +127,14 @@ void main() {
       'lights': false,
       'vibrationMode': 'Single',
     });
+    expect(plan.sets.single.durationSeconds, 120);
     expect(
       CoachPlanRecord.fromJson(plan.toJson())?.sets.single.advancedSettings,
       plan.sets.single.advancedSettings,
+    );
+    expect(
+      CoachPlanRecord.fromJson(plan.toJson())?.sets.single.durationSeconds,
+      120,
     );
   });
 
@@ -146,6 +152,7 @@ void main() {
                 {
                   'protocolId': 'protocol-1',
                   'macAddress': 'AA:BB:CC',
+                  'duration': 120,
                   'advancedSettings': {
                     'lights': false,
                     'vibrationMode': 'Single',
@@ -165,6 +172,7 @@ void main() {
       'lights': false,
       'vibrationMode': 'Single',
     });
+    expect(plan?.sets.single.durationSeconds, 120);
   });
 
   test('client history enriches missing coach fields from the recent endpoint',

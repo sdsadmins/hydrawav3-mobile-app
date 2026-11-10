@@ -15,11 +15,9 @@ import '../../../notifications/presentation/providers/notification_provider.dart
 import '../../../payments/presentation/widgets/token_balance_badge.dart';
 import '../../../session_plan/presentation/widgets/session_plan_section.dart';
 
-/// The "AI" tab: hosts the Client/Guest selection, the Guided-vs-QuickStart
-/// chooser, the Guided Assessment wizard, and the AI report banner — moved off
-/// the Devices screen so device management stays minimal. All state lives in
-/// global providers, so the Devices screen's Start button still reads the
-/// choices made here (client, session type, guided intake).
+/// The "AI" tab: hosts Client/Guest selection and session guidance. All state
+/// lives in global providers, so the Devices screen's Start button still reads
+/// the choices made here.
 class AiScreen extends ConsumerWidget {
   const AiScreen({super.key});
 

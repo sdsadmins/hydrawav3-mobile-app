@@ -44,8 +44,8 @@ class AppConstants {
   static const String termsUrl = 'https://www.hydrawav3.com/terms';
 
   // Version and Release Notes
-  static const String appVersion = '1.0.4';
-  static const String buildNumber = '5';
+  static const String appVersion = '1.0.10';
+  static const String buildNumber = '2';
   static const String releaseNotes = '''
 Version 1.0.4
 - Fixed an issue on iOS where switching exercises in Protocol Plus could incorrectly show a connected device as out of range

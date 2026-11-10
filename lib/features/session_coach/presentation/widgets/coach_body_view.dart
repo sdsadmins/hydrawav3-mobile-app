@@ -8,6 +8,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../../../core/theme/hw_tokens.dart';
 import '../../../../core/theme/widgets/hw_tablet.dart';
 import '../../../../core/utils/logger.dart';
+import '../../domain/session_coach_models.dart';
 
 /// Lets a parent drive the camera (the full-screen page's Front/Back buttons).
 class CoachBodyController {
@@ -27,9 +28,8 @@ class CoachBodyView extends StatefulWidget {
   /// The selected set's markers (`{id, type, position, normal, …}`).
   final List<Map<String, dynamic>> markers;
 
-  /// The selected set's muscle names: lit on the body, the rest dimmed (the
-  /// website's coach editor does the same). Empty = the plain body.
-  final List<String> muscles;
+  /// The selected set's muscle names and authored highlight colors.
+  final List<Map<String, String>> muscleHighlights;
 
   /// Top-right button (the card's expand). Hidden when null.
   final IconData actionIcon;
@@ -52,7 +52,7 @@ class CoachBodyView extends StatefulWidget {
   const CoachBodyView({
     super.key,
     required this.markers,
-    this.muscles = const [],
+    this.muscleHighlights = const [],
     this.actionIcon = Icons.open_in_full_rounded,
     this.actionLabel = 'Expand',
     this.onAction,
@@ -104,7 +104,9 @@ class _CoachBodyViewState extends State<CoachBodyView> {
     if (_ready && jsonEncode(old.markers) != jsonEncode(widget.markers)) {
       _loadMarkers();
     }
-    if (_ready && jsonEncode(old.muscles) != jsonEncode(widget.muscles)) {
+    if (_ready &&
+        jsonEncode(old.muscleHighlights) !=
+            jsonEncode(widget.muscleHighlights)) {
       _highlightMuscles();
     }
   }
@@ -158,7 +160,7 @@ class _CoachBodyViewState extends State<CoachBodyView> {
       _eval('window.loadMarkers(${jsonEncode(widget.markers)})');
 
   Future<void> _highlightMuscles() => _eval(
-      'window.highlightMuscles && window.highlightMuscles(${jsonEncode(widget.muscles)})');
+      'window.highlightMuscles && window.highlightMuscles(${jsonEncode(widget.muscleHighlights)})');
 
   /// A side view, re-centred on the body (so a pan doesn't carry over).
   void _setView(String v) {
@@ -353,9 +355,8 @@ class CoachFullSet {
   final List<Map<String, dynamic>> markers;
   final List<String> sunMuscles;
   final List<String> moonMuscles;
-
-  /// Every muscle in the set (lit on the body).
-  final List<String> muscles;
+  final List<CoachPadLabel> padLabels;
+  final List<Map<String, String>> muscleHighlights;
 
   /// The unit this set is on, or null when it isn't in the session yet.
   final String? unitName;
@@ -367,7 +368,8 @@ class CoachFullSet {
     required this.markers,
     required this.sunMuscles,
     required this.moonMuscles,
-    this.muscles = const [],
+    this.padLabels = const [],
+    this.muscleHighlights = const [],
     required this.unitName,
     required this.protocolName,
     required this.duration,
@@ -504,7 +506,7 @@ class _CoachBodyFullScreenState extends State<CoachBodyFullScreen> {
                           child: widget.bodyBuilder?.call(set.markers) ??
                               CoachBodyView(
                                 markers: set.markers,
-                                muscles: set.muscles,
+                                muscleHighlights: set.muscleHighlights,
                                 showControls: false,
                                 lightStage: true,
                                 controller: _body,
@@ -720,10 +722,12 @@ class _SetCard extends StatelessWidget {
                         color: Colors.white),
                   ),
                   const SizedBox(height: 4),
-                  if (set.sunMuscles.isNotEmpty)
-                    _PadText(sun: true, text: set.sunMuscles.join(', ')),
-                  if (set.moonMuscles.isNotEmpty)
-                    _PadText(sun: false, text: set.moonMuscles.join(', ')),
+                  for (final pad in set.padLabels)
+                    _PadText(
+                      sun: pad.type == 'sun',
+                      text: pad.muscleName,
+                      color: coachColorFromHex(pad.color),
+                    ),
                   const SizedBox(height: 4),
                   Text(
                     [
@@ -756,11 +760,15 @@ class _SetCard extends StatelessWidget {
 class _PadText extends StatelessWidget {
   final bool sun;
   final String text;
-  const _PadText({required this.sun, required this.text});
+  final Color color;
+  const _PadText({
+    required this.sun,
+    required this.text,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final color = sun ? const Color(0xFFFBBF24) : const Color(0xFF818CF8);
     return Padding(
       padding: const EdgeInsets.only(top: 2),
       child: Row(
@@ -778,6 +786,14 @@ class _PadText extends StatelessWidget {
       ),
     );
   }
+}
+
+Color coachColorFromHex(String value) {
+  final hex = value.substring(1);
+  final normalized = hex.length == 3
+      ? '${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}'
+      : hex;
+  return Color(int.parse(normalized, radix: 16) | 0xFF000000);
 }
 
 /// `.v6pg-3d .max span`: a 15px rounded square outline with a corner bracket

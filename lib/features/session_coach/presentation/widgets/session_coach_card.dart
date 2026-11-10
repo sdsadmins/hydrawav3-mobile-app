@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/hw_tokens.dart';
@@ -94,6 +95,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   CoachBodyPart? _body;
   String? _goal;
   int _setIndex = 0;
+  final GlobalKey _selectedBodyPartKey = GlobalKey();
   final Map<int, String> _deviceBySet = {};
   final Map<int, String> _protocolBySet = {};
 
@@ -106,6 +108,8 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   /// a suggestion until "Use this set" puts it on.
   final Map<int, String> _unitHintBySet = {};
   final Map<int, Map<String, dynamic>> _advancedSettingsBySet = {};
+  CoachPlanRecord? _loadedPlan;
+  int _clientLoadGeneration = 0;
 
   /// The coach step 3 is showing, for saving from a delay change.
   SessionCoach? _shownCoach;
@@ -120,37 +124,24 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _step = 0;
       _body = null;
       _goal = null;
+      _loadedPlan = null;
       _setIndex = 0;
       _deviceBySet.clear();
       _protocolBySet.clear();
       _gapBySet.clear();
       _unitHintBySet.clear();
       _advancedSettingsBySet.clear();
+      _loadedPlan = null;
       _appliedSets.clear();
     });
     ref.read(sessionCoachRunProvider.notifier).state = null;
   }
 
   void _back() {
-    final clearSessionCoach = _step == 2;
+    _clientLoadGeneration++;
     setState(() {
-      if (_step == 2) {
-        _goal = null;
-        _setIndex = 0;
-        _deviceBySet.clear();
-        _protocolBySet.clear();
-        _gapBySet.clear();
-        _unitHintBySet.clear();
-        _advancedSettingsBySet.clear();
-        _appliedSets.clear();
-      } else if (_step == 1) {
-        _body = null;
-      }
       _step = (_step - 1).clamp(0, 2);
     });
-    if (clearSessionCoach) {
-      ref.read(sessionCoachRunProvider.notifier).state = null;
-    }
   }
 
   static String _goalShort(String g) =>
@@ -166,10 +157,66 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
 
   String get _orgId => ref.read(authStateProvider).selectedOrgId ?? 'org';
 
+  bool _isBodySelected(CoachBodyPart part) {
+    final selected = _body;
+    if (selected == null) return false;
+    if (selected.id.trim().toLowerCase() == part.id.trim().toLowerCase()) {
+      return true;
+    }
+    String normalizeName(String name) =>
+        name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return normalizeName(selected.name) == normalizeName(part.name);
+  }
+
   CoachPlanRecord? _savedPlan() {
     final client = _clientId;
     if (client == null) return null;
-    return ref.read(coachPlanStoreProvider).load(_orgId, client);
+    return _savedPlanFor(client);
+  }
+
+  CoachPlanRecord? _savedPlanFor(String clientId) =>
+      ref.read(coachPlanStoreProvider).load(_orgId, clientId);
+
+  Future<void> _loadLatestForSelectedClient(String clientId) async {
+    final generation = ++_clientLoadGeneration;
+    if (ref.read(sessionClientModeProvider) != ClientMode.client ||
+        ref.read(selectedClientProvider)?.id != clientId) {
+      return;
+    }
+
+    final localPlan = _savedPlanFor(clientId);
+    if (localPlan != null) {
+      _restorePlan(localPlan, showMessage: false, applyToDevices: false);
+    }
+
+    try {
+      final remotePlan =
+          await ref.read(sessionCoachRepositoryProvider).recentPlan(clientId);
+      if (!mounted ||
+          generation != _clientLoadGeneration ||
+          ref.read(selectedClientProvider)?.id != clientId) {
+        return;
+      }
+      if (remotePlan != null) {
+        _restorePlan(remotePlan, showMessage: false, applyToDevices: false);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+          content: Text('Latest session loaded — review it or repeat it.'),
+          duration: Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (!mounted ||
+          generation != _clientLoadGeneration ||
+          ref.read(selectedClientProvider)?.id != clientId) {
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+        content: Text(localPlan == null
+            ? 'Couldn’t load their latest Session Coach setup: $e'
+            : 'Couldn’t refresh their latest setup. Using this device’s copy.'),
+        duration: const Duration(seconds: 4),
+      ));
+    }
   }
 
   /// Puts a saved plan's protocols, units and start delays back on the sets.
@@ -180,6 +227,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     _unitHintBySet.clear();
     _advancedSettingsBySet.clear();
     _appliedSets.clear();
+    _loadedPlan = plan;
     final sets = [...plan.sets]..sort((a, b) => a.index.compareTo(b.index));
     var prev = 0;
     for (final set in sets) {
@@ -200,6 +248,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   /// Same client, same body part and goal as last time: their own numbers
   /// come back instead of a blank plan.
   void _prefillSaved() {
+    if (_loadedPlan?.bodyPartId == _body?.id && _loadedPlan?.goal == _goal) {
+      return;
+    }
     final plan = _savedPlan();
     if (plan == null || plan.bodyPartId != _body?.id || plan.goal != _goal) {
       return;
@@ -245,6 +296,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     if (!mounted) return;
     setState(() {
       _deviceBySet.clear();
+      _loadedPlan = plan;
       _open = true;
       _body = CoachBodyPart(id: plan.bodyPartId, name: plan.bodyPartName);
       _goal = plan.goal;
@@ -260,6 +312,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   }
 
   Future<void> _applyRestoredPlan(CoachPlanRecord plan) async {
+    final appliedIndexes = <int>{};
     for (final set in [...plan.sets]
       ..sort((a, b) => a.index.compareTo(b.index))) {
       final savedUnitId = set.unitId;
@@ -285,6 +338,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
         _deviceBySet[set.index] = unit.id;
         _appliedSets.add(set.index);
       });
+      appliedIndexes.add(set.index);
       ref.read(sessionCoachPlannedProvider.notifier).update(
             (m) => {
               ...m,
@@ -292,8 +346,52 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
             },
           );
     }
-    if (plan.run != null) {
-      ref.read(sessionCoachRunProvider.notifier).state = plan.run;
+    if (plan.run != null && appliedIndexes.isNotEmpty) {
+      final appliedRun = appliedIndexes.length == plan.run!.sets.length
+          ? plan.run!
+          : plan.run!.copyWith(
+              sets: plan.run!.sets
+                  .where((set) => appliedIndexes.contains(set.index))
+                  .toList(),
+            );
+      ref.read(sessionCoachRunProvider.notifier).state =
+          appliedRun.isValid ? appliedRun : null;
+    }
+  }
+
+  Future<void> _repeatLoadedPlan() async {
+    final plan = _loadedPlan;
+    if (plan == null || _applying) return;
+    final alreadyApplied = _appliedSets.length;
+    setState(() => _applying = true);
+    try {
+      await _applyRestoredPlan(plan);
+      if (!mounted) return;
+      final appliedNow = _appliedSets.length - alreadyApplied;
+      final available = plan.sets.where((set) {
+        final savedUnitId = set.unitId?.trim().toUpperCase();
+        return savedUnitId != null &&
+            widget.units.any((unit) =>
+                unit.id == set.unitId ||
+                unit.macAddress?.trim().toUpperCase() == savedUnitId);
+      }).length;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+        content: Text(appliedNow > 0
+            ? 'Last session applied to $appliedNow of $available '
+                '${available == 1 ? 'set' : 'sets'}. Ready to start.'
+            : available == 0
+                ? 'Connect the devices from their last session to repeat it.'
+                : 'Couldn’t apply the last session to connected devices. '
+                    'Check the connection and try again.'),
+        duration: const Duration(seconds: 3),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('Couldn’t repeat the last session: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _applying = false);
     }
   }
 
@@ -409,6 +507,11 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final chosen = _protocolBySet[idx];
     final protocols = coach.protocolsFor(_goal);
     if (chosen != null && protocols.any((p) => p.id == chosen)) return chosen;
+    final savedProtocol = _loadedPlan?.sets
+        .where((set) => set.index == idx && set.protocolId != null)
+        .firstOrNull
+        ?.protocolId;
+    if (savedProtocol != null) return savedProtocol;
     return protocols.isNotEmpty ? protocols.first.id : null;
   }
 
@@ -419,17 +522,33 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final pending = ref.read(coachRestoreRequestProvider);
+      final historyPlan = ref.read(coachHistoryRestoreRequestProvider);
       if (pending != null) unawaited(_restoreRequested(pending));
       _restoreHistoryPlan();
+      final client = ref.read(selectedClientProvider);
+      if (pending == null &&
+          historyPlan == null &&
+          client != null &&
+          ref.read(sessionClientModeProvider) == ClientMode.client) {
+        unawaited(_loadLatestForSelectedClient(client.id));
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
     // Another client picked: their plan is theirs, so start over rather than
-    // carry this client's units and delays across.
+    // carry this client's units and delays across. Load their latest setup.
     ref.listen(selectedClientProvider, (prev, next) {
-      if (prev?.id != next?.id && _step > 0) _reset();
+      if (prev?.id != next?.id) {
+        _clientLoadGeneration++;
+        _reset();
+        if (next != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(_loadLatestForSelectedClient(next.id));
+          });
+        }
+      }
     });
     ref.listen<String?>(coachRestoreRequestProvider, (_, next) {
       if (next != null) unawaited(_restoreRequested(next));
@@ -522,16 +641,20 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                 units: widget.units,
                 selected: _tabUnit,
                 planned: ref.watch(sessionCoachPlannedProvider),
-                onPick: (id) => setState(() {
-                  _unitId = id;
-                  // a new unit starts its own plan on step 1
-                  _step = 0;
-                  _body = null;
-                  _goal = null;
-                  _setIndex = 0;
-                  _deviceBySet.clear();
-                  _protocolBySet.clear();
-                }),
+                onPick: (id) {
+                  setState(() {
+                    _unitId = id;
+                    // a new unit starts its own plan on step 1
+                    _step = 0;
+                    _body = null;
+                    _goal = null;
+                    _loadedPlan = null;
+                    _setIndex = 0;
+                    _deviceBySet.clear();
+                    _protocolBySet.clear();
+                  });
+                  ref.read(sessionCoachRunProvider.notifier).state = null;
+                },
               ),
             ],
             const SizedBox(height: 12),
@@ -596,18 +719,45 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
               : _BodyChipBox(
                   // phone: about 4½ rows, so the next row peeks and says "scroll"
                   maxHeight: HwTablet.of(context) ? 104 : 225,
+                  selectedKey:
+                      list.any(_isBodySelected) || _body != null
+                          ? _selectedBodyPartKey
+                          : null,
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 10,
                     children: [
+                      if (_body != null && !list.any(_isBodySelected))
+                        _BodyChip(
+                          key: _selectedBodyPartKey,
+                          label: _body!.name,
+                          on: true,
+                        ),
                       for (final b in list)
                         _BodyChip(
+                          key: _isBodySelected(b) ? _selectedBodyPartKey : null,
                           label: b.name,
-                          on: _body?.id == b.id,
-                          onTap: () => setState(() {
-                            _body = b;
-                            _step = 1;
-                          }),
+                          on: _isBodySelected(b),
+                          onTap: () {
+                            _clientLoadGeneration++;
+                            if (_body?.id != b.id) {
+                              setState(() {
+                                _body = b;
+                                _goal = null;
+                                _setIndex = 0;
+                                _deviceBySet.clear();
+                                _protocolBySet.clear();
+                                _gapBySet.clear();
+                                _unitHintBySet.clear();
+                                _advancedSettingsBySet.clear();
+                                _appliedSets.clear();
+                                _loadedPlan = null;
+                              });
+                              ref.read(sessionCoachRunProvider.notifier).state =
+                                  null;
+                            }
+                            setState(() => _step = 1);
+                          },
                         ),
                     ],
                   ),
@@ -619,6 +769,15 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
 
   // ── step 2 · goal ─────────────────────────────────────────────────────────
   SessionCoach? _coachFor(List<SessionCoach> list, [String? goal]) {
+    final savedCoachId = _loadedPlan?.run?.sessionCoachId;
+    if (savedCoachId != null) {
+      for (final coach in list) {
+        if (coach.id == savedCoachId &&
+            (goal == null || coach.setsFor(goal).isNotEmpty)) {
+          return coach;
+        }
+      }
+    }
     for (final c in list) {
       if (goal == null || c.setsFor(goal).isNotEmpty) return c;
     }
@@ -659,11 +818,28 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                 note: 'Wake the area up before activity',
                 protocol: act?.defaultProtocolFor(kSupportActivation),
                 enabled: act != null,
-                onTap: () => setState(() {
-                  _goal = kSupportActivation;
-                  _step = 2;
-                  _prefillSaved();
-                }),
+                selected: _goal == kSupportActivation,
+                onTap: () {
+                  _clientLoadGeneration++;
+                  final changed = _goal != kSupportActivation;
+                  setState(() {
+                    if (changed) {
+                      _deviceBySet.clear();
+                      _protocolBySet.clear();
+                      _gapBySet.clear();
+                      _unitHintBySet.clear();
+                      _advancedSettingsBySet.clear();
+                      _appliedSets.clear();
+                      _loadedPlan = null;
+                    }
+                    _goal = kSupportActivation;
+                    _step = 2;
+                    _prefillSaved();
+                  });
+                  if (changed) {
+                    ref.read(sessionCoachRunProvider.notifier).state = null;
+                  }
+                },
               ),
               _GoalCard(
                 sun: false,
@@ -671,11 +847,28 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                 note: 'Help it settle after load or activity',
                 protocol: rec?.defaultProtocolFor(kSupportRecovery),
                 enabled: rec != null,
-                onTap: () => setState(() {
-                  _goal = kSupportRecovery;
-                  _step = 2;
-                  _prefillSaved();
-                }),
+                selected: _goal == kSupportRecovery,
+                onTap: () {
+                  _clientLoadGeneration++;
+                  final changed = _goal != kSupportRecovery;
+                  setState(() {
+                    if (changed) {
+                      _deviceBySet.clear();
+                      _protocolBySet.clear();
+                      _gapBySet.clear();
+                      _unitHintBySet.clear();
+                      _advancedSettingsBySet.clear();
+                      _appliedSets.clear();
+                      _loadedPlan = null;
+                    }
+                    _goal = kSupportRecovery;
+                    _step = 2;
+                    _prefillSaved();
+                  });
+                  if (changed) {
+                    ref.read(sessionCoachRunProvider.notifier).state = null;
+                  }
+                },
               ),
             ];
             return IntrinsicHeight(
@@ -723,7 +916,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                       borderRadius: BorderRadius.circular(18),
                       child: CoachBodyView(
                         markers: set.markers,
-                        muscles: set.muscleNames,
+                        muscleHighlights: set.muscleHighlights,
                         lightStage: true,
                         showViewSwitch: false,
                         onAction: () => CoachBodyFullScreen.open(
@@ -859,6 +1052,14 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
         Text('${body.name} \u00b7 ${_goalShort(goal)}',
             style: TextStyle(fontSize: 12.5, color: p.ink3)),
         const SizedBox(height: 10),
+        if (_loadedPlan?.bodyPartId == body.id &&
+            _loadedPlan?.goal == goal) ...[
+          _PrimaryButton(
+            label: _applying ? 'Applying\u2026' : 'Repeat last session',
+            onTap: _applying ? null : _repeatLoadedPlan,
+          ),
+          const SizedBox(height: 8),
+        ],
         _PrimaryButton(
           label: _applying ? 'Applying\u2026' : 'Use this set',
           onTap: _applying ? null : () => _apply(body, idx, set, coach),
@@ -915,7 +1116,11 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final current = _gapBySet[i] ?? 0;
     final next = gap.clamp(0, _roomFor(i, setCount));
     if (next == current) return;
-    setState(() => _gapBySet[i] = next);
+    _clientLoadGeneration++;
+    setState(() {
+      _gapBySet[i] = next;
+      _loadedPlan = null;
+    });
     final onSetDelay = widget.onSetDelay;
     if (onSetDelay == null) return;
     for (var j = i; j < setCount; j++) {
@@ -942,11 +1147,13 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final ua = _suggestedUnit(a, setCount);
     final ub = _suggestedUnit(b, setCount);
     if (ua == null || ub == null || ua == ub) return;
+    _clientLoadGeneration++;
     setState(() {
       _deviceBySet[a] = ub;
       _deviceBySet[b] = ua;
       _unitHintBySet.remove(a);
       _unitHintBySet.remove(b);
+      _loadedPlan = null;
     });
     for (final i in [a, b]) {
       if (!_appliedSets.contains(i)) continue;
@@ -971,7 +1178,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       final hintId = _unitHintBySet[i];
       if (hintId == null) return null;
       final unit = widget.units
-          .where((u) => u.id == hintId || u.macAddress == hintId)
+          .where((u) =>
+              u.id == hintId ||
+              u.macAddress?.trim().toUpperCase() == hintId.trim().toUpperCase())
           .firstOrNull;
       return unit?.id;
     }
@@ -1007,15 +1216,28 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     // `.v6sc select` fill, measured from the prototype
     final card2 = dark ? const Color(0xFF212C33) : const Color(0xFFF7F3F0);
-    final protocols = coach.protocolsFor(_goal);
+    final protocols = [...coach.protocolsFor(_goal)];
     final setCount = coach.setsFor(_goal!).length;
+    final savedSet =
+        _loadedPlan?.sets.where((saved) => saved.index == idx).firstOrNull;
+    final savedProtocolId = savedSet?.protocolId;
+    if (savedProtocolId != null &&
+        !protocols.any((protocol) => protocol.id == savedProtocolId)) {
+      protocols.add(CoachProtocolRef(
+        id: savedProtocolId,
+        name: savedSet?.protocolName ?? '',
+      ));
+    }
     final unitId = _suggestedUnit(idx, setCount);
     final protocolId = _protocolFor(idx, coach);
     final unit = widget.units.where((u) => u.id == unitId).firstOrNull;
     final copperLine = const Color.fromRGBO(198, 158, 131, .75);
 
     void select() {
-      if (_setIndex != idx) setState(() => _setIndex = idx);
+      if (_setIndex != idx) {
+        _clientLoadGeneration++;
+        setState(() => _setIndex = idx);
+      }
     }
 
     return GestureDetector(
@@ -1093,10 +1315,12 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (set.sunMuscles.isNotEmpty)
-                    _PadLine(sun: true, text: set.sunMuscles.join(', ')),
-                  if (set.moonMuscles.isNotEmpty)
-                    _PadLine(sun: false, text: set.moonMuscles.join(', ')),
+                  for (final pad in set.padLabels)
+                    _PadLine(
+                      sun: pad.type == 'sun',
+                      text: pad.muscleName,
+                      color: coachColorFromHex(pad.color),
+                    ),
                   if (set.sunMuscles.isEmpty && set.moonMuscles.isEmpty)
                     Text('No pads placed in this set yet.',
                         style: TextStyle(fontSize: 12.5, color: p.ink3)),
@@ -1129,8 +1353,10 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                               ),
                           ],
                           onChanged: (v) => setState(() {
+                            _clientLoadGeneration++;
                             _deviceBySet[idx] = v;
                             _setIndex = idx;
+                            _loadedPlan = null;
                           }),
                         ),
                   const SizedBox(height: 8),
@@ -1139,7 +1365,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                       _Label('PROTOCOL'),
                       const Spacer(),
                       if (protocolId != null)
-                        Text(_durationOf(protocolId),
+                        Text(_durationForSet(idx, protocolId),
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
@@ -1163,7 +1389,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                           ],
                           onChanged: (v) => setState(() {
                             if (_protocolBySet[idx] != v) {
+                              _clientLoadGeneration++;
                               _advancedSettingsBySet.remove(idx);
+                              _loadedPlan = null;
                             }
                             _protocolBySet[idx] = v;
                             _setIndex = idx;
@@ -1215,7 +1443,8 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
             markers: sets[i].markers,
             sunMuscles: sets[i].sunMuscles,
             moonMuscles: sets[i].moonMuscles,
-            muscles: sets[i].muscleNames,
+            padLabels: sets[i].padLabels,
+            muscleHighlights: sets[i].muscleHighlights,
             unitName: unit?.name,
             protocolName: pr == null
                 ? ''
@@ -1226,7 +1455,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                             .valueOrNull
                             ?.templateName ??
                         '')),
-            duration: pid == null ? '' : _durationOf(pid, watch: false),
+            duration: pid == null ? '' : _durationForSet(i, pid, watch: false),
           );
         }(),
     ];
@@ -1239,6 +1468,17 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     final s = d.totalDuration.inSeconds;
     if (s <= 0) return '';
     return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  String _durationForSet(int index, String protocolId, {bool watch = true}) {
+    final savedSet = _loadedPlan?.sets
+        .where((set) => set.index == index && set.protocolId == protocolId)
+        .firstOrNull;
+    final seconds = savedSet?.durationSeconds;
+    if (seconds != null && seconds > 0) {
+      return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    }
+    return _durationOf(protocolId, watch: watch);
   }
 
   String _protocolLabel(CoachProtocolRef pr) {
@@ -1410,6 +1650,7 @@ class _GoalCard extends ConsumerWidget {
   final String note;
   final CoachProtocolRef? protocol;
   final bool enabled;
+  final bool selected;
   final VoidCallback onTap;
   const _GoalCard({
     required this.sun,
@@ -1417,6 +1658,7 @@ class _GoalCard extends ConsumerWidget {
     required this.note,
     required this.protocol,
     required this.enabled,
+    required this.selected,
     required this.onTap,
   });
 
@@ -1441,6 +1683,7 @@ class _GoalCard extends ConsumerWidget {
         button: true,
         enabled: enabled,
         label: title,
+        selected: selected,
         child: Material(
           color: p.card,
           borderRadius: BorderRadius.circular(18),
@@ -1451,7 +1694,14 @@ class _GoalCard extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: p.cardline),
+                color: selected
+                    ? Color.alphaBlend(
+                        const Color.fromRGBO(198, 158, 131, .08), p.card)
+                    : null,
+                border: Border.all(
+                  color: selected ? p.copper : p.cardline,
+                  width: selected ? 2 : 1,
+                ),
               ),
               child: ExcludeSemantics(
                 child: Column(
@@ -1506,7 +1756,12 @@ class _GoalCard extends ConsumerWidget {
 class _PadLine extends StatelessWidget {
   final bool sun;
   final String text;
-  const _PadLine({required this.sun, required this.text});
+  final Color color;
+  const _PadLine({
+    required this.sun,
+    required this.text,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1519,7 +1774,7 @@ class _PadLine extends StatelessWidget {
             width: 19,
             height: 17,
             child: CustomPaint(
-                painter: sun ? _RisingSun(p.ink) : _Crescent(p.ink)),
+                painter: sun ? _RisingSun(color) : _Crescent(color)),
           ),
           const SizedBox(width: 6),
           Expanded(
@@ -2135,7 +2390,12 @@ class _UnitTabs extends StatelessWidget {
 class _BodyChipBox extends StatefulWidget {
   final double maxHeight;
   final Widget child;
-  const _BodyChipBox({required this.maxHeight, required this.child});
+  final GlobalKey? selectedKey;
+  const _BodyChipBox({
+    required this.maxHeight,
+    required this.child,
+    this.selectedKey,
+  });
 
   @override
   State<_BodyChipBox> createState() => _BodyChipBoxState();
@@ -2143,6 +2403,36 @@ class _BodyChipBox extends StatefulWidget {
 
 class _BodyChipBoxState extends State<_BodyChipBox> {
   final _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _revealSelected();
+  }
+
+  @override
+  void didUpdateWidget(_BodyChipBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedKey != widget.selectedKey) _revealSelected();
+  }
+
+  void _revealSelected() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final selectedContext = widget.selectedKey?.currentContext;
+      final selectedRenderObject = selectedContext?.findRenderObject();
+      if (!_scroll.hasClients || selectedRenderObject == null) return;
+      final viewport = RenderAbstractViewport.maybeOf(selectedRenderObject);
+      if (viewport == null) return;
+      final targetOffset =
+          viewport.getOffsetToReveal(selectedRenderObject, .5).offset;
+      final position = _scroll.position;
+      final target = targetOffset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      if ((position.pixels - target).abs() > 0.5) position.jumpTo(target);
+    });
+  }
 
   @override
   void dispose() {
@@ -2182,14 +2472,20 @@ class _BodyChipBoxState extends State<_BodyChipBox> {
 class _BodyChip extends StatelessWidget {
   final String label;
   final bool on;
-  final VoidCallback onTap;
-  const _BodyChip({required this.label, required this.on, required this.onTap});
+  final VoidCallback? onTap;
+  const _BodyChip({
+    super.key,
+    required this.label,
+    required this.on,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = RefPalette.of(context);
     return Semantics(
-      button: true,
+      button: onTap != null,
+      label: label,
       selected: on,
       child: GestureDetector(
         onTap: onTap,
@@ -2200,15 +2496,27 @@ class _BodyChip extends StatelessWidget {
             gradient: on ? p.sunGrad : null,
             color: on ? null : p.card,
             border: Border.all(
-                color: on ? Colors.transparent : p.cardline, width: 1.2),
+                color: on ? p.copper : p.cardline, width: on ? 2 : 1.2),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w600,
-              color: on ? const Color(0xFF2A1A12) : p.ink,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (on) ...[
+                const Icon(Icons.check_circle_rounded,
+                    key: ValueKey('selected-body-part'),
+                    size: 17,
+                    color: Color(0xFF2A1A12)),
+                const SizedBox(width: 6),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: on ? FontWeight.w800 : FontWeight.w600,
+                  color: on ? const Color(0xFF2A1A12) : p.ink,
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -54,7 +54,6 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
 
   final Map<String, String> _deviceLabelById = {};
 
-
   AdvancedSettings _advancedDefaultsFromProtocol(Protocol p) {
     // hotPwmByCycle/coldPwmByCycle left empty deliberately — the protocol's
     // own per-cycle hotPwm/coldPwm values are used unmodified until the user
@@ -103,7 +102,8 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
           if (_protocolIdByDeviceId.containsKey(deviceId)) continue;
           _protocolIdByDeviceId[deviceId] = pendingId;
           _selectedProtocolByDeviceId[deviceId] = protocol;
-          _settingsByDeviceId[deviceId] = _advancedDefaultsFromProtocol(protocol);
+          _settingsByDeviceId[deviceId] =
+              _advancedDefaultsFromProtocol(protocol);
           _showAdvancedByDeviceId[deviceId] = false;
         }
       });
@@ -912,11 +912,11 @@ class _SessionSetupScreenState extends ConsumerState<SessionSetupScreen> {
                                 // chose Guided.
                                 final sessionType =
                                     ref.read(sessionTypeProvider);
-                                final intake = (clientMode ==
-                                            ClientMode.client ||
-                                        sessionType == SessionType.guided)
-                                    ? ref.read(guidedAssessmentProvider)
-                                    : null;
+                                final intake =
+                                    (clientMode == ClientMode.client ||
+                                            sessionType == SessionType.guided)
+                                        ? ref.read(guidedAssessmentProvider)
+                                        : null;
                                 await launchSession(
                                   ref,
                                   context,
@@ -1487,7 +1487,6 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
       );
     }
 
-
     // NOTE: This mirrors the protocol detail advanced settings so per-device
     // behavior is identical.
     return Column(
@@ -1696,8 +1695,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           color: ThemeConstants.accent,
           unit: '%',
           coloredTrack: false,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(hotPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(hotPercent: v)),
         ),
         const SizedBox(height: 8),
         smallNumberSlider(
@@ -1711,8 +1709,7 @@ class _AdvancedSettingsPanel extends ConsumerWidget {
           color: Colors.blueAccent,
           unit: '%',
           coloredTrack: false,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(coldPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
 
         const SizedBox(height: 10),
@@ -2086,8 +2083,7 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           color: ThemeConstants.accent,
           unit: '%',
           coloredTrack: false,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(hotPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(hotPercent: v)),
         ),
         const SizedBox(height: 8),
         smallNumberSlider(
@@ -2101,8 +2097,7 @@ class _ProtocolPlusAdvancedSettingsPanel extends StatelessWidget {
           color: Colors.blueAccent,
           unit: '%',
           coloredTrack: false,
-          onChanged: (v) =>
-              onChangeSettings(settings.copyWith(coldPercent: v)),
+          onChanged: (v) => onChangeSettings(settings.copyWith(coldPercent: v)),
         ),
         const SizedBox(height: 10),
         toggle(

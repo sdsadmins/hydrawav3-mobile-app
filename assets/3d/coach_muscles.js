@@ -2,7 +2,7 @@
  * (Hydrawav3-ai, 2026-10-30), compiled to plain JS unchanged, so the app
  * lights the same muscles the admin sees in the Session Coach editor.
  * Re-copy it when the website's mapping changes.
- * highlightMuscles(names) lights a set's muscles; [] clears it. */
+ * highlightMuscles([{name, color}]) lights each set muscle; [] clears it. */
 (function () {
 var exports = {};
 "use strict";
@@ -848,8 +848,20 @@ function getHighlightMeshNames(muscles) {
 window.hwMuscleMeshes = function (names) {
   return Array.from(getHighlightMeshNames((names || []).map(function (n) { return String(n || ""); })));
 };
-window.highlightMuscles = function (names) {
-  if (typeof names === "string") { try { names = JSON.parse(names); } catch (e) { names = []; } }
-  if (window.highlightMeshes) window.highlightMeshes(window.hwMuscleMeshes(names));
+window.highlightMuscles = function (muscles) {
+  if (typeof muscles === "string") { try { muscles = JSON.parse(muscles); } catch (e) { muscles = []; } }
+  var colors = new Map();
+  for (var muscle of (Array.isArray(muscles) ? muscles : [])) {
+    var name = typeof muscle === "string" ? muscle : String(muscle && muscle.name || "");
+    var color = typeof muscle === "string" ? "" : String(muscle && muscle.color || "");
+    for (var mesh of getZAnatomyMeshNames(name)) {
+      if (!colors.has(mesh)) colors.set(mesh, color);
+    }
+  }
+  if (window.highlightMeshes) {
+    window.highlightMeshes(Array.from(colors, function (entry) {
+      return { name: entry[0], color: entry[1] };
+    }));
+  }
 };
 })();
