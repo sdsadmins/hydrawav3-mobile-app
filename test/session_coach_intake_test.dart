@@ -5,6 +5,8 @@ import 'package:hydrawav3/features/history/data/history_remote_source.dart';
 import 'package:hydrawav3/features/history/domain/session_history_model.dart';
 import 'package:hydrawav3/features/session/domain/pending_session_outcome_model.dart';
 import 'package:hydrawav3/features/session/domain/session_model.dart';
+import 'package:hydrawav3/features/session_coach/data/coach_plan_store.dart';
+import 'package:hydrawav3/features/session_coach/data/session_coach_repository.dart';
 import 'package:hydrawav3/features/session_coach/domain/session_coach_models.dart';
 
 const _coachRun = SessionCoachRun(
@@ -102,6 +104,69 @@ void main() {
     expect(item.sessionCoach?.sets.single.macAddress, 'AA:BB:CC');
   });
 
+  test('saved intake restores each set advanced settings by MAC', () {
+    final plan = CoachPlanRecord.fromIntake({
+      'createdAt': '2026-11-06T10:00:00Z',
+      'sessionCoach': _coachRun.toJson(),
+      'protocols': [
+        {
+          'protocolId': 'protocol-1',
+          'macAddress': 'aa:bb:cc',
+          'advancedSettings': {
+            'lights': false,
+            'vibrationMode': 'Single',
+          },
+        },
+      ],
+    });
+
+    expect(plan, isNotNull);
+    expect(plan!.sets.single.unitId, 'AA:BB:CC');
+    expect(plan.sets.single.advancedSettings, {
+      'lights': false,
+      'vibrationMode': 'Single',
+    });
+    expect(
+      CoachPlanRecord.fromJson(plan.toJson())?.sets.single.advancedSettings,
+      plan.sets.single.advancedSettings,
+    );
+  });
+
+  test('recent Session Coach endpoint returns plan settings per MAC', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://test.invalid'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+      handler.resolve(Response(
+        requestOptions: options,
+        data: {
+          'data': [
+            {
+              'createdAt': '2026-11-06T10:00:00Z',
+              'sessionCoach': _coachRun.toJson(),
+              'protocols': [
+                {
+                  'protocolId': 'protocol-1',
+                  'macAddress': 'AA:BB:CC',
+                  'advancedSettings': {
+                    'lights': false,
+                    'vibrationMode': 'Single',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ));
+    }));
+
+    final plan = await SessionCoachRepository(dio).recentPlan('client-1');
+
+    expect(plan?.sets.single.unitId, 'AA:BB:CC');
+    expect(plan?.sets.single.advancedSettings, {
+      'lights': false,
+      'vibrationMode': 'Single',
+    });
+  });
+
   test('client history enriches missing coach fields from the recent endpoint',
       () async {
     final dio = Dio(BaseOptions(baseUrl: 'https://test.invalid'));
@@ -130,6 +195,16 @@ void main() {
               'clientType': 'client',
               'sessionType': 'session_coach',
               'sessionCoach': _coachRun.toJson(),
+              'protocols': [
+                {
+                  'protocolId': 'protocol-1',
+                  'macAddress': 'AA:BB:CC',
+                  'advancedSettings': {
+                    'lights': false,
+                    'vibrationMode': 'Single',
+                  },
+                },
+              ],
             },
           ],
         ));
@@ -141,5 +216,9 @@ void main() {
     expect(sessions, hasLength(1));
     expect(sessions.single.isSessionCoach, isTrue);
     expect(sessions.single.sessionCoach?.sessionCoachId, 'coach-1');
+    expect(sessions.single.protocols.single.advancedSettings, {
+      'lights': false,
+      'vibrationMode': 'Single',
+    });
   });
 }

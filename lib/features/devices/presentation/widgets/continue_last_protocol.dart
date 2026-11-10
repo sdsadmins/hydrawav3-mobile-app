@@ -4,8 +4,10 @@ import 'package:intl/intl.dart';
 
 import '../../../clients/presentation/providers/client_providers.dart';
 import '../../../history/data/history_repository.dart';
+import '../../../history/domain/session_history_model.dart';
 import '../../../protocols/domain/protocol_model.dart';
 import '../../../protocols/presentation/providers/protocol_provider.dart';
+import '../../../session_coach/data/coach_plan_store.dart';
 import 'session_plan_widgets.dart';
 
 /// "Continue with Deep-Tension Recovery": when the selected client has run a
@@ -24,12 +26,14 @@ class ContinueLastProtocol extends ConsumerStatefulWidget {
 
   /// Puts a protocol on one unit (the unit picker's own path).
   final Future<bool> Function(String unitId, String protocolId) onApply;
+  final CoachPlanRecord? savedCoachPlan;
 
   const ContinueLastProtocol({
     super.key,
     required this.unitIds,
     required this.protocolIdByUnit,
     required this.onApply,
+    this.savedCoachPlan,
   });
 
   @override
@@ -41,6 +45,33 @@ class _ContinueLastProtocolState extends ConsumerState<ContinueLastProtocol> {
   bool _busy = false;
 
   static String _norm(String s) => s.trim().toLowerCase();
+
+  CoachPlanRecord? _planFromHistory(List<SessionHistoryItem> history) {
+    final latest = [...history]..sort((a, b) =>
+        (b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    final session = latest
+        .where(
+            (item) => item.isSessionCoach && item.sessionCoach?.isValid == true)
+        .firstOrNull;
+    final run = session?.sessionCoach;
+    if (run == null) return null;
+    final settingsByMac = <String, Map<String, dynamic>>{
+      for (final protocol in session!.protocols)
+        if (protocol.macAddress?.trim().isNotEmpty == true &&
+            protocol.advancedSettings != null)
+          protocol.macAddress!.trim(): protocol.advancedSettings!,
+    };
+    return CoachPlanRecord.fromRun(
+      run,
+      savedAt: session.createdAt,
+      advancedSettingsByMac: settingsByMac,
+    );
+  }
+
+  void _loadCoachPlan(CoachPlanRecord plan) {
+    ref.read(coachHistoryRestoreRequestProvider.notifier).state = plan;
+  }
 
   static String _when(DateTime at) {
     final now = DateTime.now();
@@ -78,6 +109,101 @@ class _ContinueLastProtocolState extends ConsumerState<ContinueLastProtocol> {
       return const SizedBox.shrink();
     }
     final history = ref.watch(clientHistoryProvider(client.id)).valueOrNull;
+    final coachPlan =
+        widget.savedCoachPlan ?? _planFromHistory(history ?? const []);
+    if (coachPlan != null) {
+      final dark = PlanTones.dark(context);
+      final first = client.displayName.split(RegExp(r'\s+')).first;
+      final n = widget.unitIds.length;
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Semantics(
+          button: true,
+          label: 'Continue with Session Coach for ${coachPlan.bodyPartName}',
+          child: PlanPress(
+            onTap: _busy ? null : () => _loadCoachPlan(coachPlan),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(14, 11, 12, 11),
+              decoration: BoxDecoration(
+                color: dark
+                    ? const Color.fromRGBO(198, 158, 131, .1)
+                    : const Color(0xFFFBF5EE),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: dark
+                      ? const Color.fromRGBO(192, 157, 132, .35)
+                      : const Color.fromRGBO(198, 158, 131, .6),
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFDEB393), Color(0xFFB27D5C)],
+                      ),
+                    ),
+                    child: _busy
+                        ? const Padding(
+                            padding: EdgeInsets.all(9),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Color(0xFF2B1D12)),
+                          )
+                        : const Icon(Icons.replay_rounded,
+                            size: 18, color: Color(0xFF2B1D12)),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Continue with Session Coach · '
+                          '${coachPlan.bodyPartName}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: dark
+                                ? const Color(0xFFF1E4D6)
+                                : const Color(0xFF1A1A1A),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "$first's saved coach plan · ${coachPlan.sets.length} set"
+                          '${coachPlan.sets.length == 1 ? '' : 's'} · on $n unit'
+                          '${n == 1 ? '' : 's'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: PlanTones.sub(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(Icons.chevron_right_rounded,
+                      size: 20, color: PlanTones.sub(context)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final last = history
         ?.where((s) => s.protocols.any((p) => (p.protocol ?? '').isNotEmpty))
         .firstOrNull;

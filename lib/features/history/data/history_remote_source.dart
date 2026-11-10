@@ -137,6 +137,7 @@ class HistoryRemoteSource {
           merged[index] = merged[index].copyWith(
             sessionType: 'session_coach',
             sessionCoach: recent.sessionCoach,
+            protocols: recent.protocols.isNotEmpty ? recent.protocols : null,
           );
         }
       }

@@ -6,6 +6,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hydrawav3/features/session_coach/data/coach_plan_store.dart';
+import 'package:hydrawav3/features/session_coach/domain/session_coach_models.dart';
 import 'package:hydrawav3/features/clients/domain/client_model.dart';
 import 'package:hydrawav3/features/clients/presentation/providers/client_providers.dart';
 import 'package:hydrawav3/features/devices/presentation/widgets/continue_last_protocol.dart';
@@ -22,7 +24,8 @@ void main() {
 
   Future<List<(String, String)>> pump(WidgetTester tester,
       {ClientMode mode = ClientMode.client,
-      Map<String, String> current = const {}}) async {
+      Map<String, String> current = const {},
+      CoachPlanRecord? savedCoachPlan}) async {
     final fonts = Platform.environment['ROBOTO_DIR'];
     if (fonts != null) {
       final l = FontLoader('Roboto');
@@ -67,6 +70,7 @@ void main() {
               child: ContinueLastProtocol(
                 unitIds: const ['u1', 'u2'],
                 protocolIdByUnit: current,
+                savedCoachPlan: savedCoachPlan,
                 onApply: (u, p) async {
                   applied.add((u, p));
                   return true;
@@ -114,5 +118,43 @@ void main() {
     expect(find.textContaining('Continue with'), findsNothing);
     await pump(tester, current: const {'u1': 'p-deep', 'u2': 'p-deep'});
     expect(find.textContaining('Continue with'), findsNothing);
+  });
+
+  testWidgets('local Session Coach plan is passed to the Session Coach card',
+      (tester) async {
+    final plan = CoachPlanRecord.fromRun(
+      const SessionCoachRun(
+        sessionCoachId: 'coach-1',
+        bodyPartId: 'body-1',
+        bodyPartName: 'Knee',
+        supportType: 'Support recovery',
+        sets: [
+          SessionCoachRunSet(
+            index: 0,
+            setId: 'set-1',
+            name: 'Calf',
+            protocolId: 'p-recovery',
+            protocolName: 'Recovery',
+            macAddress: 'DD:EE:FF',
+            startDelay: 12,
+          ),
+        ],
+      ),
+      advancedSettingsByMac: const {
+        'DD:EE:FF': {'lights': false, 'vibrationMode': 'Off'},
+      },
+    )!;
+    final applied = await pump(tester, savedCoachPlan: plan);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ContinueLastProtocol)),
+    );
+
+    expect(find.text('Continue with Session Coach · Knee'), findsOneWidget);
+    await tester.tap(find.text('Continue with Session Coach · Knee'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(applied, isEmpty);
+    expect(container.read(coachHistoryRestoreRequestProvider), plan);
   });
 }

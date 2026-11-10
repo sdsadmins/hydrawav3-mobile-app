@@ -32,13 +32,14 @@ class SessionHistoryItem {
   SessionHistoryItem copyWith({
     String? sessionType,
     SessionCoachRun? sessionCoach,
+    List<HistoryProtocol>? protocols,
   }) =>
       SessionHistoryItem(
         id: id,
         clientId: clientId,
         clientType: clientType,
         createdBy: createdBy,
-        protocols: protocols,
+        protocols: protocols ?? this.protocols,
         discomfortAreas: discomfortAreas,
         sessionNotes: sessionNotes,
         sessionType: sessionType ?? this.sessionType,

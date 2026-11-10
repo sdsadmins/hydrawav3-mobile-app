@@ -74,11 +74,20 @@ const _marcus = Client(id: 'marcus', clientName: 'Marcus Reed');
 
 class _FakeSessionCoachRepository extends SessionCoachRepository {
   final SessionCoachRun? run;
+  final Map<String, Map<String, dynamic>> advancedSettingsByMac;
 
-  _FakeSessionCoachRepository({this.run}) : super(Dio());
+  _FakeSessionCoachRepository({
+    this.run,
+    this.advancedSettingsByMac = const {},
+  }) : super(Dio());
 
   @override
-  Future<SessionCoachRun?> recentRun(String clientId) async => run;
+  Future<CoachPlanRecord?> recentPlan(String clientId) async => run == null
+      ? null
+      : CoachPlanRecord.fromRun(
+          run!,
+          advancedSettingsByMac: advancedSettingsByMac,
+        );
 }
 
 /// The Session Coach keeps each client's own plan (on this phone): it is
@@ -93,7 +102,9 @@ void main() {
     Client? client = _jalen,
     ClientMode mode = ClientMode.client,
     String? restore,
+    CoachPlanRecord? historyPlan,
     SessionCoachRun? serverRun,
+    Map<String, Map<String, dynamic>> serverSettingsByMac = const {},
     Map<String, Object> prefs = const {},
   }) async {
     tester.view.physicalSize = const Size(390, 844) * 2;
@@ -106,7 +117,10 @@ void main() {
       sharedPreferencesProvider.overrideWithValue(sp),
       authStateProvider.overrideWith((ref) => _Auth()),
       sessionCoachRepositoryProvider
-          .overrideWithValue(_FakeSessionCoachRepository(run: serverRun)),
+          .overrideWithValue(_FakeSessionCoachRepository(
+        run: serverRun,
+        advancedSettingsByMac: serverSettingsByMac,
+      )),
       coachBodyPartsProvider.overrideWith(
           (ref) async => const [CoachBodyPart(id: 'b1', name: 'Knee')]),
       sessionCoachesByBodyPartProvider.overrideWith((ref, id) async => [_knee]),
@@ -119,6 +133,10 @@ void main() {
     if (restore != null) {
       container.read(coachRestoreRequestProvider.notifier).state = restore;
     }
+    if (historyPlan != null) {
+      container.read(coachHistoryRestoreRequestProvider.notifier).state =
+          historyPlan;
+    }
     await tester.pumpWidget(UncontrolledProviderScope(
       key: UniqueKey(), // a fresh card each pump, like reopening the screen
       container: container,
@@ -128,12 +146,19 @@ void main() {
             padding: const EdgeInsets.all(16),
             child: SessionCoachCard(
               units: const [
-                CoachUnit(id: 'u1', name: 'Unit 1'),
-                CoachUnit(id: 'u2', name: 'Unit 2'),
+                CoachUnit(id: 'u1', name: 'Unit 1', macAddress: 'MAC-1'),
+                CoachUnit(id: 'u2', name: 'Unit 2', macAddress: 'MAC-2'),
               ],
               onApply: (d, p) async {
                 calls.add('apply $d $p');
                 return true;
+              },
+              onApplyAdvancedSettings: (d, settings) {
+                calls.add('settings $d ${settings['lights']}');
+              },
+              advancedSettingsForDevice: (_) => const {
+                'lights': true,
+                'vibrationMode': 'Sweep',
               },
               onSetDelay: (d, s) => calls.add('delay $d ${s}s'),
               onLocate: (_) {},
@@ -184,9 +209,13 @@ void main() {
     expect([
       for (final s in plan.sets) (s.unitId, s.protocolId, s.startAt)
     ], [
-      ('u1', 'p1', 0),
-      ('u2', 'p1', 5),
+      ('MAC-1', 'p1', 0),
+      ('MAC-2', 'p1', 5),
     ]);
+    expect(
+      plan.sets.map((set) => set.advancedSettings?['vibrationMode']),
+      ['Sweep', 'Sweep'],
+    );
     expect(container.read(sessionCoachRunProvider)?.sets, hasLength(2));
     expect(saved('marcus'), isNull);
   });
@@ -225,8 +254,8 @@ void main() {
     expect(
         find.text('Loaded their last setup — change anything'), findsOneWidget);
     expect(find.text('+5s', findRichText: true), findsOneWidget);
-    // last time's units are suggested, not yet put on
-    expect(calls, isEmpty);
+    // Restoring applies each saved protocol and delay onto its matching unit.
+    expect(calls, containsAll(['apply u1 p1', 'apply u2 p1', 'delay u2 5s']));
     expect(container.read(coachRestoreRequestProvider), isNull);
   });
 
@@ -247,16 +276,68 @@ void main() {
             name: 'Above the knee',
             protocolId: 'p2',
             protocolName: 'Post-Workout Recovery',
-            macAddress: 'u2',
+            macAddress: 'MAC-2',
             startDelay: 10,
           ),
         ],
       ),
+      serverSettingsByMac: const {
+        'MAC-2': {'lights': false, 'vibrationMode': 'Single'},
+      },
     );
     expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
     expect(find.textContaining('+10s'), findsOneWidget);
-    expect(find.text('Loaded their last setup — change anything'),
-        findsOneWidget);
+    expect(
+        find.text('Loaded their last setup — change anything'), findsOneWidget);
+    expect(
+      calls,
+      containsAll([
+        'apply u2 p2',
+        'settings u2 false',
+        'delay u2 10s',
+      ]),
+    );
+  });
+
+  testWidgets('history load applies protocol and settings to the matching MAC',
+      (tester) async {
+    final run = SessionCoachRun(
+      sessionCoachId: 'c1',
+      bodyPartId: 'b1',
+      bodyPartName: 'Knee',
+      supportType: 'Support recovery',
+      sets: const [
+        SessionCoachRunSet(
+          index: 0,
+          setId: 's1',
+          name: 'Calf',
+          protocolId: 'p1',
+          protocolName: 'Total Recovery',
+          macAddress: 'MAC-2',
+          startDelay: 8,
+        ),
+      ],
+    );
+    final plan = CoachPlanRecord.fromRun(
+      run,
+      advancedSettingsByMac: const {
+        'MAC-2': {'lights': false, 'vibrationMode': 'Off'},
+      },
+    )!;
+    await pump(tester, historyPlan: plan);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('STEP 3 OF 3 · PLACEMENT'), findsOneWidget);
+    expect(
+      calls,
+      containsAll([
+        'apply u2 p1',
+        'settings u2 false',
+        'delay u2 8s',
+      ]),
+    );
+    expect(container.read(sessionCoachRunProvider), run);
   });
 
   testWidgets('START with no saved plan opens the ordinary first step',

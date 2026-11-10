@@ -124,6 +124,14 @@ class _Detail extends ConsumerWidget {
                       final plan = CoachPlanRecord.fromRun(
                         run,
                         savedAt: session.createdAt,
+                        advancedSettingsByMac: {
+                          for (final protocol in session.protocols)
+                            if (protocol.macAddress?.trim().isNotEmpty ==
+                                    true &&
+                                protocol.advancedSettings != null)
+                              protocol.macAddress!.trim():
+                                  protocol.advancedSettings!,
+                        },
                       );
                       if (plan == null) return;
                       final selected = clients

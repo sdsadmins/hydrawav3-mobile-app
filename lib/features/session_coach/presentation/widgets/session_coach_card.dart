@@ -18,6 +18,7 @@ class CoachUnit {
   final String id;
   final String name;
   final String? macAddress;
+  final Map<String, dynamic>? advancedSettings;
 
   /// BLE-connected: Locate is offered (same rule as the unit card).
   final bool canLocate;
@@ -26,6 +27,7 @@ class CoachUnit {
     required this.id,
     required this.name,
     this.macAddress,
+    this.advancedSettings,
     this.canLocate = false,
   });
 }
@@ -46,6 +48,10 @@ final sessionCoachPlannedProvider =
 class SessionCoachCard extends ConsumerStatefulWidget {
   final List<CoachUnit> units;
   final Future<bool> Function(String deviceId, String protocolId) onApply;
+  final void Function(String deviceId, Map<String, dynamic> settings)?
+      onApplyAdvancedSettings;
+  final Map<String, dynamic>? Function(String deviceId)?
+      advancedSettingsForDevice;
   final void Function(String deviceId) onLocate;
 
   /// Sets a unit's Start Delay, in seconds from Start (the unit card's Delay).
@@ -58,6 +64,8 @@ class SessionCoachCard extends ConsumerStatefulWidget {
     super.key,
     required this.units,
     required this.onApply,
+    this.onApplyAdvancedSettings,
+    this.advancedSettingsForDevice,
     required this.onLocate,
     this.onSetDelay,
     this.bodyBuilder,
@@ -97,6 +105,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
   /// The unit each set ran on last time (from the client's saved plan). Only
   /// a suggestion until "Use this set" puts it on.
   final Map<int, String> _unitHintBySet = {};
+  final Map<int, Map<String, dynamic>> _advancedSettingsBySet = {};
 
   /// The coach step 3 is showing, for saving from a delay change.
   SessionCoach? _shownCoach;
@@ -116,6 +125,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _protocolBySet.clear();
       _gapBySet.clear();
       _unitHintBySet.clear();
+      _advancedSettingsBySet.clear();
       _appliedSets.clear();
     });
     ref.read(sessionCoachRunProvider.notifier).state = null;
@@ -131,6 +141,7 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
         _protocolBySet.clear();
         _gapBySet.clear();
         _unitHintBySet.clear();
+        _advancedSettingsBySet.clear();
         _appliedSets.clear();
       } else if (_step == 1) {
         _body = null;
@@ -167,12 +178,16 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     _protocolBySet.clear();
     _gapBySet.clear();
     _unitHintBySet.clear();
+    _advancedSettingsBySet.clear();
     _appliedSets.clear();
     final sets = [...plan.sets]..sort((a, b) => a.index.compareTo(b.index));
     var prev = 0;
     for (final set in sets) {
       if (set.protocolId != null) _protocolBySet[set.index] = set.protocolId!;
       if (set.unitId != null) _unitHintBySet[set.index] = set.unitId!;
+      if (set.advancedSettings != null) {
+        _advancedSettingsBySet[set.index] = set.advancedSettings!;
+      }
       if (set.index > 0) {
         final gap = set.startAt - prev;
         if (gap > 0) _gapBySet[set.index] = gap;
@@ -197,13 +212,16 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     ref.read(coachRestoreRequestProvider.notifier).state = null;
     if (clientId != _clientId) return;
     final localPlan = _savedPlan();
-    if (localPlan != null) _restorePlan(localPlan);
+    if (localPlan != null) {
+      _restorePlan(localPlan, applyToDevices: false);
+    }
     try {
-      final run =
-          await ref.read(sessionCoachRepositoryProvider).recentRun(clientId);
-      final remotePlan = run == null ? null : CoachPlanRecord.fromRun(run);
+      final remotePlan =
+          await ref.read(sessionCoachRepositoryProvider).recentPlan(clientId);
       if (remotePlan != null && mounted) {
         _restorePlan(remotePlan, showMessage: localPlan == null);
+      } else if (localPlan != null && mounted) {
+        unawaited(_applyRestoredPlan(localPlan));
       }
     } catch (e) {
       if (!mounted) return;
@@ -213,12 +231,17 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
             : 'Couldn’t refresh their saved setup. Using this device’s copy.'),
         duration: const Duration(seconds: 4),
       ));
+      if (localPlan != null) unawaited(_applyRestoredPlan(localPlan));
       if (localPlan == null) return;
     }
     if (localPlan == null && !mounted) return;
   }
 
-  void _restorePlan(CoachPlanRecord plan, {bool showMessage = true}) {
+  void _restorePlan(
+    CoachPlanRecord plan, {
+    bool showMessage = true,
+    bool applyToDevices = true,
+  }) {
     if (!mounted) return;
     setState(() {
       _deviceBySet.clear();
@@ -228,10 +251,49 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
       _step = 2;
       _fillFrom(plan);
     });
+    if (applyToDevices) unawaited(_applyRestoredPlan(plan));
     if (showMessage) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
           content: Text('Loaded their last setup — change anything'),
           duration: Duration(seconds: 3)));
+    }
+  }
+
+  Future<void> _applyRestoredPlan(CoachPlanRecord plan) async {
+    for (final set in [...plan.sets]
+      ..sort((a, b) => a.index.compareTo(b.index))) {
+      final savedUnitId = set.unitId;
+      final protocolId = set.protocolId;
+      if (savedUnitId == null || protocolId == null) continue;
+      final normalizedId = savedUnitId.trim().toUpperCase();
+      final unit = widget.units
+          .where((u) =>
+              u.id == savedUnitId ||
+              u.macAddress?.trim().toUpperCase() == normalizedId)
+          .firstOrNull;
+      if (unit == null) continue;
+
+      final applied = await widget.onApply(unit.id, protocolId);
+      if (!mounted) return;
+      if (!applied) continue;
+      final settings = set.advancedSettings;
+      if (settings != null) {
+        widget.onApplyAdvancedSettings?.call(unit.id, settings);
+      }
+      widget.onSetDelay?.call(unit.id, set.startAt);
+      setState(() {
+        _deviceBySet[set.index] = unit.id;
+        _appliedSets.add(set.index);
+      });
+      ref.read(sessionCoachPlannedProvider.notifier).update(
+            (m) => {
+              ...m,
+              unit.id: '${plan.bodyPartName} · Set ${set.index + 1}',
+            },
+          );
+    }
+    if (plan.run != null) {
+      ref.read(sessionCoachRunProvider.notifier).state = plan.run;
     }
   }
 
@@ -323,7 +385,16 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                       .where((p) => p.id == _protocolFor(i, coach))
                       .map((p) => p.name)
                       .firstOrNull,
-                  unitId: _deviceBySet[i],
+                  unitId: widget.units
+                          .where((unit) => unit.id == _deviceBySet[i])
+                          .firstOrNull
+                          ?.macAddress ??
+                      _deviceBySet[i],
+                  advancedSettings: _deviceBySet[i] == null
+                      ? _advancedSettingsBySet[i]
+                      : widget.advancedSettingsForDevice
+                              ?.call(_deviceBySet[i]!) ??
+                          _advancedSettingsBySet[i],
                   startAt: _startOf(i),
                 ),
             ],
@@ -1091,6 +1162,9 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
                               (pr.id, _protocolLabel(pr)),
                           ],
                           onChanged: (v) => setState(() {
+                            if (_protocolBySet[idx] != v) {
+                              _advancedSettingsBySet.remove(idx);
+                            }
                             _protocolBySet[idx] = v;
                             _setIndex = idx;
                           }),
@@ -1194,7 +1268,13 @@ class _SessionCoachCardState extends ConsumerState<SessionCoachCard> {
     if (!mounted) return;
     // After the protocol: applying a protocol resets the unit's settings,
     // Start Delay included, so the set's start time goes on last.
-    if (ok) widget.onSetDelay?.call(unitId, _startOf(idx));
+    if (ok) {
+      final settings = _advancedSettingsBySet[idx];
+      if (settings != null) {
+        widget.onApplyAdvancedSettings?.call(unitId, settings);
+      }
+      widget.onSetDelay?.call(unitId, _startOf(idx));
+    }
     setState(() {
       _applying = false;
       if (ok) {

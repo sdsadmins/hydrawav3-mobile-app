@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import 'coach_plan_store.dart';
 import '../domain/session_coach_models.dart';
 
 /// Reads the Session Coach plans the admin authors on the website
@@ -64,6 +65,12 @@ class SessionCoachRepository {
   /// may not have this route yet; callers can keep using the phone's cached
   /// plan in that case.
   Future<SessionCoachRun?> recentRun(String clientId) async {
+    return (await recentPlan(clientId))?.run;
+  }
+
+  /// The client's latest Session Coach plan, including per-device advanced
+  /// settings from the intake's `protocols[]` entries.
+  Future<CoachPlanRecord?> recentPlan(String clientId) async {
     try {
       final res = await _dio.get(
         ApiEndpoints.recentSessionCoachByClient(clientId),
@@ -79,10 +86,7 @@ class SessionCoachRepository {
                   : const [];
       if (records.isEmpty || records.first is! Map) return null;
       final intake = Map<String, dynamic>.from(records.first as Map);
-      final rawRun = intake['sessionCoach'];
-      if (rawRun is! Map) return null;
-      final run = SessionCoachRun.fromJson(Map<String, dynamic>.from(rawRun));
-      return run.isValid ? run : null;
+      return CoachPlanRecord.fromIntake(intake);
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return null;
       rethrow;

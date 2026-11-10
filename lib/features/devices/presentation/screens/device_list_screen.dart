@@ -644,6 +644,15 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     });
   }
 
+  void _applySavedAdvancedSettings(
+    String deviceId,
+    Map<String, dynamic> settings,
+  ) {
+    setState(() {
+      _settingsByDeviceId[deviceId] = AdvancedSettings.fromJson(settings);
+    });
+  }
+
   /// One-tap Locate for a BLE-connected device card: sends `{"beeping": true}`
   /// straight over BLE via [DeviceRepository.locateDeviceViaBle] (works
   /// mid-session too) with a brief toast — no popup.
@@ -788,6 +797,25 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                 selection.protocol.id == set.protocolId))
             .toList(),
       );
+      if (sessionCoach != null &&
+          clientMode == ClientMode.client &&
+          selectedClient != null) {
+        final plan = CoachPlanRecord.fromRun(
+          sessionCoach,
+          advancedSettingsByMac: {
+            for (final selection in selections)
+              if (selection.macAddress?.trim().isNotEmpty == true)
+                selection.macAddress!.trim(): selection.advanced.toJson(),
+          },
+        );
+        if (plan != null) {
+          await ref.read(coachPlanStoreProvider).save(
+                ref.read(authStateProvider).selectedOrgId ?? 'org',
+                selectedClient.id,
+                plan,
+              );
+        }
+      }
       if (!mounted) return;
       await launchSession(
         ref,
@@ -1572,6 +1600,13 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
     final protocolOptionsAsync =
         ref.watch(protocolSelectionOptionsProvider(null));
     final target = ref.watch(sessionTargetProvider);
+    final selectedClient = ref.watch(selectedClientProvider);
+    final selectedOrgId = ref.watch(authStateProvider).selectedOrgId ?? 'org';
+    final savedCoachPlan = selectedClient == null
+        ? null
+        : ref
+            .read(coachPlanStoreProvider)
+            .load(selectedOrgId, selectedClient.id);
     final wifiAsync = ref.watch(wifiDevicesByOrgProvider);
     final bleScanResultsAsync = ref.watch(bleScanResultsProvider);
     final connectingIds = ref.watch(bleConnectingIdsProvider);
@@ -1904,6 +1939,7 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                   ContinueLastProtocol(
                                     unitIds: runIds,
                                     protocolIdByUnit: _protocolIdByDeviceId,
+                                    savedCoachPlan: savedCoachPlan,
                                     onApply: _applyProtocolToDevice,
                                   ),
                                   // v6 Session Coach: body → goal → the admin's
@@ -1921,6 +1957,10 @@ class _DeviceListScreenState extends ConsumerState<DeviceListScreen> {
                                         ),
                                     ],
                                     onApply: _applyProtocolToDevice,
+                                    onApplyAdvancedSettings:
+                                        _applySavedAdvancedSettings,
+                                    advancedSettingsForDevice: (deviceId) =>
+                                        _settingsByDeviceId[deviceId]?.toJson(),
                                     onSetDelay: _setStartDelay,
                                     onLocate: _sendLocate,
                                   ),

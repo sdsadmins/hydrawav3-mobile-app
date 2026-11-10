@@ -15,6 +15,7 @@ class CoachPlanSet {
   final String? protocolId;
   final String? protocolName;
   final String? unitId;
+  final Map<String, dynamic>? advancedSettings;
   final int startAt;
 
   const CoachPlanSet({
@@ -24,6 +25,7 @@ class CoachPlanSet {
     this.protocolId,
     this.protocolName,
     this.unitId,
+    this.advancedSettings,
     this.startAt = 0,
   });
 
@@ -34,6 +36,7 @@ class CoachPlanSet {
         if (protocolId != null) 'protocolId': protocolId,
         if (protocolName != null) 'protocolName': protocolName,
         if (unitId != null) 'unitId': unitId,
+        if (advancedSettings != null) 'advancedSettings': advancedSettings,
         'at': startAt,
       };
 
@@ -44,6 +47,9 @@ class CoachPlanSet {
         protocolId: j['protocolId'] as String?,
         protocolName: j['protocolName'] as String?,
         unitId: j['unitId'] as String?,
+        advancedSettings: j['advancedSettings'] is Map
+            ? Map<String, dynamic>.from(j['advancedSettings'] as Map)
+            : null,
         startAt: (j['at'] as num?)?.toInt() ?? 0,
       );
 }
@@ -80,6 +86,7 @@ class CoachPlanRecord {
   static CoachPlanRecord? fromRun(
     SessionCoachRun run, {
     DateTime? savedAt,
+    Map<String, Map<String, dynamic>> advancedSettingsByMac = const {},
   }) {
     if (!run.isValid) return null;
     return CoachPlanRecord(
@@ -95,11 +102,40 @@ class CoachPlanRecord {
             protocolId: set.protocolId,
             protocolName: set.protocolName,
             unitId: set.macAddress,
+            advancedSettings:
+                _settingsForMac(advancedSettingsByMac, set.macAddress),
             startAt: set.startDelay ?? 0,
           ),
       ],
       savedAt: savedAt ?? DateTime.now(),
       run: run,
+    );
+  }
+
+  /// Parses the recent intake shape returned by the Session Coach endpoint.
+  /// Per-device settings live in `protocols[]`, separate from `sessionCoach`.
+  static CoachPlanRecord? fromIntake(Map<String, dynamic> intake) {
+    final rawRun = intake['sessionCoach'];
+    if (rawRun is! Map) return null;
+    final run = SessionCoachRun.fromJson(Map<String, dynamic>.from(rawRun));
+    if (!run.isValid) return null;
+    final settingsByMac = <String, Map<String, dynamic>>{};
+    final rawProtocols = intake['protocols'];
+    if (rawProtocols is List) {
+      for (final rawProtocol in rawProtocols.whereType<Map>()) {
+        final protocol = Map<String, dynamic>.from(rawProtocol);
+        final macAddress = (protocol['macAddress'] ?? '').toString().trim();
+        final settings = protocol['advancedSettings'];
+        if (macAddress.isNotEmpty && settings is Map) {
+          settingsByMac[macAddress.toUpperCase()] =
+              Map<String, dynamic>.from(settings);
+        }
+      }
+    }
+    return fromRun(
+      run,
+      savedAt: DateTime.tryParse(intake['createdAt']?.toString() ?? ''),
+      advancedSettingsByMac: settingsByMac,
     );
   }
 
@@ -127,6 +163,17 @@ class CoachPlanRecord {
               Map<String, dynamic>.from(j['sessionCoach'] as Map))
           : null,
     );
+  }
+
+  static Map<String, dynamic>? _settingsForMac(
+    Map<String, Map<String, dynamic>> settingsByMac,
+    String macAddress,
+  ) {
+    final normalized = macAddress.trim().toUpperCase();
+    for (final entry in settingsByMac.entries) {
+      if (entry.key.trim().toUpperCase() == normalized) return entry.value;
+    }
+    return null;
   }
 }
 
