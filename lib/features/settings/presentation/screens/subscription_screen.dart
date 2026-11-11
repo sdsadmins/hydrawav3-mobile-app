@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +10,12 @@ import '../../../payments/data/store_region.dart';
 import '../../../payments/data/web_plan_link.dart';
 import '../../../payments/domain/plan_model.dart';
 import '../../../payments/presentation/providers/token_balance_provider.dart';
+
+// Keep website purchases hidden for store review. Re-enable with
+// --dart-define=HW_SHOW_WEB_PURCHASE=true after approval.
+const _showWebPurchaseButton =
+    !kReleaseMode &&
+        bool.fromEnvironment('HW_SHOW_WEB_PURCHASE', defaultValue: false);
 
 /// Full "Plan & usage" screen — the destination `token_details_sheet.dart`'s
 /// "Full plan & usage" button pushes to. Shows the org's real current-plan
@@ -54,7 +61,7 @@ class SubscriptionScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(16),
           children: [
             _CurrentPlanCard(plan: plan, tokens: tokens, grant: grant),
-            if (ref.watch(isUsStorefrontProvider)) ...[
+            if (_showWebPurchaseButton && ref.watch(isUsStorefrontProvider)) ...[
               const SizedBox(height: HwSpace.s3),
               const _BuyOnWebCard(),
             ],
