@@ -21,7 +21,7 @@ class _FakeAuth extends StateNotifier<AuthState> implements AuthNotifier {
   dynamic noSuchMethod(Invocation invocation) => null;
 }
 
-/// Website purchases are disabled for the store-review build.
+/// Only US-storefront users get the website purchase card.
 void main() {
   Future<void> pump(WidgetTester tester, String? country) async {
     await tester.pumpWidget(ProviderScope(
@@ -40,7 +40,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
   }
 
-  for (final c in ['US', 'USA', 'IN', 'GBR', null]) {
+  for (final c in ['US', 'USA']) {
+    testWidgets('$c storefront shows Buy tokens', (tester) async {
+      await pump(tester, c);
+      expect(find.text('Buy tokens or change plan'), findsOneWidget);
+    });
+  }
+
+  for (final c in ['IN', 'GBR', null]) {
     testWidgets('$c storefront does not show website purchase', (tester) async {
       await pump(tester, c);
       expect(find.text('Buy tokens or change plan'), findsNothing);

@@ -45,7 +45,7 @@ class AppConstants {
 
   // Version and Release Notes
   static const String appVersion = '1.0.11';
-  static const String buildNumber = '17';
+  static const String buildNumber = '18';
   static const String releaseNotes = '''
 Version 1.0.4
 - Fixed an issue on iOS where switching exercises in Protocol Plus could incorrectly show a connected device as out of range
